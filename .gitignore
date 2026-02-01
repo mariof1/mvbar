@@ -1,0 +1,22 @@
+/.env
+/node_modules
+/dist
+/.next
+/web/.next
+web/.next
+/coverage
+*.log
+node_modules
+/dist
+api/dist
+api/node_modules
+
+# Local overrides (do not commit)
+docker-compose.override.yml
+infra/caddy/Caddyfile.lan
+
+# Local test env (do not commit)
+.env.test
+
+# Editor swap files
+*.swp
