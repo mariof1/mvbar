@@ -155,10 +155,10 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         coalesce(
           (select a.name from track_artists ta join artists a on a.id = ta.artist_id 
            where ta.track_id = ua.first_track_id and ta.role = 'albumartist' 
-           order by a.name limit 1),
+           order by ta.position asc, a.name asc limit 1),
           (select a.name from track_artists ta join artists a on a.id = ta.artist_id 
            where ta.track_id = ua.first_track_id and ta.role = 'artist' 
-           order by a.name limit 1)
+           order by ta.position asc, a.name asc limit 1)
         ) as display_artist,
         ac.track_count,
         ua.art_path,
@@ -627,7 +627,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         at.album,
         (select a.name from track_artists ta2 join artists a on a.id = ta2.artist_id 
          where ta2.track_id = at.first_track_id and ta2.role = 'albumartist' 
-         order by a.name limit 1) as display_artist,
+         order by ta2.position asc, a.name asc limit 1) as display_artist,
         ac.track_count,
         at.art_path,
         at.art_hash
@@ -682,7 +682,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         at.album,
         (select a.name from track_artists ta2 join artists a on a.id = ta2.artist_id 
          where ta2.track_id = at.first_track_id and ta2.role = 'albumartist' 
-         order by a.name limit 1) as album_artist,
+         order by ta2.position asc, a.name asc limit 1) as album_artist,
         ac.track_count,
         at.art_path,
         at.art_hash
@@ -847,7 +847,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       `select a.name from track_artists ta
        join artists a on a.id = ta.artist_id
        where ta.track_id = $1 and ta.role = 'albumartist'
-       order by a.name limit 1`,
+       order by ta.position asc, a.name asc limit 1`,
       [Number(firstTrack.id)]
     );
     const displayArtist = albumArtistR.rows[0]?.name 
@@ -946,7 +946,7 @@ async function getTrackArtists(trackIds: number[]): Promise<Map<number, Array<{ 
     from track_artists ta
     join artists a on a.id = ta.artist_id
     where ta.track_id = any($1) and ta.role = 'artist'
-    order by ta.track_id, a.name
+    order by ta.track_id, ta.position asc, a.name asc
   `,
     [trackIds]
   );

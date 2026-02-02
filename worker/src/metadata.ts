@@ -85,26 +85,60 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const artMime = pic ? mimeFromFormat(pic.format) : null;
   const artData = pic && artMime ? pic.data : null;
 
-  // Get artist list - prefer m.common.artist over m.common.artists when:
-  // - m.common.artist contains a comma (indicates artist name with comma like "Tyler, The Creator")
-  // - m.common.artists looks like a bad split of a comma-containing name
-  let artistSource: string[];
+  const dedupeCI = (items: string[]) => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const it of items) {
+      const s = sanitize(it);
+      if (!s) continue;
+      const key = s.trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(s.trim());
+    }
+    return out;
+  };
+
+  // Merge artists from *all* relevant sources (common + native), then split and dedupe.
+  // This handles files with repeated artist frames (e.g. multiple TPE1 / TXXX:ARTISTS).
   const mainArtist = m.common.artist || '';
   const hasCommaInName = mainArtist.includes(',') && !mainArtist.includes(';');
-  
-  if (hasCommaInName) {
-    // Use the main artist field as the source, it preserves comma-in-name artists
-    artistSource = [mainArtist];
-  } else if (m.common.artists && m.common.artists.length > 0) {
-    artistSource = m.common.artists;
-  } else if (mainArtist) {
-    artistSource = [mainArtist];
-  } else {
-    artistSource = [];
+
+  const candidates: string[] = [];
+  if (mainArtist) candidates.push(mainArtist);
+
+  // music-metadata may split comma-in-name artists into common.artists; avoid that specific corruption.
+  if (m.common.artists && m.common.artists.length > 0) {
+    const joined = m.common.artists.join(', ');
+    if (!(hasCommaInName && joined === mainArtist)) candidates.push(...m.common.artists);
   }
-  
-  const artists = artistSource.flatMap((v) => splitArtistValue(String(v ?? ''))).map(sanitize).filter(Boolean) as string[];
-  const albumartists = (m.common.albumartist ? [m.common.albumartist] : []).flatMap((v) => splitArtistValue(String(v ?? ''))).map(sanitize).filter(Boolean) as string[];
+
+  // Pull in repeated frames and custom tags (e.g. TXXX:ARTISTS).
+  candidates.push(
+    ...nativeValues(m, [
+      'tpe1',
+      'artist',
+      'artists',
+      'performer',
+      'performers',
+      'composer',
+      'composers'
+    ])
+  );
+
+  const artists = dedupeCI(candidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
+
+  const albumArtistCandidates: string[] = [];
+  if (m.common.albumartist) albumArtistCandidates.push(m.common.albumartist);
+  const commonAny2 = m.common as any;
+  if (Array.isArray(commonAny2.albumartists)) albumArtistCandidates.push(...commonAny2.albumartists);
+
+  albumArtistCandidates.push(
+    ...nativeValues(m, ['tpe2', 'albumartist', 'album artist', 'album_artist', 'albumartists'])
+  );
+
+  const albumartists = dedupeCI(albumArtistCandidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
 
   return { title, artist, album, albumartist, genre, country, language, year, durationMs, artMime, artData, artists, albumartists, trackNumber, trackTotal, discNumber, discTotal };
 }

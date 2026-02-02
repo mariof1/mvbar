@@ -247,14 +247,16 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       if (!trackId) continue;
       
       // Collect all artists to insert
-      const artistsToInsert: { name: string; role: string }[] = [];
+      const artistsToInsert: { name: string; role: string; position: number }[] = [];
       
+      let i = 0;
       for (const name of track.albumartists) {
-        if (name) artistsToInsert.push({ name, role: 'albumartist' });
+        if (name) artistsToInsert.push({ name, role: 'albumartist', position: i++ });
       }
       
+      i = 0;
       for (const name of track.artists) {
-        if (name) artistsToInsert.push({ name, role: 'artist' });
+        if (name) artistsToInsert.push({ name, role: 'artist', position: i++ });
       }
       
       if (artistsToInsert.length === 0) continue;
@@ -263,14 +265,14 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       await client.query('DELETE FROM track_artists WHERE track_id = $1', [trackId]);
       
       // Insert new artist relations
-      for (const { name, role } of artistsToInsert) {
+      for (const { name, role, position } of artistsToInsert) {
         const artistRes = await client.query<{ id: number }>(
           'INSERT INTO artists(name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id',
           [name]
         );
         await client.query(
-          'INSERT INTO track_artists(track_id, artist_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-          [trackId, artistRes.rows[0].id, role]
+          'INSERT INTO track_artists(track_id, artist_id, role, position) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+          [trackId, artistRes.rows[0].id, role, position]
         );
       }
       

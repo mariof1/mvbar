@@ -213,36 +213,40 @@ export async function upsertTrack(params: {
       await client.query('delete from track_languages where track_id = $1', [trackId]);
 
       // Batch insert artists
-      const artistsToInsert: { name: string; role: string }[] = [];
+      const artistsToInsert: { name: string; role: string; position: number }[] = [];
       
       if (params.albumArtists?.length) {
+        let i = 0;
         for (const name of params.albumArtists) {
-          if (name) artistsToInsert.push({ name: sanitize(name), role: 'albumartist' });
+          if (name) artistsToInsert.push({ name: sanitize(name), role: 'albumartist', position: i++ });
         }
       } else if (albumartist) {
+        let i = 0;
         for (const name of albumartist.split(/\s*;\s*/).map(a => a.trim()).filter(Boolean)) {
-          artistsToInsert.push({ name: sanitize(name), role: 'albumartist' });
+          artistsToInsert.push({ name: sanitize(name), role: 'albumartist', position: i++ });
         }
       }
       
       if (params.artists?.length) {
+        let i = 0;
         for (const name of params.artists) {
-          if (name) artistsToInsert.push({ name: sanitize(name), role: 'artist' });
+          if (name) artistsToInsert.push({ name: sanitize(name), role: 'artist', position: i++ });
         }
       } else if (artist) {
+        let i = 0;
         for (const name of artist.split(/\s*;\s*/).map(a => a.trim()).filter(Boolean)) {
-          artistsToInsert.push({ name: sanitize(name), role: 'artist' });
+          artistsToInsert.push({ name: sanitize(name), role: 'artist', position: i++ });
         }
       }
 
-      for (const { name, role } of artistsToInsert) {
+      for (const { name, role, position } of artistsToInsert) {
         const artistRes = await client.query<{ id: number }>(
           'insert into artists(name) values ($1) on conflict (name) do update set name=excluded.name returning id',
           [name]
         );
         await client.query(
-          'insert into track_artists(track_id, artist_id, role) values ($1, $2, $3) on conflict do nothing',
-          [trackId, artistRes.rows[0].id, role]
+          'insert into track_artists(track_id, artist_id, role, position) values ($1, $2, $3, $4) on conflict do nothing',
+          [trackId, artistRes.rows[0].id, role, position]
         );
       }
 

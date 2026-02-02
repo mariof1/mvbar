@@ -240,12 +240,34 @@ export async function initDb() {
       track_id bigint not null references tracks(id) on delete cascade,
       artist_id bigint not null references artists(id) on delete cascade,
       role text not null check (role in ('artist','albumartist')),
+      position integer not null,
       primary key (track_id, artist_id, role)
     );
   `);
 
+  // Add ordering column for existing DBs
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE track_artists ADD COLUMN IF NOT EXISTS position integer;
+    EXCEPTION WHEN others THEN NULL;
+    END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      UPDATE track_artists SET position = 0 WHERE position IS NULL;
+    EXCEPTION WHEN others THEN NULL;
+    END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE track_artists ALTER COLUMN position SET NOT NULL;
+    EXCEPTION WHEN others THEN NULL;
+    END $$;
+  `);
+
   await pool.query('create index if not exists track_artists_artist_role_idx on track_artists(artist_id, role)');
   await pool.query('create index if not exists track_artists_track_role_idx on track_artists(track_id, role)');
+  await pool.query('create index if not exists track_artists_track_role_pos_idx on track_artists(track_id, role, position)');
 
   // Track genres table for smart playlists
   await pool.query(`
