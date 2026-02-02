@@ -1149,25 +1149,27 @@ function SettingsTab({ token }: { token: string }) {
           Add IP addresses that bypass login rate limiting. Useful for automated testing and development.
           {myIP && <span className="text-cyan-400 ml-1">(Your IP: {myIP})</span>}
         </p>
-        <div className="flex gap-2 mb-4">
-          <input
-            type="text"
-            value={newIP}
-            onChange={(e) => setNewIP(e.target.value)}
-            placeholder="Enter IP address"
-            className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:outline-none"
-          />
-          <button
-            onClick={() => newIP && addBypassIP(newIP)}
-            disabled={!newIP}
-            className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg font-medium transition-colors"
-          >
-            Add
-          </button>
+        <div className="space-y-2 sm:space-y-0 sm:flex sm:items-start sm:gap-2 mb-4">
+          <div className="flex gap-2 sm:flex-1">
+            <input
+              type="text"
+              value={newIP}
+              onChange={(e) => setNewIP(e.target.value)}
+              placeholder="Enter IP address"
+              className="flex-1 min-w-0 px-3 py-2 bg-slate-900/50 border border-slate-600 rounded-lg text-white text-sm focus:border-cyan-500 focus:outline-none"
+            />
+            <button
+              onClick={() => newIP && addBypassIP(newIP)}
+              disabled={!newIP}
+              className="w-24 whitespace-nowrap px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg font-medium transition-colors"
+            >
+              Add
+            </button>
+          </div>
           {myIP && !bypassIPs.includes(myIP) && (
             <button
               onClick={() => addBypassIP(myIP)}
-              className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium transition-colors"
+              className="w-full sm:w-auto self-start whitespace-nowrap px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium transition-colors"
             >
               Add My IP
             </button>
