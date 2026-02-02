@@ -26,26 +26,54 @@ import googleAuthPlugin, { startAvatarSyncScheduler } from './googleAuth.js';
 import { initDb } from './db.js';
 import logger from './logger.js';
 
-// Use pino-pretty for human-readable logs in development
-const app = Fastify({ 
+// Use pino-pretty for human-readable logs
+const app = Fastify({
+  disableRequestLogging: true,
   logger: {
+    level: process.env.LOG_LEVEL ?? 'info',
     transport: {
       target: 'pino-pretty',
       options: {
         colorize: true,
+        singleLine: true,
         translateTime: 'SYS:yyyy-mm-dd HH:MM:ss',
         ignore: 'pid,hostname',
-      }
-    }
-  }, 
-  trustProxy 
+      },
+    },
+  },
+  trustProxy,
 });
+
+const ansi = {
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  red: '\x1b[31m',
+  cyan: '\x1b[36m',
+};
+
+function colorStatus(statusCode: number) {
+  if (statusCode >= 500) return `${ansi.red}${statusCode}${ansi.reset}`;
+  if (statusCode >= 400) return `${ansi.yellow}${statusCode}${ansi.reset}`;
+  return `${ansi.green}${statusCode}${ansi.reset}`;
+}
 
 await initDb();
 logger.success('api', `Server starting on port ${config.port}`);
 
 // Register multipart for file uploads
 await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB max
+
+app.addHook('onResponse', async (req, reply) => {
+  const method = req.method;
+  const url = req.url;
+  const status = reply.statusCode;
+  const ms = Number((reply.elapsedTime ?? 0).toFixed(1));
+  // Keep healthcheck noise out of logs
+  if (url === '/health' || url === '/api/health' || url === '/api/healthz') return;
+  app.log.info(`${ansi.cyan}${method}${ansi.reset} ${url} -> ${colorStatus(status)} ${ansi.dim}${ms}ms${ansi.reset}`);
+});
 
 app.get('/health', async () => ({ ok: true }));
 app.get('/api/health', async () => ({ ok: true }));
