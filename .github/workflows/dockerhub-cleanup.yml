@@ -1,0 +1,81 @@
+name: Docker Hub Cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type DELETE to confirm tag deletions"
+        required: true
+        default: "NO"
+
+env:
+  DOCKERHUB_USER: mars148
+  IMAGE_NAME: mvbar
+  KEEP_TAGS: "latest dev"
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old tags (keep latest/dev)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+
+          if [ "${CONFIRM}" != "DELETE" ]; then
+            echo "Refusing to run. Re-run workflow with confirm=DELETE." >&2
+            exit 1
+          fi
+
+          if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
+            echo "Missing DOCKERHUB_USERNAME/DOCKERHUB_TOKEN secrets" >&2
+            exit 1
+          fi
+
+          echo "Logging into Docker Hub..."
+          LOGIN_JSON=$(curl -fsS -H 'Content-Type: application/json' \
+            -d '{"username":"'"$DOCKERHUB_USERNAME"'","password":"'"$DOCKERHUB_TOKEN"'"}' \
+            https://hub.docker.com/v2/users/login/)
+          TOKEN=$(python3 - <<'PY' <<<"$LOGIN_JSON"
+import json,sys
+print(json.loads(sys.stdin.read())['token'])
+PY
+          )
+
+          KEEP_SET=" ${KEEP_TAGS} "
+          URL="https://hub.docker.com/v2/repositories/${DOCKERHUB_USER}/${IMAGE_NAME}/tags?page_size=100"
+
+          echo "Fetching tags from ${DOCKERHUB_USER}/${IMAGE_NAME} ..."
+          while [ -n "${URL}" ] && [ "${URL}" != "null" ]; do
+            RESP=$(curl -fsS -H "Authorization: JWT ${TOKEN}" "${URL}")
+
+            NEXT_URL=$(python3 - <<'PY' <<<"$RESP"
+import json,sys
+print(json.loads(sys.stdin.read()).get('next'))
+PY
+            )
+
+            TAGS=$(python3 - <<'PY' <<<"$RESP"
+import json,sys
+j=json.loads(sys.stdin.read())
+print("\n".join([r.get('name','') for r in j.get('results', []) if r.get('name')]))
+PY
+            )
+
+            for TAG in $TAGS; do
+              if echo "$KEEP_SET" | grep -q " ${TAG} "; then
+                echo "Keeping tag: ${TAG}"
+                continue
+              fi
+              echo "Deleting tag: ${TAG}"
+              curl -fsS -X DELETE -H "Authorization: JWT ${TOKEN}" \
+                "https://hub.docker.com/v2/repositories/${DOCKERHUB_USER}/${IMAGE_NAME}/tags/${TAG}/" >/dev/null
+            done
+
+            URL="$NEXT_URL"
+          done
+
+          echo "Done."
