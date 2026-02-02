@@ -12,7 +12,7 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 const GOOGLE_CALLBACK_URL = process.env.GOOGLE_CALLBACK_URL || '';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
-const AVATARS_DIR = process.env.AVATARS_DIR || '/avatars';
+const AVATARS_DIR = process.env.AVATARS_DIR || '/data/cache/avatars';
 
 // Check if Google OAuth is configured
 export function isGoogleOAuthEnabled(): boolean {

@@ -16,9 +16,9 @@ import { createReadStream, existsSync } from 'node:fs';
 import { stat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const ART_DIR = process.env.ART_DIR ?? '/art';
-const AVATARS_DIR = process.env.AVATARS_DIR ?? '/avatars';
-const LYRICS_DIR = process.env.LYRICS_DIR ?? '/lyrics';
+const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
+const AVATARS_DIR = process.env.AVATARS_DIR ?? '/data/cache/avatars';
+const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 
 const SUBSONIC_API_VERSION = '1.16.1';
 const SERVER_NAME = 'mvbar';
@@ -529,10 +529,19 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
       default: orderBy = 'ua.album';
     }
 
-    const genre = (params as any).genre as string | undefined;
-    const whereGenre = type === 'byGenre' && genre ? 'AND t.genre ILIKE $3' : '';
+    const genreRaw = (params as any).genre as string | undefined;
+    const genre = genreRaw?.trim();
+    // Match genre tokens the same way getGenres does (split on ';' and trim).
+    const whereGenre =
+      type === 'byGenre' && genre
+        ? `AND EXISTS (
+             SELECT 1
+             FROM UNNEST(STRING_TO_ARRAY(t.genre, ';')) as g
+             WHERE TRIM(g) ILIKE $3
+           )`
+        : '';
     const args: any[] = [size, offset];
-    if (type === 'byGenre' && genre) args.push(`%${genre}%`);
+    if (type === 'byGenre' && genre) args.push(genre);
 
     // Match browse/albums query structure
     const r = await db().query(`

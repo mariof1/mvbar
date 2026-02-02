@@ -8,8 +8,8 @@ import { writeArt } from './art.js';
 import { indexAllTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
 
-const LYRICS_DIR = process.env.LYRICS_DIR ?? '/lyrics';
-const ART_DIR = process.env.ART_DIR ?? '/art';
+const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
+const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wav']);
 const ARTIST_IMAGE_NAMES = ['artist.jpg', 'artist.jpeg', 'artist.png', 'band.jpg', 'band.jpeg', 'band.png', 'photo.jpg', 'photo.jpeg', 'photo.png'];

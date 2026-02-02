@@ -68,7 +68,7 @@ COPY infra/entrypoint.sh /entrypoint.sh
 COPY infra/wait-for-http.sh /app/infra/wait-for-http.sh
 RUN chmod +x /entrypoint.sh /app/infra/wait-for-http.sh
 
-VOLUME ["/var/lib/postgresql/data", "/data/redis", "/meili_data", "/data/caddy", "/config/caddy", "/lyrics", "/art", "/hls", "/podcasts", "/avatars"]
+VOLUME ["/var/lib/postgresql/data", "/data/redis", "/meili_data", "/data/caddy", "/config/caddy", "/data/cache", "/hls", "/podcasts"]
 
 EXPOSE 80 443
 

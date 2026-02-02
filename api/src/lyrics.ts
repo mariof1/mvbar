@@ -6,7 +6,7 @@ import { db } from './db.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import logger from './logger.js';
 
-const LYRICS_DIR = process.env.LYRICS_DIR ?? '/lyrics';
+const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 const LRCLIB_API = 'https://lrclib.net/api/get';
 
 function safeJoinLyrics(relPath: string) {
