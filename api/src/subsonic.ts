@@ -478,9 +478,15 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
       case 'alphabeticalByName': orderBy = 'ua.album'; break;
       case 'alphabeticalByArtist': orderBy = 'display_artist, ua.album'; break;
       case 'byYear': orderBy = 'ua.year DESC, ua.album'; break;
+      case 'byGenre': orderBy = 'ua.album'; break;
       default: orderBy = 'ua.album';
     }
-    
+
+    const genre = (params as any).genre as string | undefined;
+    const whereGenre = type === 'byGenre' && genre ? 'AND t.genre ILIKE $3' : '';
+    const args: any[] = [size, offset];
+    if (type === 'byGenre' && genre) args.push(`%${genre}%`);
+
     // Match browse/albums query structure
     const r = await db().query(`
       WITH unique_albums AS (
@@ -492,12 +498,14 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
           t.updated_at
         FROM active_tracks t
         WHERE t.album IS NOT NULL AND t.album <> ''
+          ${whereGenre}
         ORDER BY t.album, t.path
       ),
       album_counts AS (
         SELECT t.album, COUNT(*)::int as track_count, SUM(t.duration_ms) as total_duration_ms, MAX(t.updated_at) as max_updated
         FROM active_tracks t
         WHERE t.album IS NOT NULL AND t.album <> ''
+          ${whereGenre}
         GROUP BY t.album
       )
       SELECT
@@ -519,7 +527,7 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
       JOIN album_counts ac ON ac.album = ua.album
       ORDER BY ${orderBy}
       LIMIT $1 OFFSET $2
-    `, [size, offset]);
+    `, args);
     
     const albums = r.rows.map(row => ({
       id: `al-${encodeURIComponent(row.name)}`,
