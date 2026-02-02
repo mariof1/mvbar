@@ -760,8 +760,11 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
     
     if (submission) {
       const userId = (req as any).subsonicUser?.userId;
-      await db().query('INSERT INTO history (user_id, track_id) VALUES ($1, $2)', [userId, id]);
-      await db().query('UPDATE tracks SET play_count = COALESCE(play_count, 0) + 1 WHERE id = $1', [id]);
+      await db().query('INSERT INTO play_history (user_id, track_id) VALUES ($1, $2)', [userId, id]);
+      await db().query(
+        'INSERT INTO user_track_stats (user_id, track_id, play_count, last_played_at) VALUES ($1, $2, 1, now()) ON CONFLICT (user_id, track_id) DO UPDATE SET play_count = user_track_stats.play_count + 1, last_played_at = now()',
+        [userId, id]
+      );
     }
     sendResponse(reply, createResponse(), params.f);
   }
