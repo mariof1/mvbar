@@ -566,23 +566,23 @@ export function BrowseNew(props: {
           Back
         </button>
 
-        <div className="flex items-end gap-6">
+        <div className="flex items-end gap-4 sm:gap-6">
           {albumDetail.art_path ? (
             <img
               src={`/api/art/${albumDetail.art_path}`}
               alt={albumDetail.name}
-              className="w-48 h-48 rounded-xl shadow-2xl object-cover"
+              className="w-24 h-24 sm:w-48 sm:h-48 rounded-xl shadow-2xl object-cover"
             />
           ) : (
-            <div className="w-48 h-48 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
-              <svg className="w-16 h-16 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="w-24 h-24 sm:w-48 sm:h-48 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
+              <svg className="w-8 h-8 sm:w-16 sm:h-16 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
               </svg>
             </div>
           )}
-          <div>
-            <h1 className="text-3xl font-bold text-white">{albumDetail.name}</h1>
-            <p className="text-xl text-slate-400 mt-1">{albumDetail.artist}</p>
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-3xl font-bold text-white truncate leading-tight">{albumDetail.name}</h1>
+            <p className="text-sm sm:text-xl text-slate-400 mt-1 truncate">{albumDetail.artist}</p>
             <p className="text-sm text-slate-500 mt-2">
               {albumDetail.tracks.length} tracks
               {albumDetail.totalDiscs > 1 && ` · ${albumDetail.totalDiscs} discs`}
