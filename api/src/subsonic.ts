@@ -9,6 +9,9 @@ import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { db } from './db.js';
 import * as crypto from 'crypto';
 import logger from './logger.js';
+import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
+import type { Role } from './store.js';
+import { verifyPassword } from './security.js';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -91,14 +94,14 @@ function getParams(req: FastifyRequest): SubsonicParams & Record<string, string 
   return { ...body, ...query };
 }
 
-async function authenticate(req: FastifyRequest): Promise<{ userId: string; username: string } | null> {
+async function authenticate(req: FastifyRequest): Promise<{ userId: string; username: string; role: Role } | null> {
   const params = getParams(req);
   const { u: username, p: password, t: token, s: salt } = params;
   
   if (!username) return null;
   
-  const r = await db().query<{ id: string; email: string; password_hash: string; subsonic_password: string | null }>(
-    'SELECT id, email, password_hash, subsonic_password FROM users WHERE email = $1',
+  const r = await db().query<{ id: string; email: string; password_hash: string; subsonic_password: string | null; role: Role }>(
+    'SELECT id, email, password_hash, subsonic_password, role FROM users WHERE email = $1',
     [username]
   );
   const user = r.rows[0];
@@ -108,7 +111,7 @@ async function authenticate(req: FastifyRequest): Promise<{ userId: string; user
   if (token && salt && user.subsonic_password) {
     const expectedToken = crypto.createHash('md5').update(user.subsonic_password + salt).digest('hex');
     if (token.toLowerCase() === expectedToken.toLowerCase()) {
-      return { userId: user.id, username: user.email };
+      return { userId: user.id, username: user.email, role: user.role };
     }
   }
   
@@ -118,13 +121,12 @@ async function authenticate(req: FastifyRequest): Promise<{ userId: string; user
     if (password.startsWith('enc:')) {
       plainPassword = Buffer.from(password.slice(4), 'hex').toString('utf-8');
     }
-    const inputHash = crypto.createHash('sha256').update(plainPassword).digest('hex');
-    if (inputHash === user.password_hash) {
+    if (verifyPassword(plainPassword, user.password_hash)) {
       // Auto-populate subsonic_password for future token auth
       if (!user.subsonic_password) {
         await db().query('UPDATE users SET subsonic_password = $1 WHERE id = $2', [plainPassword, user.id]);
       }
-      return { userId: user.id, username: user.email };
+      return { userId: user.id, username: user.email, role: user.role };
     }
   }
   
@@ -231,6 +233,31 @@ function formatArtist(artist: any): Record<string, any> {
 // ========== Plugin ==========
 
 export const subsonicPlugin: FastifyPluginAsync = async (app) => {
+  // Allow browser-based Subsonic clients (e.g. Airsonic Refix) to call /rest/* cross-origin.
+  // (Must run before body parsing so CORS headers are present even on 4xx/415 errors.)
+  app.addHook('onRequest', async (req, reply) => {
+    if (!req.url.startsWith('/rest/')) return;
+
+    reply
+      .header('Access-Control-Allow-Origin', '*')
+      .header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+      .header('Access-Control-Allow-Headers', '*');
+
+    if (req.method === 'OPTIONS') return reply.code(204).send();
+  });
+
+  // Support clients that POST form-encoded params (u/p/t/s/etc)
+  app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (req, body, done) => {
+    try {
+      const s = body as string;
+      const out: Record<string, string> = {};
+      for (const [k, v] of new URLSearchParams(s)) out[k] = v;
+      done(null, out);
+    } catch (e) {
+      done(e as any, undefined);
+    }
+  });
+
   // Middleware for auth and logging
   app.addHook('preHandler', async (req, reply) => {
     if (!req.url.startsWith('/rest/')) return;
@@ -573,27 +600,62 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
 
   // ========== Media Retrieval ==========
 
-  app.all('/rest/stream', async (req, reply) => {
-    const params = getParams(req);
-    if (!params.id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
-    reply.redirect(302, `/api/stream/${params.id}`);
-  });
-  app.all('/rest/stream.view', async (req, reply) => {
-    const params = getParams(req);
-    if (!params.id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
-    reply.redirect(302, `/api/stream/${params.id}`);
-  });
+  function safeJoinMount(mountPath: string, relPath: string) {
+    const abs = path.resolve(mountPath, relPath);
+    const base = path.resolve(mountPath);
+    if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
+    return abs;
+  }
 
-  app.all('/rest/download', async (req, reply) => {
+  async function handleStream(req: FastifyRequest, reply: FastifyReply) {
     const params = getParams(req);
-    if (!params.id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
-    reply.redirect(302, `/api/stream/${params.id}`);
-  });
-  app.all('/rest/download.view', async (req, reply) => {
-    const params = getParams(req);
-    if (!params.id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
-    reply.redirect(302, `/api/stream/${params.id}`);
-  });
+    const id = params.id;
+    if (!id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
+
+    const user = (req as any).subsonicUser as { userId: string; role: Role } | undefined;
+    if (!user) return sendResponse(reply, createError(ERROR.AUTH_FAILED.code, ERROR.AUTH_FAILED.message), params.f);
+
+    const r = await db().query<{ path: string; ext: string; library_id: number; mount_path: string }>(
+      'select t.path, t.ext, t.library_id, l.mount_path from active_tracks t join libraries l on l.id=t.library_id where t.id=$1',
+      [Number(id)]
+    );
+    const row = r.rows[0];
+    if (!row) return reply.code(404).send();
+
+    const allowed = await allowedLibrariesForUser(user.userId, user.role);
+    if (!isLibraryAllowed(Number(row.library_id), allowed)) return reply.code(404).send();
+
+    const abs = safeJoinMount(row.mount_path, row.path);
+    const st = await stat(abs);
+    const range = req.headers.range;
+
+    const contentType = row.ext === '.mp3' ? 'audio/mpeg' : 'application/octet-stream';
+
+    if (range) {
+      const m = /^bytes=(\d+)-(\d+)?$/.exec(range);
+      if (!m) return reply.code(416).send();
+      const start = Number(m[1]);
+      const end = m[2] ? Number(m[2]) : st.size - 1;
+      if (start >= st.size || end >= st.size || start > end) return reply.code(416).send();
+
+      reply
+        .code(206)
+        .header('Content-Range', `bytes ${start}-${end}/${st.size}`)
+        .header('Accept-Ranges', 'bytes')
+        .header('Content-Length', String(end - start + 1))
+        .header('Content-Type', contentType);
+
+      return reply.send(createReadStream(abs, { start, end }));
+    }
+
+    reply.header('Content-Length', String(st.size)).header('Accept-Ranges', 'bytes').header('Content-Type', contentType);
+    return reply.send(createReadStream(abs));
+  }
+
+  app.all('/rest/stream', handleStream);
+  app.all('/rest/stream.view', handleStream);
+  app.all('/rest/download', handleStream);
+  app.all('/rest/download.view', handleStream);
 
   async function handleGetCoverArt(req: FastifyRequest, reply: FastifyReply) {
     const params = getParams(req);
@@ -731,6 +793,27 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
         shareRole: true, videoConversionRole: false,
       },
     }), params.f);
+  });
+
+  // ========== Play Queue ==========
+
+  // Minimal play queue support (clients often call this on startup)
+  app.all('/rest/getPlayQueue', async (req, reply) => {
+    const params = getParams(req);
+    sendResponse(reply, createResponse({ playQueue: { entry: [], current: 0, position: 0 } }), params.f);
+  });
+  app.all('/rest/getPlayQueue.view', async (req, reply) => {
+    const params = getParams(req);
+    sendResponse(reply, createResponse({ playQueue: { entry: [], current: 0, position: 0 } }), params.f);
+  });
+
+  app.all('/rest/savePlayQueue', async (req, reply) => {
+    const params = getParams(req);
+    sendResponse(reply, createResponse(), params.f);
+  });
+  app.all('/rest/savePlayQueue.view', async (req, reply) => {
+    const params = getParams(req);
+    sendResponse(reply, createResponse(), params.f);
   });
 
   // ========== Playlists ==========
