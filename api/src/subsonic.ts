@@ -406,6 +406,53 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
   app.all('/rest/getArtist', handleGetArtist);
   app.all('/rest/getArtist.view', handleGetArtist);
 
+  // getTopSongs (used by some clients when viewing an artist)
+  async function handleGetTopSongs(req: FastifyRequest, reply: FastifyReply) {
+    const params = getParams(req);
+    const userId = (req as any).subsonicUser?.userId;
+
+    const count = Math.min(parseInt((params as any).count || '50'), 500);
+    const artistName = (params as any).artist as string | undefined;
+    const artistIdRaw = (params as any).artistId as string | undefined;
+
+    if (!artistName && !artistIdRaw) {
+      return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing artist/artistId parameter'), params.f);
+    }
+
+    let r;
+    if (artistIdRaw) {
+      const artistId = Number(artistIdRaw.replace('ar-', ''));
+      r = await db().query(
+        `
+        SELECT t.*, f.added_at as starred_at
+        FROM active_tracks t
+        JOIN track_artists ta ON ta.track_id = t.id
+        LEFT JOIN favorite_tracks f ON f.track_id = t.id AND f.user_id = $1
+        WHERE ta.artist_id = $2
+        ORDER BY t.id DESC
+        LIMIT $3
+      `,
+        [userId, artistId, count]
+      );
+    } else {
+      r = await db().query(
+        `
+        SELECT t.*, f.added_at as starred_at
+        FROM active_tracks t
+        LEFT JOIN favorite_tracks f ON f.track_id = t.id AND f.user_id = $1
+        WHERE lower(t.artist) = lower($2)
+        ORDER BY t.id DESC
+        LIMIT $3
+      `,
+        [userId, artistName, count]
+      );
+    }
+
+    sendResponse(reply, createResponse({ topSongs: { song: r.rows.map(formatSong) } }), params.f);
+  }
+  app.all('/rest/getTopSongs', handleGetTopSongs);
+  app.all('/rest/getTopSongs.view', handleGetTopSongs);
+
   // getAlbum
   async function handleGetAlbum(req: FastifyRequest, reply: FastifyReply) {
     const params = getParams(req);
