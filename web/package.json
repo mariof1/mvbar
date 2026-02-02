@@ -1,0 +1,26 @@
+{
+  "name": "mvbar-web",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
+    "hls.js": "^1.6.15",
+    "next": "15.5.10",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zustand": "^5.0.10"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "19.2.10",
+    "autoprefixer": "^10.4.23",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.18",
+    "typescript": "5.9.3"
+  }
+}

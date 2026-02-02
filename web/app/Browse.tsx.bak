@@ -1,0 +1,343 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { addTrackToPlaylist, browseAlbum, browseArtist, browseArtists, listPlaylists } from './apiClient';
+import { useFavorites } from './favoritesStore';
+import { useAuth } from './store';
+
+type ArtistRow = { artist: string; track_count: number; album_count: number };
+
+export function Browse(props: {
+  onPlayTrack?: (t: { id: number; title: string | null; artist: string | null }) => void;
+  onPlayAll?: (tracks: Array<{ id: number; title: string | null; artist: string | null }>) => void;
+  onAddToQueue?: (t: { id: number; title: string | null; artist: string | null }) => void;
+}) {
+  const token = useAuth((s) => s.token);
+  const clear = useAuth((s) => s.clear);
+
+  const [sort, setSort] = useState<'az' | 'tracks_desc' | 'albums_desc'>('az');
+  const favIds = useFavorites((s) => s.ids);
+  const refreshFavs = useFavorites((s) => s.refresh);
+  const toggleFav = useFavorites((s) => s.toggle);
+  const [artists, setArtists] = useState<ArtistRow[]>([]);
+  const [selectedArtist, setSelectedArtist] = useState<string | null>(null);
+  const [selectedAlbum, setSelectedAlbum] = useState<{ artist: string; album: string } | null>(null);
+  const [artistView, setArtistView] = useState<{ albums: Array<{ album: string; track_count: number }>; appearsOn: Array<{ album: string; track_count: number }>; tracks: any[] } | null>(null);
+  const [albumTracks, setAlbumTracks] = useState<any[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const [pls, setPls] = useState<Array<{ id: string; name: string }>>([]);
+  const [playlistId, setPlaylistId] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('mvbar_playlist_id') ?? '' : ''));
+
+  const canBrowse = useMemo(() => Boolean(token), [token]);
+
+  useEffect(() => {
+    if (!canBrowse) return;
+    (async () => {
+      try {
+        const r = await browseArtists(token!, 50, 0, sort);
+        setArtists(r.artists ?? []);
+      } catch (e: any) {
+        if (e?.status === 401) clear();
+        setError(e?.message ?? 'error');
+      }
+    })();
+  }, [canBrowse, token, clear, sort]);
+
+  useEffect(() => {
+    if (!token || !selectedArtist) return;
+    setSelectedAlbum(null);
+    setAlbumTracks(null);
+    (async () => {
+      try {
+        const r = await browseArtist(token, selectedArtist);
+        setArtistView({ albums: r.albums ?? [], appearsOn: r.appearsOn ?? [], tracks: r.tracks ?? [] });
+      } catch (e: any) {
+        if (e?.status === 401) clear();
+        setError(e?.message ?? 'error');
+      }
+    })();
+  }, [token, selectedArtist, clear]);
+
+  useEffect(() => {
+    if (!token || !selectedAlbum) return;
+    (async () => {
+      try {
+        const r = await browseAlbum(token, selectedAlbum.artist, selectedAlbum.album);
+        setAlbumTracks(r.tracks ?? []);
+      } catch (e: any) {
+        if (e?.status === 401) clear();
+        setError(e?.message ?? 'error');
+      }
+    })();
+  }, [token, selectedAlbum, clear]);
+
+  useEffect(() => {
+    if (!token) return;
+    (async () => {
+      try {
+        const r = await listPlaylists(token);
+        setPls((r.playlists ?? []).map((p) => ({ id: String(p.id), name: p.name })));
+      } catch (e: any) {
+        if (e?.status === 401) clear();
+      }
+    })();
+  }, [token, clear]);
+
+  useEffect(() => {
+    if (!token) return;
+    refreshFavs(token).catch((e: any) => {
+      if (e?.status === 401) clear();
+    });
+  }, [token, clear, refreshFavs]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('mvbar_playlist_id', playlistId);
+  }, [playlistId]);
+
+  if (!token) return null;
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400">
+          {error}
+        </div>
+      )}
+
+      {/* Sort Controls */}
+      <div className="flex items-center gap-4">
+        <span className="text-sm text-slate-400">Sort by</span>
+        <div className="flex gap-2">
+          {[
+            { value: 'az', label: 'A–Z' },
+            { value: 'tracks_desc', label: 'Most Tracks' },
+            { value: 'albums_desc', label: 'Most Albums' }
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setSort(opt.value as any)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                sort === opt.value
+                  ? 'bg-cyan-500 text-white'
+                  : 'bg-slate-800/50 text-slate-300 hover:bg-slate-700/50'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Two Column Layout */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        {/* Artists List */}
+        <div className="space-y-3">
+          <h3 className="text-lg font-semibold text-slate-300 flex items-center gap-2">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            Artists
+          </h3>
+          <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-2 scrollbar-thin">
+            {artists.map((a) => (
+              <button
+                key={a.artist}
+                onClick={() => setSelectedArtist(a.artist)}
+                className={`w-full text-left p-4 rounded-xl border transition-all duration-200 ${
+                  selectedArtist === a.artist
+                    ? 'bg-cyan-500/20 border-cyan-500/50 ring-1 ring-cyan-500/30'
+                    : 'bg-slate-800/30 border-slate-700/30 hover:bg-slate-800/50 hover:border-slate-600/50'
+                }`}
+              >
+                <div className="font-semibold text-white truncate">{a.artist}</div>
+                <div className="text-sm text-slate-400 mt-1">
+                  {a.album_count} album{a.album_count !== 1 ? 's' : ''} • {a.track_count} track{a.track_count !== 1 ? 's' : ''}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Artist Detail / Albums */}
+        <div className="space-y-4">
+          {selectedArtist && artistView ? (
+            <>
+              {/* Artist Header */}
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-bold text-white truncate">{selectedArtist}</h3>
+                <button
+                  onClick={() => props.onPlayAll?.(artistView.tracks.map((t: any) => ({ id: Number(t.id), title: t.title, artist: t.artist })))}
+                  className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                  Play All
+                </button>
+              </div>
+
+              {/* Albums */}
+              {artistView.albums.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium text-slate-400 uppercase tracking-wide">Albums</h4>
+                  <div className="grid gap-2">
+                    {artistView.albums.map((al) => (
+                      <button
+                        key={al.album}
+                        onClick={() => setSelectedAlbum({ artist: selectedArtist, album: al.album })}
+                        className={`w-full text-left p-3 rounded-lg border transition-all ${
+                          selectedAlbum?.album === al.album
+                            ? 'bg-slate-700/50 border-cyan-500/50'
+                            : 'bg-slate-800/30 border-slate-700/30 hover:bg-slate-800/50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 bg-slate-700/50 rounded-lg flex items-center justify-center flex-shrink-0">
+                            <svg className="w-6 h-6 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                            </svg>
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium text-white truncate">{al.album}</div>
+                            <div className="text-sm text-slate-400">{al.track_count} tracks</div>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Appears On */}
+              {artistView.appearsOn && artistView.appearsOn.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium text-slate-400 uppercase tracking-wide">Appears On</h4>
+                  <div className="grid gap-2">
+                    {artistView.appearsOn.map((al) => (
+                      <button
+                        key={al.album}
+                        onClick={() => setSelectedAlbum({ artist: selectedArtist, album: al.album })}
+                        className={`w-full text-left p-3 rounded-lg border transition-all ${
+                          selectedAlbum?.album === al.album
+                            ? 'bg-slate-700/50 border-cyan-500/50'
+                            : 'bg-slate-800/30 border-slate-700/30 hover:bg-slate-800/50'
+                        }`}
+                      >
+                        <div className="font-medium text-white truncate">{al.album}</div>
+                        <div className="text-sm text-slate-400">{al.track_count} tracks</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Album Tracks */}
+              {selectedAlbum && albumTracks && (
+                <div className="space-y-3 pt-4 border-t border-slate-700/50">
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <h4 className="text-lg font-semibold text-white truncate">{selectedAlbum.album}</h4>
+                    <div className="flex items-center gap-2">
+                      {pls.length > 0 && (
+                        <select
+                          value={playlistId}
+                          onChange={(e) => setPlaylistId(e.target.value)}
+                          className="px-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                        >
+                          <option value="">Add to playlist...</option>
+                          {pls.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      )}
+                      <button
+                        onClick={() => props.onPlayAll?.(albumTracks.map((t: any) => ({ id: Number(t.id), title: t.title, artist: t.artist })))}
+                        className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-lg font-medium transition-colors"
+                      >
+                        Play All
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    {albumTracks.map((t: any, idx: number) => (
+                      <div
+                        key={t.id}
+                        className="group flex items-center gap-3 p-3 rounded-lg hover:bg-slate-800/50 transition-colors"
+                      >
+                        <span className="w-6 text-center text-sm text-slate-500 group-hover:hidden">{idx + 1}</span>
+                        <button
+                          onClick={() => props.onPlayTrack?.({ id: Number(t.id), title: t.title, artist: t.artist })}
+                          className="w-6 hidden group-hover:flex items-center justify-center text-cyan-400"
+                        >
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M8 5v14l11-7z" />
+                          </svg>
+                        </button>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-white truncate">{t.title ?? `Track #${t.id}`}</div>
+                          <div className="text-sm text-slate-400 truncate">{t.artist ?? 'Unknown'}</div>
+                        </div>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => props.onAddToQueue?.({ id: Number(t.id), title: t.title, artist: t.artist })}
+                            className="p-2 hover:bg-slate-700/50 rounded-lg"
+                            title="Add to queue"
+                          >
+                            <svg className="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await toggleFav(token!, Number(t.id));
+                              } catch (e: any) {
+                                if (e?.status === 401) clear();
+                              }
+                            }}
+                            className={`p-2 hover:bg-slate-700/50 rounded-lg ${favIds.has(Number(t.id)) ? 'text-pink-500' : 'text-slate-300'}`}
+                            title={favIds.has(Number(t.id)) ? 'Remove from favorites' : 'Add to favorites'}
+                          >
+                            <svg className="w-4 h-4" fill={favIds.has(Number(t.id)) ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                            </svg>
+                          </button>
+                          {playlistId && (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await addTrackToPlaylist(token!, playlistId, Number(t.id));
+                                } catch (e: any) {
+                                  if (e?.status === 401) clear();
+                                }
+                              }}
+                              className="p-2 hover:bg-slate-700/50 rounded-lg text-slate-300"
+                              title="Add to playlist"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-64 text-slate-400">
+              <svg className="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
+              <p>Select an artist to browse</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,47 @@
+{
+  # Set this in production if you want Let's Encrypt account email.
+  # email you@example.com
+  # basic hardening
+  servers {
+    trusted_proxies static private_ranges
+    protocols h1 h2
+  }
+}
+
+(security_headers) {
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Frame-Options "DENY"
+    X-Content-Type-Options "nosniff"
+    X-XSS-Protection "1; mode=block"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    -Server
+  }
+}
+
+# Local/dev default
+:80 {
+  encode zstd gzip
+
+  # HLS: manifest/segments must go through web (cookie auth), but job request/status go to API.
+  @hlsJob path_regexp hlsJob ^/api/hls/[^/]+/(request|status)$
+  reverse_proxy @hlsJob 127.0.0.1:{env.API_PORT}
+  reverse_proxy /api/hls/* 127.0.0.1:{env.WEB_PORT}
+
+  reverse_proxy /api/stream/* 127.0.0.1:{env.WEB_PORT}
+  reverse_proxy /api/art/* 127.0.0.1:{env.WEB_PORT}
+  reverse_proxy /api/lyrics/* 127.0.0.1:{env.WEB_PORT}
+  reverse_proxy /api/* 127.0.0.1:{env.API_PORT}
+  reverse_proxy /rest/* 127.0.0.1:{env.API_PORT}
+  reverse_proxy /health 127.0.0.1:{env.API_PORT}
+  reverse_proxy 127.0.0.1:{env.WEB_PORT}
+}
+
+# For production, you will set a domain in an override file or by editing this.
+# example.com {
+#   encode zstd gzip
+#   import security_headers
+#   reverse_proxy /api/* api:3000
+#   reverse_proxy web:3000
+# }

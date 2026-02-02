@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            worker/package-lock.json
+            web/package-lock.json
+
+      - name: API install + build
+        working-directory: api
+        run: |
+          npm ci
+          npm run build
+
+      - name: Worker install + build
+        working-directory: worker
+        run: |
+          npm ci
+          npm run build
+
+      - name: Web install + build
+        working-directory: web
+        run: |
+          npm ci
+          npm run build

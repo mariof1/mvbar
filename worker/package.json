@@ -1,0 +1,25 @@
+{
+  "name": "mvbar-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "node --watch --loader ts-node/esm src/index.ts"
+  },
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "dotenv": "^16.4.5",
+    "ioredis": "^5.9.2",
+    "meilisearch": "^0.55.0",
+    "music-metadata": "^11.11.0",
+    "pg": "^8.17.2"
+  },
+  "devDependencies": {
+    "@types/chokidar": "^2.1.7",
+    "@types/node": "^20.11.30",
+    "@types/pg": "^8.16.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}
