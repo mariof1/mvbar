@@ -6,17 +6,19 @@
  */
 
 import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import { db } from './db.js';
+import { db, redis } from './db.js';
 import * as crypto from 'crypto';
 import logger from './logger.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import type { Role } from './store.js';
 import { verifyPassword } from './security.js';
-import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { createReadStream, existsSync } from 'node:fs';
+import { stat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const ART_DIR = process.env.ART_DIR ?? '/art';
+const AVATARS_DIR = process.env.AVATARS_DIR ?? '/avatars';
+const LYRICS_DIR = process.env.LYRICS_DIR ?? '/lyrics';
 
 const SUBSONIC_API_VERSION = '1.16.1';
 const SERVER_NAME = 'mvbar';
@@ -607,6 +609,22 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
     return abs;
   }
 
+  function safeJoinDir(baseDir: string, relPath: string) {
+    const abs = path.resolve(baseDir, relPath);
+    const base = path.resolve(baseDir);
+    if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
+    return abs;
+  }
+
+  async function setNowPlaying(username: string, trackId: string) {
+    try {
+      const key = `subsonic:nowPlaying:${encodeURIComponent(username)}`;
+      await redis().set(key, JSON.stringify({ trackId, username, at: Date.now() }), 'EX', 60 * 30);
+    } catch {
+      // ignore
+    }
+  }
+
   async function handleStream(req: FastifyRequest, reply: FastifyReply) {
     const params = getParams(req);
     const id = params.id;
@@ -661,7 +679,7 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
     const params = getParams(req);
     const id = params.id;
     if (!id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
-    
+
     let trackId = id;
     if (id.startsWith('al-')) {
       const albumName = decodeURIComponent(id.slice(3));
@@ -669,36 +687,34 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
       if (r.rows.length > 0) trackId = String(r.rows[0].id);
     } else if (id.startsWith('ar-')) {
       const artistId = id.slice(3);
-      const r = await db().query(`
-        SELECT t.id FROM active_tracks t 
-        JOIN track_artists ta ON ta.track_id = t.id 
+      const r = await db().query(
+        `
+        SELECT t.id FROM active_tracks t
+        JOIN track_artists ta ON ta.track_id = t.id
         WHERE ta.artist_id = $1 AND t.art_path IS NOT NULL LIMIT 1
-      `, [artistId]);
+      `,
+        [artistId]
+      );
       if (r.rows.length > 0) trackId = String(r.rows[0].id);
     }
-    
-    // Fetch art_path from database and serve file directly
+
     const artResult = await db().query<{ art_path: string | null; art_mime: string | null }>(
-      'SELECT art_path, art_mime FROM active_tracks WHERE id = $1', [trackId]
+      'SELECT art_path, art_mime FROM active_tracks WHERE id = $1',
+      [Number(trackId)]
     );
     const row = artResult.rows[0];
-    if (!row?.art_path) {
-      return reply.code(404).send();
-    }
-    
+    if (!row?.art_path) return reply.code(404).send();
+
     try {
-      const abs = path.resolve(ART_DIR, row.art_path);
-      const base = path.resolve(ART_DIR);
-      if (!abs.startsWith(base + path.sep)) return reply.code(404).send();
-      
+      const abs = safeJoinDir(ART_DIR, row.art_path);
       const st = await stat(abs);
       const mime = row.art_mime || 'image/jpeg';
-      
+
       reply
         .header('Content-Type', mime)
         .header('Content-Length', String(st.size))
         .header('Cache-Control', 'public, max-age=86400');
-      
+
       return reply.send(createReadStream(abs));
     } catch {
       return reply.code(404).send();
@@ -707,15 +723,209 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
   app.all('/rest/getCoverArt', handleGetCoverArt);
   app.all('/rest/getCoverArt.view', handleGetCoverArt);
 
-  // ========== Favorites ==========
+  async function handleGetAvatar(req: FastifyRequest, reply: FastifyReply) {
+    const params = getParams(req);
+    const username = (params as any).username as string | undefined;
+    if (!username) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing username parameter'), params.f);
 
-  async function handleStar(req: FastifyRequest, reply: FastifyReply) {
+    const r = await db().query<{ avatar_path: string | null }>('select avatar_path from users where email=$1', [username]);
+    const row = r.rows[0];
+    if (!row?.avatar_path) return reply.code(404).send();
+
+    try {
+      const abs = safeJoinDir(AVATARS_DIR, row.avatar_path);
+      if (!existsSync(abs)) return reply.code(404).send();
+      const st = await stat(abs);
+
+      reply
+        .header('Content-Type', 'image/jpeg')
+        .header('Content-Length', String(st.size))
+        .header('Cache-Control', 'public, max-age=86400');
+
+      return reply.send(createReadStream(abs));
+    } catch {
+      return reply.code(404).send();
+    }
+  }
+  app.all('/rest/getAvatar', handleGetAvatar);
+  app.all('/rest/getAvatar.view', handleGetAvatar);
+
+  async function handleGetLyrics(req: FastifyRequest, reply: FastifyReply) {
+    const params = getParams(req);
+    const artist = (params as any).artist as string | undefined;
+    const title = (params as any).title as string | undefined;
+
+    if (!artist || !title) {
+      sendResponse(reply, createResponse({ lyrics: { artist: artist ?? '', title: title ?? '', value: '' } }), params.f);
+      return;
+    }
+
+    const r = await db().query<{ id: number; lyrics_path: string | null }>(
+      `select id, lyrics_path
+       from active_tracks
+       where lower(artist)=lower($1) and lower(title)=lower($2)
+       order by id asc
+       limit 1`,
+      [artist, title]
+    );
+    const row = r.rows[0];
+
+    if (!row?.lyrics_path) {
+      sendResponse(reply, createResponse({ lyrics: { artist, title, value: '' } }), params.f);
+      return;
+    }
+
+    try {
+      const abs = safeJoinDir(LYRICS_DIR, row.lyrics_path);
+      const text = await readFile(abs, 'utf8');
+      sendResponse(reply, createResponse({ lyrics: { artist, title, value: text } }), params.f);
+    } catch {
+      sendResponse(reply, createResponse({ lyrics: { artist, title, value: '' } }), params.f);
+    }
+  }
+  app.all('/rest/getLyrics', handleGetLyrics);
+  app.all('/rest/getLyrics.view', handleGetLyrics);
+
+  async function handleGetNowPlaying(req: FastifyRequest, reply: FastifyReply) {
+    const params = getParams(req);
+
+    let entries: any[] = [];
+    try {
+      const keys = await redis().keys('subsonic:nowPlaying:*');
+      if (keys.length > 0) {
+        const vals = await redis().mget(keys);
+        const parsed = vals
+          .map(v => {
+            try {
+              return v ? (JSON.parse(v) as { trackId: string; username: string; at: number }) : null;
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean) as { trackId: string; username: string; at: number }[];
+
+        if (parsed.length > 0) {
+          const ids = parsed.map(p => Number(p.trackId)).filter(n => Number.isFinite(n));
+          const tracks = await db().query('select * from active_tracks where id = any($1)', [ids]);
+          const trackById = new Map<number, any>(tracks.rows.map((t: any) => [Number(t.id), t]));
+
+          entries = parsed
+            .map(p => {
+              const t = trackById.get(Number(p.trackId));
+              if (!t) return null;
+              const s = formatSong(t);
+              return {
+                ...s,
+                username: p.username,
+                minutesAgo: Math.max(0, Math.floor((Date.now() - p.at) / 60000)),
+                playerId: 0,
+              };
+            })
+            .filter(Boolean);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    sendResponse(reply, createResponse({ nowPlaying: { entry: entries } }), params.f);
+  }
+  app.all('/rest/getNowPlaying', handleGetNowPlaying);
+  app.all('/rest/getNowPlaying.view', handleGetNowPlaying);
+
+  async function handleGetAlbumInfo2(req: FastifyRequest, reply: FastifyReply) {
     const params = getParams(req);
     const id = params.id;
     if (!id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
-    
+
+    sendResponse(
+      reply,
+      createResponse({
+        albumInfo: {
+          notes: '',
+          musicBrainzId: '',
+          smallImageUrl: '',
+          mediumImageUrl: '',
+          largeImageUrl: '',
+        },
+      }),
+      params.f
+    );
+  }
+  app.all('/rest/getAlbumInfo2', handleGetAlbumInfo2);
+  app.all('/rest/getAlbumInfo2.view', handleGetAlbumInfo2);
+
+  async function handleGetArtistInfo2(req: FastifyRequest, reply: FastifyReply) {
+    const params = getParams(req);
+    const id = params.id;
+    if (!id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
+
+    sendResponse(
+      reply,
+      createResponse({
+        artistInfo2: {
+          biography: '',
+          musicBrainzId: '',
+          smallImageUrl: '',
+          mediumImageUrl: '',
+          largeImageUrl: '',
+        },
+      }),
+      params.f
+    );
+  }
+  app.all('/rest/getArtistInfo2', handleGetArtistInfo2);
+  app.all('/rest/getArtistInfo2.view', handleGetArtistInfo2);
+
+  async function handleSetRating(req: FastifyRequest, reply: FastifyReply) {
+    const params = getParams(req);
+    const id = params.id;
+    const rating = (params as any).rating as string | undefined;
+    if (!id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
+    if (rating === undefined) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing rating parameter'), params.f);
+
+    // mvbar doesn't have a ratings model yet; accept and no-op.
+    sendResponse(reply, createResponse(), params.f);
+  }
+  app.all('/rest/setRating', handleSetRating);
+  app.all('/rest/setRating.view', handleSetRating);
+
+
+  async function handleStar(req: FastifyRequest, reply: FastifyReply) {
+    const params = getParams(req);
     const userId = (req as any).subsonicUser?.userId;
-    await db().query('INSERT INTO favorite_tracks (user_id, track_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, id]);
+
+    const ids: string[] = [];
+    if (params.id) ids.push(params.id);
+
+    const albumId = (params as any).albumId as string | undefined;
+    if (albumId) {
+      const albumName = albumId.startsWith('al-') ? decodeURIComponent(albumId.slice(3)) : decodeURIComponent(albumId);
+      const r = await db().query<{ id: number }>('select id from active_tracks where album=$1', [albumName]);
+      for (const row of r.rows) ids.push(String(row.id));
+    }
+
+    const artistId = (params as any).artistId as string | undefined;
+    if (artistId) {
+      const arId = artistId.replace('ar-', '');
+      const r = await db().query<{ id: number }>(
+        `select t.id
+         from active_tracks t
+         join track_artists ta on ta.track_id=t.id
+         where ta.artist_id=$1`,
+        [Number(arId)]
+      );
+      for (const row of r.rows) ids.push(String(row.id));
+    }
+
+    if (ids.length === 0) {
+      return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id/albumId/artistId parameter'), params.f);
+    }
+
+    for (const id of ids) {
+      await db().query('INSERT INTO favorite_tracks (user_id, track_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, id]);
+    }
+
     sendResponse(reply, createResponse(), params.f);
   }
   app.all('/rest/star', handleStar);
@@ -723,11 +933,39 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
 
   async function handleUnstar(req: FastifyRequest, reply: FastifyReply) {
     const params = getParams(req);
-    const id = params.id;
-    if (!id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
-    
     const userId = (req as any).subsonicUser?.userId;
-    await db().query('DELETE FROM favorite_tracks WHERE user_id = $1 AND track_id = $2', [userId, id]);
+
+    const ids: string[] = [];
+    if (params.id) ids.push(params.id);
+
+    const albumId = (params as any).albumId as string | undefined;
+    if (albumId) {
+      const albumName = albumId.startsWith('al-') ? decodeURIComponent(albumId.slice(3)) : decodeURIComponent(albumId);
+      const r = await db().query<{ id: number }>('select id from active_tracks where album=$1', [albumName]);
+      for (const row of r.rows) ids.push(String(row.id));
+    }
+
+    const artistId = (params as any).artistId as string | undefined;
+    if (artistId) {
+      const arId = artistId.replace('ar-', '');
+      const r = await db().query<{ id: number }>(
+        `select t.id
+         from active_tracks t
+         join track_artists ta on ta.track_id=t.id
+         where ta.artist_id=$1`,
+        [Number(arId)]
+      );
+      for (const row of r.rows) ids.push(String(row.id));
+    }
+
+    if (ids.length === 0) {
+      return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id/albumId/artistId parameter'), params.f);
+    }
+
+    for (const id of ids) {
+      await db().query('DELETE FROM favorite_tracks WHERE user_id = $1 AND track_id = $2', [userId, id]);
+    }
+
     sendResponse(reply, createResponse(), params.f);
   }
   app.all('/rest/unstar', handleUnstar);
@@ -757,9 +995,18 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
     const id = params.id;
     const submission = params.submission !== 'false';
     if (!id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
-    
+
+    const user = (req as any).subsonicUser as { userId: string; username: string } | undefined;
+
+    // "Now playing" notification (store ephemeral state for getNowPlaying)
+    if (!submission) {
+      if (user?.username) await setNowPlaying(user.username, id);
+      sendResponse(reply, createResponse(), params.f);
+      return;
+    }
+
     if (submission) {
-      const userId = (req as any).subsonicUser?.userId;
+      const userId = user?.userId;
       await db().query('INSERT INTO play_history (user_id, track_id) VALUES ($1, $2)', [userId, id]);
       await db().query(
         'INSERT INTO user_track_stats (user_id, track_id, play_count, last_played_at) VALUES ($1, $2, 1, now()) ON CONFLICT (user_id, track_id) DO UPDATE SET play_count = user_track_stats.play_count + 1, last_played_at = now()',
