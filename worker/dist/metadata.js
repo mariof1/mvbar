@@ -139,9 +139,16 @@ export async function readTagsAsync(filePath, timeoutMs = 30000) {
         // Use base64 encoding to safely pass file paths with special characters
         const encodedPath = Buffer.from(filePath).toString('base64');
         const cmd = `node ${childScriptPath} --base64 ${encodedPath}`;
+        let settled = false;
         const child = exec(cmd, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+            if (settled)
+                return;
+            settled = true;
             if (error) {
                 console.error(`[readTagsAsync] Error: ${stderr || error.message}`);
+                // Ensure child process is killed on error
+                if (!child.killed)
+                    child.kill('SIGTERM');
                 reject(new Error(stderr || error.message));
                 return;
             }
@@ -159,11 +166,18 @@ export async function readTagsAsync(filePath, timeoutMs = 30000) {
             }
             catch (e) {
                 console.error(`[readTagsAsync] Parse error: ${e}`);
+                if (!child.killed)
+                    child.kill('SIGTERM');
                 reject(new Error(`Failed to parse child output: ${e}`));
             }
         });
         child.on('spawn', () => {
             console.error(`[readTagsAsync] Child spawned for: ${filePath}`);
+        });
+        // Cleanup on timeout (exec timeout fires error callback, but ensure kill)
+        child.on('error', () => {
+            if (!child.killed)
+                child.kill('SIGTERM');
         });
     });
 }

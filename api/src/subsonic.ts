@@ -1026,8 +1026,10 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
       return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id/albumId/artistId parameter'), params.f);
     }
 
-    for (const id of ids) {
-      await db().query('DELETE FROM favorite_tracks WHERE user_id = $1 AND track_id = $2', [userId, id]);
+    // Batch delete instead of N individual queries
+    if (ids.length > 0) {
+      const numericIds = ids.map(id => Number(id));
+      await db().query('DELETE FROM favorite_tracks WHERE user_id = $1 AND track_id = ANY($2::bigint[])', [userId, numericIds]);
     }
 
     sendResponse(reply, createResponse(), params.f);
