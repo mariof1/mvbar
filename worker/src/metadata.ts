@@ -1,5 +1,5 @@
 import { parseFile, type IAudioMetadata } from 'music-metadata';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mimeFromFormat, pickBestPicture } from './art.js';
@@ -47,14 +47,35 @@ export type TagResult = {
   discTotal: number | null;
 };
 
+function ffprobeDurationMs(filePath: string, timeoutMs = 15000): Promise<number | null> {
+  return new Promise((resolve) => {
+    execFile(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', filePath],
+      { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
+      (err, stdout) => {
+        if (err) return resolve(null);
+        const s = String(stdout ?? '').trim();
+        const n = parseFloat(s);
+        if (!Number.isFinite(n) || n <= 0) return resolve(null);
+        resolve(Math.round(n * 1000));
+      }
+    );
+  });
+}
+
 export async function readTags(filePath: string): Promise<TagResult> {
-  const m = await parseFile(filePath, { duration: false });
+  // OPUS/OGG often requires full duration calculation; mp3/flac usually do not.
+  const ext = path.extname(filePath).toLowerCase();
+  const needDuration = ext === '.opus' || ext === '.ogg';
+  const m = await parseFile(filePath, { duration: needDuration });
 
   const title = sanitize(m.common.title);
   const artist = sanitize(m.common.artist);
   const album = sanitize(m.common.album);
   const albumartist = sanitize(m.common.albumartist);
-  const durationMs = m.format.duration ? Math.round(m.format.duration * 1000) : null;
+  let durationMs = m.format.duration ? Math.round(m.format.duration * 1000) : null;
+  if (!durationMs && needDuration) durationMs = await ffprobeDurationMs(filePath);
   const year = m.common.year ?? null;
   
   // Track and disc numbers
