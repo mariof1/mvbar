@@ -380,8 +380,8 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     const limit = Math.min(100, Math.max(1, Number((req.query as any).limit) || 50));
     
     // "Continue Listening" - only episodes listened for at least 30 seconds but not finished
-    const r = await db().query<EpisodeWithProgress & { podcast_title: string; podcast_image_url: string | null }>(
-      `SELECT e.*, p.title as podcast_title, p.image_url as podcast_image_url,
+    const r = await db().query<EpisodeWithProgress & { podcast_title: string; podcast_image_url: string | null; podcast_image_path: string | null }>(
+      `SELECT e.*, p.title as podcast_title, p.image_url as podcast_image_url, p.image_path as podcast_image_path,
               COALESCE(uep.position_ms, 0) as position_ms,
               COALESCE(uep.played, false) as played,
               (e.downloaded_path IS NOT NULL) as downloaded
@@ -687,6 +687,43 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     return abs;
   }
 
+  // Canonical endpoint for cached podcast art (stable URL so browser caches once per hash)
+  app.get('/api/podcast-art/*', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+
+    const rel = (req.params as { '*': string })['*'];
+    if (!rel) return reply.code(400).send({ ok: false });
+
+    try {
+      const abs = safeJoinPodcastArt(rel);
+      const st = await stat(abs);
+
+      const ext = path.extname(rel).toLowerCase();
+      const mimeTypes: Record<string, string> = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.webp': 'image/webp',
+      };
+      const mime = mimeTypes[ext] || 'image/jpeg';
+
+      const hash = path.basename(rel, ext);
+      const etag = `"${hash}"`;
+      const inm = req.headers['if-none-match'];
+      if (inm === etag) return reply.code(304).send();
+
+      reply
+        .header('Content-Type', mime)
+        .header('Content-Length', String(st.size))
+        .header('Cache-Control', 'public, max-age=31536000, immutable')
+        .header('ETag', etag);
+
+      return reply.send(createReadStream(abs));
+    } catch {
+      return reply.code(404).send({ ok: false });
+    }
+  });
+
   // Serve cached podcast artwork
   app.get('/api/podcasts/:podcastId/art', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
@@ -701,38 +738,15 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       const row = r.rows[0];
       if (!row) return reply.code(404).send({ ok: false });
       
-      // If we have cached image, serve it
+      // If we have cached image, redirect to canonical URL so browser caches once per hash
       if (row.image_path) {
         try {
-          const abs = safeJoinPodcastArt(row.image_path);
-          const st = await stat(abs);
-          
-          const ext = path.extname(row.image_path).toLowerCase();
-          const mimeTypes: Record<string, string> = {
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.png': 'image/png',
-            '.webp': 'image/webp',
-          };
-          const mime = mimeTypes[ext] || 'image/jpeg';
-        
-        // Use hash from path as ETag
-        const hash = path.basename(row.image_path, ext);
-        const etag = `"${hash}"`;
-        const inm = req.headers['if-none-match'];
-        if (inm === etag) return reply.code(304).send();
-        
-        reply
-          .header('Content-Type', mime)
-          .header('Content-Length', String(st.size))
-          .header('Cache-Control', 'public, max-age=31536000, immutable')
-          .header('ETag', etag);
-        
-        return reply.send(createReadStream(abs));
-      } catch {
-        // Fall through to redirect
+          safeJoinPodcastArt(row.image_path); // validate path
+          return reply.redirect(302, `/api/podcast-art/${row.image_path}`);
+        } catch {
+          // Fall through to redirect
+        }
       }
-    }
     
     // Fallback: redirect to original URL if available
     if (row.image_url) {
@@ -769,30 +783,8 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     
     if (imagePath) {
       try {
-        const abs = safeJoinPodcastArt(imagePath);
-        const st = await stat(abs);
-        
-        const ext = path.extname(imagePath).toLowerCase();
-        const mimeTypes: Record<string, string> = {
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.png': 'image/png',
-          '.webp': 'image/webp',
-        };
-        const mime = mimeTypes[ext] || 'image/jpeg';
-        
-        const hash = path.basename(imagePath, ext);
-        const etag = `"${hash}"`;
-        const inm = req.headers['if-none-match'];
-        if (inm === etag) return reply.code(304).send();
-        
-        reply
-          .header('Content-Type', mime)
-          .header('Content-Length', String(st.size))
-          .header('Cache-Control', 'public, max-age=31536000, immutable')
-          .header('ETag', etag);
-        
-        return reply.send(createReadStream(abs));
+        safeJoinPodcastArt(imagePath); // validate path
+        return reply.redirect(302, `/api/podcast-art/${imagePath}`);
       } catch {
         // Fall through to redirect
       }

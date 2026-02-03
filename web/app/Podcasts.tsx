@@ -19,6 +19,7 @@ interface Podcast {
   author: string | null;
   description: string | null;
   image_url: string | null;
+  image_path?: string | null;
   unplayed_count: number;
 }
 
@@ -30,12 +31,14 @@ interface Episode {
   audio_url: string;
   duration_ms: number | null;
   image_url: string | null;
+  image_path?: string | null;
   published_at: string | null;
   position_ms: number;
   played: boolean;
   downloaded: boolean;
   podcast_title?: string;
   podcast_image_url?: string | null;
+  podcast_image_path?: string | null;
 }
 
 // ============================================================================
@@ -326,8 +329,11 @@ function EpisodeRow({
   const [expanded, setExpanded] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const progress = episode.duration_ms ? Math.round((episode.position_ms / episode.duration_ms) * 100) : 0;
-  // Use cached art endpoint for episode images
-  const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
+  const imageUrl = episode.image_path
+    ? `/api/podcast-art/${episode.image_path}`
+    : episode.podcast_image_path
+      ? `/api/podcast-art/${episode.podcast_image_path}`
+      : `/api/podcasts/episodes/${episode.id}/art`;
   const cleanDescription = stripHtml(episode.description);
 
   const handleDownload = async () => {
@@ -348,7 +354,7 @@ function EpisodeRow({
           className="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden bg-slate-700 group/play"
         >
           {imageUrl ? (
-            <img src={imageUrl} alt="" className="w-full h-full object-cover" />
+            <img src={imageUrl} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-2xl">🎙️</div>
           )}
@@ -571,21 +577,17 @@ export function PodcastPlayer({
   useEffect(() => {
     if (!episode || !('mediaSession' in navigator)) return;
     
-    // Use cached art endpoint for media session
-    const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
+    const imageUrl = episode.image_path
+      ? `/api/podcast-art/${episode.image_path}`
+      : episode.podcast_image_path
+        ? `/api/podcast-art/${episode.podcast_image_path}`
+        : `/api/podcasts/episodes/${episode.id}/art`;
     
     navigator.mediaSession.metadata = new MediaMetadata({
       title: episode.title,
       artist: episode.podcast_title || 'Podcast',
       album: episode.podcast_title || 'Podcast',
-      artwork: [
-        { src: imageUrl, sizes: '96x96', type: 'image/jpeg' },
-        { src: imageUrl, sizes: '128x128', type: 'image/jpeg' },
-        { src: imageUrl, sizes: '192x192', type: 'image/jpeg' },
-        { src: imageUrl, sizes: '256x256', type: 'image/jpeg' },
-        { src: imageUrl, sizes: '384x384', type: 'image/jpeg' },
-        { src: imageUrl, sizes: '512x512', type: 'image/jpeg' },
-      ],
+      artwork: [{ src: imageUrl, sizes: '512x512', type: 'image/jpeg' }],
     });
     
     navigator.mediaSession.setActionHandler('play', () => {
@@ -674,8 +676,11 @@ export function PodcastPlayer({
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  // Use cached art endpoint for player
-  const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
+  const imageUrl = episode.image_path
+    ? `/api/podcast-art/${episode.image_path}`
+    : episode.podcast_image_path
+      ? `/api/podcast-art/${episode.podcast_image_path}`
+      : `/api/podcasts/episodes/${episode.id}/art`;
 
   return (
     <>
@@ -704,6 +709,8 @@ export function PodcastPlayer({
                   src={imageUrl}
                   alt=""
                   className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl object-cover shadow-2xl"
+                  loading="lazy"
+                  decoding="async"
                 />
               ) : (
                 <div className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl bg-white/10 flex items-center justify-center">
@@ -834,6 +841,8 @@ export function PodcastPlayer({
                 src={imageUrl}
                 alt=""
                 className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg object-cover flex-shrink-0"
+                loading="lazy"
+                decoding="async"
               />
             ) : (
               <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-white/10 flex items-center justify-center flex-shrink-0">
@@ -1171,9 +1180,11 @@ export function Podcasts() {
 
             <div className="flex items-start gap-4 mb-6">
               <img
-                src={`/api/podcasts/${selectedPodcast.id}/art`}
+                src={selectedPodcast.image_path ? `/api/podcast-art/${selectedPodcast.image_path}` : `/api/podcasts/${selectedPodcast.id}/art`}
                 alt={selectedPodcast.title}
                 className="w-24 h-24 sm:w-32 sm:h-32 rounded-xl object-cover bg-slate-700"
+                loading="lazy"
+                decoding="async"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
               />
               <div className="flex-1">
@@ -1195,7 +1206,7 @@ export function Podcasts() {
                 <EpisodeRow
                   key={ep.id}
                   episode={ep}
-                  onPlay={() => setPodcastEpisode({ ...ep, podcast_title: selectedPodcast.title, podcast_image_url: selectedPodcast.image_url })}
+                  onPlay={() => setPodcastEpisode({ ...ep, podcast_title: selectedPodcast.title, podcast_image_url: selectedPodcast.image_url, podcast_image_path: (selectedPodcast as any).image_path })}
                   onMarkPlayed={(played) => handleMarkPlayed(ep.id, played)}
                   onDownload={() => handleDownload(ep.id)}
                   onDeleteDownload={() => handleDeleteDownload(ep.id)}
@@ -1244,9 +1255,11 @@ export function Podcasts() {
                   >
                     <div className="relative aspect-square rounded-xl overflow-hidden bg-slate-700 mb-2">
                       <img 
-                        src={`/api/podcasts/${p.id}/art`} 
+                        src={p.image_path ? `/api/podcast-art/${p.image_path}` : `/api/podcasts/${p.id}/art`} 
                         alt={p.title} 
                         className="w-full h-full object-cover"
+                        loading="lazy"
+                        decoding="async"
                         onError={(e) => { 
                           (e.target as HTMLImageElement).style.display = 'none'; 
                           (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
