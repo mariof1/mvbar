@@ -3,7 +3,7 @@
 FROM node:22-alpine AS api_builder
 WORKDIR /src/api
 COPY api/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY api/ .
 RUN npm run build && npm prune --omit=dev
 
@@ -11,7 +11,7 @@ FROM node:22-alpine AS worker_builder
 WORKDIR /src/worker
 RUN apk add --no-cache ffmpeg
 COPY worker/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY worker/ .
 RUN npm run build && npm prune --omit=dev
 
@@ -21,7 +21,7 @@ WORKDIR /src/web
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NEXT_DISABLE_SWC_BINARY=1
 COPY web/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY web/ .
 RUN npm run build
 
