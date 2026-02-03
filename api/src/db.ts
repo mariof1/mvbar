@@ -466,6 +466,7 @@ export async function initDb() {
       duration_ms integer,
       file_size_bytes bigint,
       image_url text,
+      image_path text,
       link text,
       published_at timestamptz,
       downloaded_path text,
@@ -475,6 +476,8 @@ export async function initDb() {
     );
   `);
   await pool.query('create index if not exists podcast_episodes_podcast_idx on podcast_episodes(podcast_id, published_at desc)');
+  // Migration: add image_path if missing
+  await pool.query('ALTER TABLE podcast_episodes ADD COLUMN IF NOT EXISTS image_path text');
 
   // User podcast subscriptions
   await pool.query(`
