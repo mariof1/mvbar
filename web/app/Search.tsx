@@ -70,10 +70,11 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
       setError(null);
       try {
         const r = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=20`, { method: 'GET' }, token!);
-        setHits(r.hits ?? []);
+        // Normalize IDs to numbers so favorites lookups work reliably.
+        setHits((r.hits ?? []).map((h: any) => ({ ...h, id: Number(h.id) })));
         setArtistHits(r.artists ?? []);
-        setAlbumHits(r.albums ?? []);
-        setPlaylistHits(r.playlists ?? []);
+        setAlbumHits((r.albums ?? []).map((a: any) => ({ ...a, artist_id: a.artist_id == null ? null : Number(a.artist_id), art_track_id: a.art_track_id == null ? null : Number(a.art_track_id) })));
+        setPlaylistHits((r.playlists ?? []).map((p: any) => ({ ...p, id: Number(p.id) })));
       } catch (e: any) {
         if (e?.status === 401) clear();
         setError(e?.message ?? 'error');
@@ -320,15 +321,15 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
                   <button
                     onClick={async () => {
                       try {
-                        await toggleFav(token!, t.id);
+                        await toggleFav(token!, Number(t.id));
                       } catch (e: any) {
                         if (e?.status === 401) clear();
                       }
                     }}
-                    className={`p-2 hover:bg-slate-700/50 rounded-lg transition-colors ${favIds.has(t.id) ? 'text-pink-500' : 'text-slate-300'}`}
-                    title={favIds.has(t.id) ? 'Remove from favorites' : 'Add to favorites'}
+                    className={`p-2 hover:bg-slate-700/50 rounded-lg transition-colors ${favIds.has(Number(t.id)) ? 'text-pink-500' : 'text-slate-300'}`}
+                    title={favIds.has(Number(t.id)) ? 'Remove from favorites' : 'Add to favorites'}
                   >
-                    <svg className="w-5 h-5" fill={favIds.has(t.id) ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5" fill={favIds.has(Number(t.id)) ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
                       <path
                         strokeLinecap="round"
                         strokeLinejoin="round"
