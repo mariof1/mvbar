@@ -83,6 +83,7 @@ const COUNTRY_CODES: Record<string, string> = {
   'Switzerland': 'ch',
   'Ireland': 'ie',
   'Portugal': 'pt',
+  'Lithuania': 'lt',
   'Russia': 'ru',
   'Ukraine': 'ua',
   'Jamaica': 'jm',
