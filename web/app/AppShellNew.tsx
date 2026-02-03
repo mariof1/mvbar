@@ -344,6 +344,7 @@ function PlayerBar(props: {
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
   const volumeRef = useRef<HTMLDivElement>(null);
   const queueRef = useRef<HTMLDivElement>(null);
+  const activeQueueItemRef = useRef<HTMLDivElement>(null);
   const playedSentRef = useRef(false);
   const hlsRef = useRef<Hls | null>(null);
   const [preferHls, setPreferHls] = useState(true);
@@ -364,6 +365,18 @@ function PlayerBar(props: {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showQueue]);
+
+  // When opening the queue, scroll to the currently playing track.
+  useEffect(() => {
+    if (!showQueue) return;
+    const el = activeQueueItemRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      try {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch {}
+    });
+  }, [showQueue, props.queueIndex]);
 
   // Auto-hide volume on scroll or click outside
   useEffect(() => {
@@ -931,6 +944,7 @@ function PlayerBar(props: {
                       {props.queue.map((track, idx) => (
                         <div
                           key={`${track.id}-${idx}`}
+                          ref={idx === props.queueIndex ? activeQueueItemRef : null}
                           draggable
                           onDragStart={() => setDraggedIdx(idx)}
                           onDragOver={(e) => e.preventDefault()}
