@@ -1014,7 +1014,7 @@ export function BrowseNew(props: {
       {/* Tabs + Filter */}
       <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-4">
         {/* Scrollable tabs container for mobile */}
-        <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+        <div className="overflow-x-auto no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
           <div className="flex gap-1 p-1 bg-slate-800/50 rounded-xl w-max sm:w-auto">
             {(['artists', 'albums', 'genres', 'countries', 'languages'] as Tab[]).map((t) => (
               <button
@@ -1065,7 +1065,7 @@ export function BrowseNew(props: {
       </div>
 
       {/* Content */}
-      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto no-scrollbar" style={{ maxHeight: 'calc(100vh - 280px)' }}>
         {/* Artists Grid */}
         {tab === 'artists' && (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
