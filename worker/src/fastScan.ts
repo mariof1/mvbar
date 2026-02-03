@@ -486,6 +486,7 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
 
   // Tracks which currently have invalid artist rows (e.g. "????") should be refreshed even if the file is unchanged.
   const badArtistPaths = new Set<string>();
+  const missingDurationPaths = new Set<string>();
   if (!forceFullScan) {
     const bad = await db().query<{ path: string }>(
       `select distinct t.path
@@ -498,6 +499,19 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
     for (const r of bad.rows) badArtistPaths.add(r.path);
     if (badArtistPaths.size > 0) {
       logger.info('scan', `Will refresh ${badArtistPaths.size} tracks with invalid artist tags`);
+    }
+
+    // OPUS durations may be missing when duration calc was disabled previously; refresh those too.
+    const missDur = await db().query<{ path: string }>(
+      `select t.path
+       from tracks t
+       where t.library_id = $1 and t.deleted_at is null and t.duration_ms is null
+         and lower(t.ext) in ('.opus','opus','.ogg','ogg')`,
+      [libraryId]
+    );
+    for (const r of missDur.rows) missingDurationPaths.add(r.path);
+    if (missingDurationPaths.size > 0) {
+      logger.info('scan', `Will refresh ${missingDurationPaths.size} tracks missing duration (opus/ogg)`);
     }
   }
 
@@ -536,7 +550,7 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
       }
       filesToProcess.push(file);
     } else if (existing && existing.mtimeMs === file.mtimeMs && existing.sizeBytes === file.sizeBytes) {
-      if (badArtistPaths.has(file.relPath)) {
+      if (badArtistPaths.has(file.relPath) || missingDurationPaths.has(file.relPath)) {
         filesToProcess.push(file);
       } else {
         skippedFiles++;
