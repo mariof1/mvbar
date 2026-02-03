@@ -1172,7 +1172,7 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
     
     const userId = (req as any).subsonicUser?.userId;
     
-    const pr = await db().query('SELECT * FROM playlists WHERE id = $1 AND user_id = $2', [playlistId, userId]);
+    const pr = await db().query('SELECT id, name, user_id, created_at FROM playlists WHERE id = $1 AND user_id = $2', [playlistId, userId]);
     if (pr.rows.length === 0) return sendResponse(reply, createError(ERROR.NOT_FOUND.code, 'Playlist not found'), params.f);
     
     const songs = await db().query(`

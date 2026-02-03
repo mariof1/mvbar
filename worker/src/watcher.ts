@@ -363,4 +363,24 @@ export class LibraryWatcher {
           updateScanProgress();
       }
   }
+
+  /** Graceful cleanup: close watcher, clear timers, disconnect Redis */
+  async stop() {
+    if (this.watcher) {
+      await this.watcher.close();
+      this.watcher = null;
+    }
+    if (this.indexTimer) {
+      clearTimeout(this.indexTimer);
+      this.indexTimer = null;
+    }
+    // Clear pending deletes
+    for (const timeout of pendingDeletes.values()) {
+      clearTimeout(timeout);
+    }
+    pendingDeletes.clear();
+    // Close Redis publisher
+    await publisher.quit();
+    logger.info('scan', 'Watcher stopped');
+  }
 }

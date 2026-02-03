@@ -190,26 +190,38 @@ export async function upsertTrack(params) {
                     artistsToInsert.push({ name: sanitize(name), role: 'artist', position: i++ });
                 }
             }
-            for (const { name, role, position } of artistsToInsert) {
-                const artistRes = await client.query('insert into artists(name) values ($1) on conflict (name) do update set name=excluded.name returning id', [name]);
-                await client.query('insert into track_artists(track_id, artist_id, role, position) values ($1, $2, $3, $4) on conflict do nothing', [trackId, artistRes.rows[0].id, role, position]);
+            // Batch insert artists - first insert all artist names at once
+            if (artistsToInsert.length > 0) {
+                const uniqueNames = [...new Set(artistsToInsert.map(a => a.name))];
+                // Batch upsert all artists and get their IDs
+                const artistIdRes = await client.query(`insert into artists(name) 
+           select unnest($1::text[]) 
+           on conflict (name) do update set name=excluded.name 
+           returning id, name`, [uniqueNames]);
+                const nameToId = new Map(artistIdRes.rows.map(r => [r.name, r.id]));
+                // Batch insert all track_artists relations
+                const trackArtistValues = artistsToInsert.map(a => `(${trackId}, ${nameToId.get(a.name)}, '${a.role}', ${a.position})`).join(',');
+                await client.query(`insert into track_artists(track_id, artist_id, role, position) values ${trackArtistValues} on conflict do nothing`);
             }
-            // Insert genres
+            // Batch insert genres
             if (genre) {
-                for (const g of genre.split(/\s*;\s*/).map(x => x.trim()).filter(Boolean)) {
-                    await client.query('insert into track_genres(track_id, genre) values ($1, $2) on conflict do nothing', [trackId, g]);
+                const genres = genre.split(/\s*;\s*/).map(x => x.trim()).filter(Boolean);
+                if (genres.length > 0) {
+                    await client.query(`insert into track_genres(track_id, genre) select $1, unnest($2::text[]) on conflict do nothing`, [trackId, genres]);
                 }
             }
-            // Insert countries
+            // Batch insert countries
             if (country) {
-                for (const c of country.split(/\s*;\s*/).map(x => x.trim()).filter(Boolean)) {
-                    await client.query('insert into track_countries(track_id, country) values ($1, $2) on conflict do nothing', [trackId, c]);
+                const countries = country.split(/\s*;\s*/).map(x => x.trim()).filter(Boolean);
+                if (countries.length > 0) {
+                    await client.query(`insert into track_countries(track_id, country) select $1, unnest($2::text[]) on conflict do nothing`, [trackId, countries]);
                 }
             }
-            // Insert languages
+            // Batch insert languages
             if (language) {
-                for (const l of language.split(/\s*;\s*/).map(x => x.trim()).filter(Boolean)) {
-                    await client.query('insert into track_languages(track_id, language) values ($1, $2) on conflict do nothing', [trackId, l]);
+                const languages = language.split(/\s*;\s*/).map(x => x.trim()).filter(Boolean);
+                if (languages.length > 0) {
+                    await client.query(`insert into track_languages(track_id, language) select $1, unnest($2::text[]) on conflict do nothing`, [trackId, languages]);
                 }
             }
         }

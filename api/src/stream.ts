@@ -50,10 +50,14 @@ export const streamPlugin: FastifyPluginAsync = fp(async (app) => {
         .header('Content-Length', String(end - start + 1))
         .header('Content-Type', contentType);
 
-      return reply.send(createReadStream(abs, { start, end }));
+      const stream = createReadStream(abs, { start, end });
+      stream.on('error', () => { if (!reply.sent) reply.code(500).send(); });
+      return reply.send(stream);
     }
 
     reply.header('Content-Length', String(st.size)).header('Accept-Ranges', 'bytes').header('Content-Type', contentType);
-    return reply.send(createReadStream(abs));
+    const stream = createReadStream(abs);
+    stream.on('error', () => { if (!reply.sent) reply.code(500).send(); });
+    return reply.send(stream);
   });
 });

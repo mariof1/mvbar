@@ -274,7 +274,10 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       );
       
       // Return podcast info
-      const podcast = await db().query<Podcast>('SELECT * FROM podcasts WHERE id = $1', [podcastId]);
+      const podcast = await db().query<Podcast>(
+        'SELECT id, feed_url, title, author, description, image_url, image_path, link, language, last_fetched_at, created_at FROM podcasts WHERE id = $1',
+        [podcastId]
+      );
       
       return { ok: true, podcast: podcast.rows[0] };
     } catch (error: any) {
@@ -341,7 +344,10 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     if (subR.rows.length === 0) return reply.code(404).send({ ok: false, error: 'Not subscribed' });
     
     // Get podcast
-    const podcastR = await db().query<Podcast>('SELECT * FROM podcasts WHERE id = $1', [podcastId]);
+    const podcastR = await db().query<Podcast>(
+      'SELECT id, feed_url, title, author, description, image_url, image_path, link, language, last_fetched_at, created_at FROM podcasts WHERE id = $1',
+      [podcastId]
+    );
     if (podcastR.rows.length === 0) return reply.code(404).send({ ok: false });
     
     // Get episodes with progress
@@ -516,7 +522,10 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     if (subR.rows.length === 0) return reply.code(404).send({ ok: false });
     
     // Get podcast
-    const podcastR = await db().query<Podcast>('SELECT * FROM podcasts WHERE id = $1', [podcastId]);
+    const podcastR = await db().query<Podcast>(
+      'SELECT id, feed_url, title, author, description, image_url, image_path, link, language, last_fetched_at, created_at FROM podcasts WHERE id = $1',
+      [podcastId]
+    );
     if (podcastR.rows.length === 0) return reply.code(404).send({ ok: false });
     
     const podcast = podcastR.rows[0];
