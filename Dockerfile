@@ -3,7 +3,7 @@
 FROM node:22-alpine AS api_builder
 WORKDIR /src/api
 COPY api/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY api/ .
 RUN npm run build && npm prune --omit=dev
 
@@ -11,14 +11,17 @@ FROM node:22-alpine AS worker_builder
 WORKDIR /src/worker
 RUN apk add --no-cache ffmpeg
 COPY worker/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY worker/ .
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-alpine AS web_builder
 WORKDIR /src/web
+# Avoid QEMU SIGILL when building multi-arch images in CI (use portable SWC/WASM)
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NEXT_DISABLE_SWC_BINARY=1
 COPY web/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY web/ .
 RUN npm run build
 
@@ -68,7 +71,7 @@ COPY infra/entrypoint.sh /entrypoint.sh
 COPY infra/wait-for-http.sh /app/infra/wait-for-http.sh
 RUN chmod +x /entrypoint.sh /app/infra/wait-for-http.sh
 
-VOLUME ["/var/lib/postgresql/data", "/data/redis", "/meili_data", "/data/caddy", "/config/caddy", "/lyrics", "/art", "/hls", "/podcasts", "/avatars"]
+VOLUME ["/var/lib/postgresql/data", "/data/redis", "/meili_data", "/data/caddy", "/config/caddy", "/data/cache", "/hls", "/podcasts"]
 
 EXPOSE 80 443
 

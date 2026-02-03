@@ -4,12 +4,12 @@ import { stat } from 'node:fs/promises';
 import Redis from 'ioredis';
 import { db, audit } from './db.js';
 import { upsertTrack, getTrackByPath } from './scanRepo.js';
-import { readTags } from './metadata.js';
+import { readTagsAsync } from './metadata.js';
 import { writeArt } from './art.js';
 import { indexAllTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
-const LYRICS_DIR = process.env.LYRICS_DIR ?? '/lyrics';
-const ART_DIR = process.env.ART_DIR ?? '/art';
+const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
+const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wav']);
 // Redis publisher for live updates
@@ -62,6 +62,7 @@ const pendingDeletes = new Map();
 const DELETE_GRACE_MS = 3000;
 // Concurrency limiter to prevent DB connection exhaustion
 const MAX_CONCURRENT = parseInt(process.env.SCAN_CONCURRENCY ?? '25', 10);
+const MAX_QUEUE_SIZE = parseInt(process.env.SCAN_MAX_QUEUE ?? '1000', 10);
 let activeProcessing = 0;
 const processingQueue = [];
 function processNextInQueue() {
@@ -78,6 +79,11 @@ function processNextInQueue() {
 }
 async function runWithConcurrencyLimit(fn) {
     if (activeProcessing >= MAX_CONCURRENT) {
+        // Prevent unbounded queue growth - drop oldest tasks if queue is full
+        if (processingQueue.length >= MAX_QUEUE_SIZE) {
+            logger.warn('scan', `Queue overflow (${processingQueue.length}), dropping oldest task`);
+            processingQueue.shift(); // Drop oldest
+        }
         // Queue the task and wait for it to complete
         return new Promise((resolve) => {
             processingQueue.push(async () => {
@@ -105,26 +111,31 @@ export class LibraryWatcher {
     watcher = null;
     root;
     ready = false;
-    constructor(root) {
+    skipInitialScan;
+    constructor(root, skipInitialScan = false) {
         this.root = root;
+        this.skipInitialScan = skipInitialScan;
     }
     start() {
-        logger.info('scan', `Starting library scan: ${this.root}`);
-        scanProgress.status = 'scanning';
-        scanProgress.filesFound = 0;
-        scanProgress.filesProcessed = 0;
-        scanProgress.startedAt = Date.now();
-        updateScanProgress();
+        if (this.skipInitialScan) {
+            logger.info('scan', `Watching for changes: ${this.root} (initial scan skipped)`);
+            // Set ready immediately when skipping initial scan
+            this.ready = true;
+        }
+        else {
+            logger.info('scan', `Starting library scan: ${this.root}`);
+            scanProgress.status = 'scanning';
+            scanProgress.filesFound = 0;
+            scanProgress.filesProcessed = 0;
+            scanProgress.startedAt = Date.now();
+            updateScanProgress();
+        }
         this.watcher = chokidar.watch(this.root, {
             persistent: true,
-            ignoreInitial: false, // process existing files on startup
+            ignoreInitial: this.skipInitialScan, // skip if fast scan already done
             usePolling: true, // required for network filesystems (NFS, SMB)
             interval: 5000, // poll every 5 seconds
             binaryInterval: 5000,
-            awaitWriteFinish: {
-                stabilityThreshold: 2000,
-                pollInterval: 100
-            },
             depth: 99
         });
         this.watcher
@@ -163,8 +174,11 @@ export class LibraryWatcher {
             return;
         const rel = path.relative(this.root, filePath);
         logger.info('scan', `File changed: ${rel}`);
-        // Use concurrency limiter to prevent DB connection exhaustion
-        runWithConcurrencyLimit(() => this.processFile(filePath, rel));
+        // Queue the file for processing with a delay to allow NFS sync
+        // Use setTimeout to break out of chokidar's event context
+        setTimeout(() => {
+            runWithConcurrencyLimit(() => this.processFile(filePath, rel));
+        }, 500);
     }
     async onUnlink(filePath) {
         if (!this.isAudio(filePath))
@@ -187,7 +201,6 @@ export class LibraryWatcher {
         try {
             const st = await stat(filePath);
             // Check if file is already up to date in DB
-            // Note: We use a dummy jobId '0' for watcher updates or could add a 'watcher' column
             const existing = await getTrackByPath(this.root, relPath);
             // Note: PostgreSQL bigint comes back as string, so use == for comparison or convert
             const fileMtimeMs = Math.round(st.mtimeMs);
@@ -203,13 +216,13 @@ export class LibraryWatcher {
                 // No work needed
                 return;
             }
-            // Read Tags
+            // Read Tags using worker thread (isolates file I/O from main event loop)
             let tags;
             try {
-                tags = await readTags(filePath);
+                tags = await readTagsAsync(filePath, 30000);
             }
             catch (e) {
-                logger.warn('scan', `Failed to read tags: ${relPath}`);
+                logger.warn('scan', `Failed to read tags: ${relPath}`, { error: e instanceof Error ? e.message : String(e) });
                 return;
             }
             // Handle Art
@@ -275,7 +288,7 @@ export class LibraryWatcher {
             }
         }
         catch (e) {
-            logger.error('scan', `Error processing: ${relPath}`);
+            logger.error('scan', `Error processing: ${relPath}`, { error: e instanceof Error ? e.message : String(e) });
         }
     }
     async removeTrack(relPath) {
@@ -320,5 +333,24 @@ export class LibraryWatcher {
             scanProgress.status = 'idle';
             updateScanProgress();
         }
+    }
+    /** Graceful cleanup: close watcher, clear timers, disconnect Redis */
+    async stop() {
+        if (this.watcher) {
+            await this.watcher.close();
+            this.watcher = null;
+        }
+        if (this.indexTimer) {
+            clearTimeout(this.indexTimer);
+            this.indexTimer = null;
+        }
+        // Clear pending deletes
+        for (const timeout of pendingDeletes.values()) {
+            clearTimeout(timeout);
+        }
+        pendingDeletes.clear();
+        // Close Redis publisher
+        await publisher.quit();
+        logger.info('scan', 'Watcher stopped');
     }
 }

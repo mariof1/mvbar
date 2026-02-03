@@ -83,6 +83,7 @@ const COUNTRY_CODES: Record<string, string> = {
   'Switzerland': 'ch',
   'Ireland': 'ie',
   'Portugal': 'pt',
+  'Lithuania': 'lt',
   'Russia': 'ru',
   'Ukraine': 'ua',
   'Jamaica': 'jm',
@@ -566,23 +567,23 @@ export function BrowseNew(props: {
           Back
         </button>
 
-        <div className="flex items-end gap-6">
+        <div className="flex items-end gap-4 sm:gap-6">
           {albumDetail.art_path ? (
             <img
               src={`/api/art/${albumDetail.art_path}`}
               alt={albumDetail.name}
-              className="w-48 h-48 rounded-xl shadow-2xl object-cover"
+              className="w-24 h-24 sm:w-48 sm:h-48 rounded-xl shadow-2xl object-cover"
             />
           ) : (
-            <div className="w-48 h-48 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
-              <svg className="w-16 h-16 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="w-24 h-24 sm:w-48 sm:h-48 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
+              <svg className="w-8 h-8 sm:w-16 sm:h-16 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
               </svg>
             </div>
           )}
-          <div>
-            <h1 className="text-3xl font-bold text-white">{albumDetail.name}</h1>
-            <p className="text-xl text-slate-400 mt-1">{albumDetail.artist}</p>
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-3xl font-bold text-white truncate leading-tight">{albumDetail.name}</h1>
+            <p className="text-sm sm:text-xl text-slate-400 mt-1 truncate">{albumDetail.artist}</p>
             <p className="text-sm text-slate-500 mt-2">
               {albumDetail.tracks.length} tracks
               {albumDetail.totalDiscs > 1 && ` · ${albumDetail.totalDiscs} discs`}
@@ -823,9 +824,24 @@ export function BrowseNew(props: {
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
-                  {track.artists.length > 0
-                    ? track.artists.map((a) => a.name).join(' • ')
-                    : track.artist}
+                  {track.artists.length > 0 ? (
+                    track.artists.map((a, i) => (
+                      <span key={a.id}>
+                        {i > 0 && <span className="text-slate-600"> • </span>}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectArtist({ id: a.id, name: a.name });
+                          }}
+                          className="hover:text-cyan-400 hover:underline"
+                        >
+                          {a.name}
+                        </button>
+                      </span>
+                    ))
+                  ) : (
+                    track.artist
+                  )}
                 </div>
               </div>
               <div className="text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>
@@ -885,9 +901,24 @@ export function BrowseNew(props: {
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
-                  {track.artists.length > 0
-                    ? track.artists.map((a) => a.name).join(' • ')
-                    : track.artist}
+                  {track.artists.length > 0 ? (
+                    track.artists.map((a, i) => (
+                      <span key={a.id}>
+                        {i > 0 && <span className="text-slate-600"> • </span>}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectArtist({ id: a.id, name: a.name });
+                          }}
+                          className="hover:text-cyan-400 hover:underline"
+                        >
+                          {a.name}
+                        </button>
+                      </span>
+                    ))
+                  ) : (
+                    track.artist
+                  )}
                 </div>
               </div>
               <div className="text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>
@@ -949,9 +980,24 @@ export function BrowseNew(props: {
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
-                  {track.artists.length > 0
-                    ? track.artists.map((a) => a.name).join(' • ')
-                    : track.artist}
+                  {track.artists.length > 0 ? (
+                    track.artists.map((a, i) => (
+                      <span key={a.id}>
+                        {i > 0 && <span className="text-slate-600"> • </span>}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectArtist({ id: a.id, name: a.name });
+                          }}
+                          className="hover:text-cyan-400 hover:underline"
+                        >
+                          {a.name}
+                        </button>
+                      </span>
+                    ))
+                  ) : (
+                    track.artist
+                  )}
                 </div>
               </div>
               <div className="text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>
@@ -968,7 +1014,7 @@ export function BrowseNew(props: {
       {/* Tabs + Filter */}
       <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-4">
         {/* Scrollable tabs container for mobile */}
-        <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+        <div className="overflow-x-auto no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
           <div className="flex gap-1 p-1 bg-slate-800/50 rounded-xl w-max sm:w-auto">
             {(['artists', 'albums', 'genres', 'countries', 'languages'] as Tab[]).map((t) => (
               <button
@@ -1019,7 +1065,7 @@ export function BrowseNew(props: {
       </div>
 
       {/* Content */}
-      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto no-scrollbar" style={{ maxHeight: 'calc(100vh - 280px)' }}>
         {/* Artists Grid */}
         {tab === 'artists' && (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">

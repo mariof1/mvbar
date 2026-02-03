@@ -240,12 +240,34 @@ export async function initDb() {
       track_id bigint not null references tracks(id) on delete cascade,
       artist_id bigint not null references artists(id) on delete cascade,
       role text not null check (role in ('artist','albumartist')),
+      position integer not null,
       primary key (track_id, artist_id, role)
     );
   `);
 
+  // Add ordering column for existing DBs
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE track_artists ADD COLUMN IF NOT EXISTS position integer;
+    EXCEPTION WHEN others THEN NULL;
+    END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      UPDATE track_artists SET position = 0 WHERE position IS NULL;
+    EXCEPTION WHEN others THEN NULL;
+    END $$;
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE track_artists ALTER COLUMN position SET NOT NULL;
+    EXCEPTION WHEN others THEN NULL;
+    END $$;
+  `);
+
   await pool.query('create index if not exists track_artists_artist_role_idx on track_artists(artist_id, role)');
   await pool.query('create index if not exists track_artists_track_role_idx on track_artists(track_id, role)');
+  await pool.query('create index if not exists track_artists_track_role_pos_idx on track_artists(track_id, role, position)');
 
   // Track genres table for smart playlists
   await pool.query(`
@@ -394,6 +416,21 @@ export async function initDb() {
   await pool.query('alter table scan_jobs add column if not exists force_full boolean not null default false');
 
   // ========================================================================
+  // PERFORMANCE INDEXES (added for query optimization)
+  // ========================================================================
+  // Index for user email lookups (subsonic auth, etc.)
+  await pool.query('create index if not exists idx_users_email on users(email)');
+  // Index for artist_id lookups in track_artists (used in artist filtering)
+  await pool.query('create index if not exists idx_track_artists_artist_id on track_artists(artist_id)');
+  // Index for tracks by album and art_path (album art queries)
+  await pool.query('create index if not exists idx_tracks_album_art on tracks(album, art_path) where art_path is not null');
+  // Index for tracks artist/title search (subsonic search, case-insensitive)
+  await pool.query('create index if not exists idx_tracks_artist_lower on tracks(lower(artist))');
+  await pool.query('create index if not exists idx_tracks_title_lower on tracks(lower(title))');
+  // Index for favorite_tracks lookups by track_id (batch operations)
+  await pool.query('create index if not exists idx_favorite_tracks_track_id on favorite_tracks(track_id)');
+
+  // ========================================================================
   // PODCASTS
   // ========================================================================
 
@@ -429,6 +466,7 @@ export async function initDb() {
       duration_ms integer,
       file_size_bytes bigint,
       image_url text,
+      image_path text,
       link text,
       published_at timestamptz,
       downloaded_path text,
@@ -438,6 +476,8 @@ export async function initDb() {
     );
   `);
   await pool.query('create index if not exists podcast_episodes_podcast_idx on podcast_episodes(podcast_id, published_at desc)');
+  // Migration: add image_path if missing
+  await pool.query('ALTER TABLE podcast_episodes ADD COLUMN IF NOT EXISTS image_path text');
 
   // User podcast subscriptions
   await pool.query(`

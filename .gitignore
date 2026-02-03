@@ -18,5 +18,14 @@ infra/caddy/Caddyfile.lan
 # Local test env (do not commit)
 .env.test
 
+# Build artifacts (do not commit)
+/worker/dist
+/api/dist
+
+# Local scripts (do not commit)
+/web/*airsonic*test*.js
+/web/run-airsonic-test.js
+/.github/copilot-instructions.md
+
 # Editor swap files
 *.swp

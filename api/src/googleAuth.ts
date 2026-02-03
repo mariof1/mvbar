@@ -3,6 +3,7 @@ import fp from 'fastify-plugin';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
 import fs from 'fs';
+import { mkdir, stat, readdir, unlink, writeFile } from 'fs/promises';
 import path from 'path';
 import https from 'https';
 import { db } from './db.js';
@@ -12,7 +13,7 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 const GOOGLE_CALLBACK_URL = process.env.GOOGLE_CALLBACK_URL || '';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
-const AVATARS_DIR = process.env.AVATARS_DIR || '/avatars';
+const AVATARS_DIR = process.env.AVATARS_DIR || '/data/cache/avatars';
 
 // Check if Google OAuth is configured
 export function isGoogleOAuthEnabled(): boolean {
@@ -36,8 +37,10 @@ function getOAuthClient(): OAuth2Client {
 async function downloadAvatar(url: string, userId: string): Promise<string | null> {
   try {
     // Ensure avatars directory exists
-    if (!fs.existsSync(AVATARS_DIR)) {
-      fs.mkdirSync(AVATARS_DIR, { recursive: true });
+    try {
+      await stat(AVATARS_DIR);
+    } catch {
+      await mkdir(AVATARS_DIR, { recursive: true });
     }
 
     const filename = `${userId}.jpg`;
@@ -273,7 +276,9 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
       const { filename } = request.params;
       const filepath = path.join(AVATARS_DIR, filename);
 
-      if (!fs.existsSync(filepath)) {
+      try {
+        await stat(filepath);
+      } catch {
         return reply.status(404).send({ error: 'Avatar not found' });
       }
 
@@ -414,8 +419,10 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
       }
 
       // Ensure avatars directory exists
-      if (!fs.existsSync(AVATARS_DIR)) {
-        fs.mkdirSync(AVATARS_DIR, { recursive: true });
+      try {
+        await stat(AVATARS_DIR);
+      } catch {
+        await mkdir(AVATARS_DIR, { recursive: true });
       }
 
       // Save file
@@ -424,14 +431,16 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
       const filepath = path.join(AVATARS_DIR, filename);
 
       // Delete old avatar if exists with different extension
-      const existingFiles = fs.readdirSync(AVATARS_DIR).filter(f => f.startsWith(user.userId + '.'));
-      for (const f of existingFiles) {
-        fs.unlinkSync(path.join(AVATARS_DIR, f));
-      }
+      try {
+        const existingFiles = (await readdir(AVATARS_DIR)).filter(f => f.startsWith(user.userId + '.'));
+        for (const f of existingFiles) {
+          await unlink(path.join(AVATARS_DIR, f));
+        }
+      } catch { /* ignore if dir doesn't exist */ }
 
       // Write new file
       const buffer = await data.toBuffer();
-      fs.writeFileSync(filepath, buffer);
+      await writeFile(filepath, buffer);
 
       // Update database
       const pool = db();
@@ -462,9 +471,10 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
 
     if (result.rows[0]?.avatar_path) {
       const filepath = path.join(AVATARS_DIR, result.rows[0].avatar_path);
-      if (fs.existsSync(filepath)) {
-        fs.unlinkSync(filepath);
-      }
+      try {
+        await stat(filepath);
+        await unlink(filepath);
+      } catch { /* file doesn't exist */ }
     }
 
     await pool.query(

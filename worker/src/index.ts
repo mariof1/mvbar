@@ -7,6 +7,7 @@ import { runScan } from './scanner.js';
 import * as transcodeJobs from './transcodeRepo.js';
 import { transcodeTrackToHls } from './transcoder.js';
 import { runFastScan } from './fastScan.js';
+import { startPodcastRefresh } from './podcastRefresh.js';
 import logger from './logger.js';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
@@ -66,6 +67,9 @@ async function periodicRescan(force: boolean = false) {
 logger.info('worker', `Scheduling periodic library scan every ${rescanIntervalMs / 1000}s`);
 setInterval(periodicRescan, rescanIntervalMs);
 
+// Start automatic podcast refresh (every hour by default)
+startPodcastRefresh();
+
 // Listen for rescan commands from API
 const subscriber = new Redis(REDIS_URL);
 subscriber.subscribe('library:commands', (err) => {
@@ -84,6 +88,18 @@ subscriber.on('message', async (channel, message) => {
     logger.warn('worker', `Invalid command message: ${message}`);
   }
 });
+
+// Graceful shutdown handler
+async function gracefulShutdown(signal: string) {
+  logger.info('worker', `Received ${signal}, shutting down...`);
+  await subscriber.unsubscribe();
+  await subscriber.quit();
+  logger.info('worker', 'Worker stopped');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Main loop for Transcoding only (Scanning is now handled by periodic rescan)
 while (true) {

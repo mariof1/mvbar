@@ -23,6 +23,17 @@
   background: #444;
 }
 
+/* Hide scrollbars (keep scroll) */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge legacy */
+}
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none; /* Chrome/Safari */
+}
+
 html, body {
   overflow-x: hidden;
   max-width: 100vw;
