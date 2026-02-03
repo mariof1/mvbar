@@ -316,13 +316,13 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     
     const r = await db().query<Podcast & { unplayed_count: number }>(
-      `SELECT p.*, 
-              (SELECT COUNT(*) FROM podcast_episodes e 
-               LEFT JOIN user_episode_progress uep ON uep.episode_id = e.id AND uep.user_id = $1
-               WHERE e.podcast_id = p.id AND (uep.played IS NULL OR uep.played = false))::int as unplayed_count
+      `SELECT p.id, p.feed_url, p.title, p.author, p.description, p.image_url, p.image_path, p.link, p.language, p.last_fetched_at, p.created_at,
+              COUNT(*) FILTER (WHERE uep.played IS NULL OR uep.played = false)::int as unplayed_count
        FROM podcasts p
-       JOIN user_podcast_subscriptions ups ON ups.podcast_id = p.id
-       WHERE ups.user_id = $1
+       JOIN user_podcast_subscriptions ups ON ups.podcast_id = p.id AND ups.user_id = $1
+       LEFT JOIN podcast_episodes e ON e.podcast_id = p.id
+       LEFT JOIN user_episode_progress uep ON uep.episode_id = e.id AND uep.user_id = $1
+       GROUP BY p.id
        ORDER BY p.title`,
       [req.user.userId]
     );
