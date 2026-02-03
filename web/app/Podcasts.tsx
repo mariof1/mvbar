@@ -502,9 +502,10 @@ export function PodcastPlayer({
       audioEl.currentTime = episode.position_ms / 1000;
     }
 
-    audioEl.addEventListener('timeupdate', () => setCurrentTime(audioEl.currentTime));
-    audioEl.addEventListener('loadedmetadata', () => setDuration(audioEl.duration));
-    audioEl.addEventListener('ended', () => {
+    // Event handlers - store references for cleanup
+    const onTimeUpdate = () => setCurrentTime(audioEl.currentTime);
+    const onLoadedMetadata = () => setDuration(audioEl.duration);
+    const onEnded = () => {
       setPlaying(false);
       onProgressUpdate?.(episode.id, Math.floor(audioEl.currentTime * 1000), true);
       sendWebSocketMessage('podcast:progress', {
@@ -512,11 +513,15 @@ export function PodcastPlayer({
         position_ms: Math.floor(audioEl.currentTime * 1000),
         played: true,
       });
-    });
-    
-    // Track play/pause state for Media Session
-    audioEl.addEventListener('play', () => setPlaying(true));
-    audioEl.addEventListener('pause', () => setPlaying(false));
+    };
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
+
+    audioEl.addEventListener('timeupdate', onTimeUpdate);
+    audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
+    audioEl.addEventListener('ended', onEnded);
+    audioEl.addEventListener('play', onPlay);
+    audioEl.addEventListener('pause', onPause);
 
     setAudio(audioEl);
     audioEl.play().then(() => setPlaying(true)).catch(() => {});
@@ -546,6 +551,12 @@ export function PodcastPlayer({
 
     return () => {
       clearInterval(interval);
+      // Remove all event listeners to prevent memory leaks
+      audioEl.removeEventListener('timeupdate', onTimeUpdate);
+      audioEl.removeEventListener('loadedmetadata', onLoadedMetadata);
+      audioEl.removeEventListener('ended', onEnded);
+      audioEl.removeEventListener('play', onPlay);
+      audioEl.removeEventListener('pause', onPause);
       // Save final position
       if (audioEl.currentTime > 0) {
         onProgressUpdate?.(episode.id, Math.floor(audioEl.currentTime * 1000), false);

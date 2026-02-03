@@ -416,6 +416,21 @@ export async function initDb() {
   await pool.query('alter table scan_jobs add column if not exists force_full boolean not null default false');
 
   // ========================================================================
+  // PERFORMANCE INDEXES (added for query optimization)
+  // ========================================================================
+  // Index for user email lookups (subsonic auth, etc.)
+  await pool.query('create index if not exists idx_users_email on users(email)');
+  // Index for artist_id lookups in track_artists (used in artist filtering)
+  await pool.query('create index if not exists idx_track_artists_artist_id on track_artists(artist_id)');
+  // Index for tracks by album and art_path (album art queries)
+  await pool.query('create index if not exists idx_tracks_album_art on tracks(album, art_path) where art_path is not null');
+  // Index for tracks artist/title search (subsonic search, case-insensitive)
+  await pool.query('create index if not exists idx_tracks_artist_lower on tracks(lower(artist))');
+  await pool.query('create index if not exists idx_tracks_title_lower on tracks(lower(title))');
+  // Index for favorite_tracks lookups by track_id (batch operations)
+  await pool.query('create index if not exists idx_favorite_tracks_track_id on favorite_tracks(track_id)');
+
+  // ========================================================================
   // PODCASTS
   // ========================================================================
 

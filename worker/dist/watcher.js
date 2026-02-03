@@ -62,6 +62,7 @@ const pendingDeletes = new Map();
 const DELETE_GRACE_MS = 3000;
 // Concurrency limiter to prevent DB connection exhaustion
 const MAX_CONCURRENT = parseInt(process.env.SCAN_CONCURRENCY ?? '25', 10);
+const MAX_QUEUE_SIZE = parseInt(process.env.SCAN_MAX_QUEUE ?? '1000', 10);
 let activeProcessing = 0;
 const processingQueue = [];
 function processNextInQueue() {
@@ -78,6 +79,11 @@ function processNextInQueue() {
 }
 async function runWithConcurrencyLimit(fn) {
     if (activeProcessing >= MAX_CONCURRENT) {
+        // Prevent unbounded queue growth - drop oldest tasks if queue is full
+        if (processingQueue.length >= MAX_QUEUE_SIZE) {
+            logger.warn('scan', `Queue overflow (${processingQueue.length}), dropping oldest task`);
+            processingQueue.shift(); // Drop oldest
+        }
         // Queue the task and wait for it to complete
         return new Promise((resolve) => {
             processingQueue.push(async () => {
