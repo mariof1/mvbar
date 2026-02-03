@@ -4,6 +4,7 @@ import { db, initDb } from './db.js';
 import * as transcodeJobs from './transcodeRepo.js';
 import { transcodeTrackToHls } from './transcoder.js';
 import { runFastScan } from './fastScan.js';
+import { startPodcastRefresh } from './podcastRefresh.js';
 import logger from './logger.js';
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
 const musicDirs = (process.env.MUSIC_DIRS ?? process.env.MUSIC_DIR ?? '/music')
@@ -53,6 +54,8 @@ async function periodicRescan(force = false) {
 // Schedule periodic rescans
 logger.info('worker', `Scheduling periodic library scan every ${rescanIntervalMs / 1000}s`);
 setInterval(periodicRescan, rescanIntervalMs);
+// Start automatic podcast refresh (every hour by default)
+startPodcastRefresh();
 // Listen for rescan commands from API
 const subscriber = new Redis(REDIS_URL);
 subscriber.subscribe('library:commands', (err) => {

@@ -326,7 +326,8 @@ function EpisodeRow({
   const [expanded, setExpanded] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const progress = episode.duration_ms ? Math.round((episode.position_ms / episode.duration_ms) * 100) : 0;
-  const imageUrl = episode.image_url || episode.podcast_image_url;
+  // Use cached art endpoint for episode images
+  const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
   const cleanDescription = stripHtml(episode.description);
 
   const handleDownload = async () => {
@@ -570,20 +571,21 @@ export function PodcastPlayer({
   useEffect(() => {
     if (!episode || !('mediaSession' in navigator)) return;
     
-    const imageUrl = episode.image_url || episode.podcast_image_url;
+    // Use cached art endpoint for media session
+    const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
     
     navigator.mediaSession.metadata = new MediaMetadata({
       title: episode.title,
       artist: episode.podcast_title || 'Podcast',
       album: episode.podcast_title || 'Podcast',
-      artwork: imageUrl ? [
+      artwork: [
         { src: imageUrl, sizes: '96x96', type: 'image/jpeg' },
         { src: imageUrl, sizes: '128x128', type: 'image/jpeg' },
         { src: imageUrl, sizes: '192x192', type: 'image/jpeg' },
         { src: imageUrl, sizes: '256x256', type: 'image/jpeg' },
         { src: imageUrl, sizes: '384x384', type: 'image/jpeg' },
         { src: imageUrl, sizes: '512x512', type: 'image/jpeg' },
-      ] : [],
+      ],
     });
     
     navigator.mediaSession.setActionHandler('play', () => {
@@ -672,7 +674,8 @@ export function PodcastPlayer({
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  const imageUrl = episode.image_url || episode.podcast_image_url;
+  // Use cached art endpoint for player
+  const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
 
   return (
     <>
@@ -980,11 +983,17 @@ export function Podcasts() {
     back();
   }, [back]);
 
-  // Switch view with router
+  // Switch view with router - also clear selected podcast to return to list
   const switchView = useCallback((newView: 'subscriptions' | 'new') => {
-    if (newView === view) return;
-    navigate({ type: 'podcasts', sub: newView });
-  }, [view, navigate]);
+    // If we're in a podcast detail, go back first
+    if (selectedPodcastId) {
+      back();
+    }
+    setEpisodes([]);
+    if (newView !== view) {
+      navigate({ type: 'podcasts', sub: newView });
+    }
+  }, [view, navigate, selectedPodcastId, back]);
 
   // Update episode progress when WebSocket update arrives
   useEffect(() => {
@@ -1161,13 +1170,12 @@ export function Podcasts() {
             </button>
 
             <div className="flex items-start gap-4 mb-6">
-              {selectedPodcast.image_url && (
-                <img
-                  src={selectedPodcast.image_url}
-                  alt={selectedPodcast.title}
-                  className="w-24 h-24 sm:w-32 sm:h-32 rounded-xl object-cover"
-                />
-              )}
+              <img
+                src={`/api/podcasts/${selectedPodcast.id}/art`}
+                alt={selectedPodcast.title}
+                className="w-24 h-24 sm:w-32 sm:h-32 rounded-xl object-cover bg-slate-700"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
               <div className="flex-1">
                 <h2 className="text-xl sm:text-2xl font-bold text-white">{selectedPodcast.title}</h2>
                 {selectedPodcast.author && (
@@ -1235,11 +1243,16 @@ export function Podcasts() {
                     className="group cursor-pointer"
                   >
                     <div className="relative aspect-square rounded-xl overflow-hidden bg-slate-700 mb-2">
-                      {p.image_url ? (
-                        <img src={p.image_url} alt={p.title} className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-4xl">🎙️</div>
-                      )}
+                      <img 
+                        src={`/api/podcasts/${p.id}/art`} 
+                        alt={p.title} 
+                        className="w-full h-full object-cover"
+                        onError={(e) => { 
+                          (e.target as HTMLImageElement).style.display = 'none'; 
+                          (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                        }}
+                      />
+                      <div className="w-full h-full flex items-center justify-center text-4xl absolute inset-0 hidden">🎙️</div>
                       {p.unplayed_count > 0 && (
                         <div className="absolute top-2 right-2 bg-cyan-600 text-white text-xs font-bold px-2 py-1 rounded-full">
                           {p.unplayed_count}

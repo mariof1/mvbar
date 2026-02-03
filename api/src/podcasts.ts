@@ -6,11 +6,15 @@
 
 import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import { db } from './db.js';
 import { XMLParser } from 'fast-xml-parser';
 import crypto from 'crypto';
 
 const PODCAST_DIR = process.env.PODCAST_DIR ?? '/podcasts';
+const PODCAST_ART_DIR = process.env.PODCAST_ART_DIR ?? '/data/cache/podcast-art';
 
 // ============================================================================
 // TYPES
@@ -670,5 +674,128 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     }
     
     return { ok: true };
+  });
+
+  // ========================================================================
+  // PODCAST ART ENDPOINTS
+  // ========================================================================
+  
+  function safeJoinPodcastArt(relPath: string) {
+    const abs = path.resolve(PODCAST_ART_DIR, relPath);
+    const base = path.resolve(PODCAST_ART_DIR);
+    if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
+    return abs;
+  }
+
+  // Serve cached podcast artwork
+  app.get('/api/podcasts/:podcastId/art', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    
+    const podcastId = Number((req.params as { podcastId: string }).podcastId);
+    
+    const r = await db().query<{ image_path: string | null; image_url: string | null }>(
+      'SELECT image_path, image_url FROM podcasts WHERE id = $1',
+      [podcastId]
+    );
+    const row = r.rows[0];
+    if (!row) return reply.code(404).send({ ok: false });
+    
+    // If we have cached image, serve it
+    if (row.image_path) {
+      try {
+        const abs = safeJoinPodcastArt(row.image_path);
+        const st = await stat(abs);
+        
+        const ext = path.extname(row.image_path).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.webp': 'image/webp',
+        };
+        const mime = mimeTypes[ext] || 'image/jpeg';
+        
+        // Use hash from path as ETag
+        const hash = path.basename(row.image_path, ext);
+        const etag = `"${hash}"`;
+        const inm = req.headers['if-none-match'];
+        if (inm === etag) return reply.code(304).send();
+        
+        reply
+          .header('Content-Type', mime)
+          .header('Content-Length', String(st.size))
+          .header('Cache-Control', 'public, max-age=31536000, immutable')
+          .header('ETag', etag);
+        
+        return reply.send(createReadStream(abs));
+      } catch {
+        // Fall through to redirect
+      }
+    }
+    
+    // Fallback: redirect to original URL if available
+    if (row.image_url) {
+      return reply.redirect(302, row.image_url);
+    }
+    
+    return reply.code(404).send({ ok: false });
+  });
+
+  // Serve cached episode artwork
+  app.get('/api/podcasts/episodes/:episodeId/art', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    
+    const episodeId = Number((req.params as { episodeId: string }).episodeId);
+    
+    const r = await db().query<{ image_path: string | null; image_url: string | null; podcast_image_path: string | null; podcast_image_url: string | null }>(
+      `SELECT e.image_path, e.image_url, p.image_path as podcast_image_path, p.image_url as podcast_image_url
+       FROM podcast_episodes e
+       JOIN podcasts p ON p.id = e.podcast_id
+       WHERE e.id = $1`,
+      [episodeId]
+    );
+    const row = r.rows[0];
+    if (!row) return reply.code(404).send({ ok: false });
+    
+    // Try episode image first, then podcast image
+    const imagePath = row.image_path || row.podcast_image_path;
+    const imageUrl = row.image_url || row.podcast_image_url;
+    
+    if (imagePath) {
+      try {
+        const abs = safeJoinPodcastArt(imagePath);
+        const st = await stat(abs);
+        
+        const ext = path.extname(imagePath).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.webp': 'image/webp',
+        };
+        const mime = mimeTypes[ext] || 'image/jpeg';
+        
+        const hash = path.basename(imagePath, ext);
+        const etag = `"${hash}"`;
+        const inm = req.headers['if-none-match'];
+        if (inm === etag) return reply.code(304).send();
+        
+        reply
+          .header('Content-Type', mime)
+          .header('Content-Length', String(st.size))
+          .header('Cache-Control', 'public, max-age=31536000, immutable')
+          .header('ETag', etag);
+        
+        return reply.send(createReadStream(abs));
+      } catch {
+        // Fall through to redirect
+      }
+    }
+    
+    if (imageUrl) {
+      return reply.redirect(302, imageUrl);
+    }
+    
+    return reply.code(404).send({ ok: false });
   });
 });
