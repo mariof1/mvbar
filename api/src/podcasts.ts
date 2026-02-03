@@ -691,29 +691,30 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/podcasts/:podcastId/art', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     
-    const podcastId = Number((req.params as { podcastId: string }).podcastId);
-    
-    const r = await db().query<{ image_path: string | null; image_url: string | null }>(
-      'SELECT image_path, image_url FROM podcasts WHERE id = $1',
-      [podcastId]
-    );
-    const row = r.rows[0];
-    if (!row) return reply.code(404).send({ ok: false });
-    
-    // If we have cached image, serve it
-    if (row.image_path) {
-      try {
-        const abs = safeJoinPodcastArt(row.image_path);
-        const st = await stat(abs);
-        
-        const ext = path.extname(row.image_path).toLowerCase();
-        const mimeTypes: Record<string, string> = {
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.png': 'image/png',
-          '.webp': 'image/webp',
-        };
-        const mime = mimeTypes[ext] || 'image/jpeg';
+    try {
+      const podcastId = Number((req.params as { podcastId: string }).podcastId);
+      
+      const r = await db().query<{ image_path: string | null; image_url: string | null }>(
+        'SELECT image_path, image_url FROM podcasts WHERE id = $1',
+        [podcastId]
+      );
+      const row = r.rows[0];
+      if (!row) return reply.code(404).send({ ok: false });
+      
+      // If we have cached image, serve it
+      if (row.image_path) {
+        try {
+          const abs = safeJoinPodcastArt(row.image_path);
+          const st = await stat(abs);
+          
+          const ext = path.extname(row.image_path).toLowerCase();
+          const mimeTypes: Record<string, string> = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.webp': 'image/webp',
+          };
+          const mime = mimeTypes[ext] || 'image/jpeg';
         
         // Use hash from path as ETag
         const hash = path.basename(row.image_path, ext);
@@ -739,13 +740,18 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     }
     
     return reply.code(404).send({ ok: false });
+    } catch (e) {
+      req.log.error(e, 'Podcast art error');
+      return reply.code(500).send({ ok: false });
+    }
   });
 
   // Serve cached episode artwork
   app.get('/api/podcasts/episodes/:episodeId/art', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     
-    const episodeId = Number((req.params as { episodeId: string }).episodeId);
+    try {
+      const episodeId = Number((req.params as { episodeId: string }).episodeId);
     
     const r = await db().query<{ image_path: string | null; image_url: string | null; podcast_image_path: string | null; podcast_image_url: string | null }>(
       `SELECT e.image_path, e.image_url, p.image_path as podcast_image_path, p.image_url as podcast_image_url
@@ -797,5 +803,9 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     }
     
     return reply.code(404).send({ ok: false });
+    } catch (e) {
+      req.log.error(e, 'Episode art error');
+      return reply.code(500).send({ ok: false });
+    }
   });
 });
