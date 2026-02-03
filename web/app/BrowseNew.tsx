@@ -824,9 +824,24 @@ export function BrowseNew(props: {
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
-                  {track.artists.length > 0
-                    ? track.artists.map((a) => a.name).join(' • ')
-                    : track.artist}
+                  {track.artists.length > 0 ? (
+                    track.artists.map((a, i) => (
+                      <span key={a.id}>
+                        {i > 0 && <span className="text-slate-600"> • </span>}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectArtist({ id: a.id, name: a.name });
+                          }}
+                          className="hover:text-cyan-400 hover:underline"
+                        >
+                          {a.name}
+                        </button>
+                      </span>
+                    ))
+                  ) : (
+                    track.artist
+                  )}
                 </div>
               </div>
               <div className="text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>
@@ -886,9 +901,24 @@ export function BrowseNew(props: {
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
-                  {track.artists.length > 0
-                    ? track.artists.map((a) => a.name).join(' • ')
-                    : track.artist}
+                  {track.artists.length > 0 ? (
+                    track.artists.map((a, i) => (
+                      <span key={a.id}>
+                        {i > 0 && <span className="text-slate-600"> • </span>}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectArtist({ id: a.id, name: a.name });
+                          }}
+                          className="hover:text-cyan-400 hover:underline"
+                        >
+                          {a.name}
+                        </button>
+                      </span>
+                    ))
+                  ) : (
+                    track.artist
+                  )}
                 </div>
               </div>
               <div className="text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>
@@ -950,9 +980,24 @@ export function BrowseNew(props: {
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
-                  {track.artists.length > 0
-                    ? track.artists.map((a) => a.name).join(' • ')
-                    : track.artist}
+                  {track.artists.length > 0 ? (
+                    track.artists.map((a, i) => (
+                      <span key={a.id}>
+                        {i > 0 && <span className="text-slate-600"> • </span>}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectArtist({ id: a.id, name: a.name });
+                          }}
+                          className="hover:text-cyan-400 hover:underline"
+                        >
+                          {a.name}
+                        </button>
+                      </span>
+                    ))
+                  ) : (
+                    track.artist
+                  )}
                 </div>
               </div>
               <div className="text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>
