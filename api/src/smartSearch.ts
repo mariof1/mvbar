@@ -343,8 +343,9 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         }
       }
 
-      // Compute display_artist for each hit (album_artist first, fallback to first artist)
+      // Normalize Meili hits (IDs sometimes come back as strings)
       for (const hit of res.hits) {
+        hit.id = Number(hit.id);
         const albumArtist = hit.album_artist?.split(/[;|]/)[0]?.trim();
         const firstArtist = hit.artist?.split(/[;|]/)[0]?.trim();
         hit.display_artist = albumArtist || firstArtist || 'Unknown Artist';
