@@ -245,18 +245,35 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
     for (const track of tracks) {
       const trackId = pathToTrackId.get(track.path);
       if (!trackId) continue;
-      
-      // Collect all artists to insert
+
+      // Collect all artists to insert (sanitize + preserve order)
       const artistsToInsert: { name: string; role: string; position: number }[] = [];
+      const sanitize = (s: string) => s.replace(/\0/g, '');
+      const norm = (s: string) => sanitize(s).trim();
+      const isAllQuestionMarks = (s: string) => /^\?+$/.test(s);
+      const folderArtistGuess = (() => {
+        // Try to guess artist from folder name for files like "Мэвл/..." when tags decode to "????".
+        const first = (track.path.split(/[\\/]/).filter(Boolean)[0] ?? '').trim();
+        return first || null;
+      })();
+
+      const fixName = (v: string) => {
+        const n = norm(v);
+        if (!n) return null;
+        if (isAllQuestionMarks(n)) return folderArtistGuess ? sanitize(folderArtistGuess) : null;
+        return sanitize(n);
+      };
       
       let i = 0;
       for (const name of track.albumartists) {
-        if (name) artistsToInsert.push({ name, role: 'albumartist', position: i++ });
+        const fixed = name ? fixName(name) : null;
+        if (fixed) artistsToInsert.push({ name: fixed, role: 'albumartist', position: i++ });
       }
       
       i = 0;
       for (const name of track.artists) {
-        if (name) artistsToInsert.push({ name, role: 'artist', position: i++ });
+        const fixed = name ? fixName(name) : null;
+        if (fixed) artistsToInsert.push({ name: fixed, role: 'artist', position: i++ });
       }
       
       if (artistsToInsert.length === 0) continue;
@@ -371,8 +388,18 @@ async function scanArtistArtwork(musicDir: string): Promise<number> {
   
   // For each artist, try to find artwork in their folder
   for (const artist of artistsResult.rows) {
-    // Skip if already has artwork
-    if (artist.art_path) continue;
+    // Skip if already has artwork and the cached file still exists
+    if (artist.art_path) {
+      try {
+        await stat(path.join(ART_DIR, artist.art_path));
+        continue;
+      } catch {
+        // Cache missing - fall through and try to rehydrate
+        // Clear art_path so we can re-scan and re-create the cached file.
+        await db().query('UPDATE artists SET art_path = NULL, art_hash = NULL WHERE id = $1', [artist.id]);
+        artist.art_path = null;
+      }
+    }
     
     // Try to find artist folder (typically /music/ArtistName/)
     const artistDir = path.join(musicDir, artist.name);
@@ -456,6 +483,24 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
   logger.info('scan', 'Loading existing tracks from database...');
   const existingTracks = await loadExistingTracks(libraryId);
   const deletedTracks = await loadDeletedTracks(libraryId);
+
+  // Tracks which currently have invalid artist rows (e.g. "????") should be refreshed even if the file is unchanged.
+  const badArtistPaths = new Set<string>();
+  if (!forceFullScan) {
+    const bad = await db().query<{ path: string }>(
+      `select distinct t.path
+       from tracks t
+       join track_artists ta on ta.track_id = t.id
+       join artists a on a.id = ta.artist_id
+       where t.library_id = $1 and t.deleted_at is null and a.name ~ '^[?]+$'`,
+      [libraryId]
+    );
+    for (const r of bad.rows) badArtistPaths.add(r.path);
+    if (badArtistPaths.size > 0) {
+      logger.info('scan', `Will refresh ${badArtistPaths.size} tracks with invalid artist tags`);
+    }
+  }
+
   logger.info('scan', `Loaded ${existingTracks.size} existing tracks (${deletedTracks.size} soft-deleted)`);
   
   // Phase 2: Walk directory and collect files
@@ -491,7 +536,11 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
       }
       filesToProcess.push(file);
     } else if (existing && existing.mtimeMs === file.mtimeMs && existing.sizeBytes === file.sizeBytes) {
-      skippedFiles++;
+      if (badArtistPaths.has(file.relPath)) {
+        filesToProcess.push(file);
+      } else {
+        skippedFiles++;
+      }
     } else if (deletedTracks.has(file.relPath)) {
       // File was soft-deleted but now exists - restore it and reprocess
       filesToRestore.push(file.relPath);
@@ -568,7 +617,15 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
         } catch {}
         
         const isNew = !existingTracks.has(file.relPath);
-        
+        const folderArtistGuess = (file.relPath.split(/[\\/]/).filter(Boolean)[0] ?? '').trim() || null;
+        const isAllQuestionMarks = (s: string | null) => !!s && /^\?+$/.test(s.trim());
+
+        const fix = (v: string | null) => {
+          if (!v) return v;
+          if (isAllQuestionMarks(v) && folderArtistGuess) return folderArtistGuess;
+          return v;
+        };
+
         return {
           libraryId,
           path: file.relPath,
@@ -577,9 +634,9 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
           sizeBytes: file.sizeBytes,
           ext: file.ext,
           title: tags.title,
-          artist: tags.artist,
+          artist: fix(tags.artist),
           album: tags.album,
-          albumartist: tags.albumartist,
+          albumartist: fix(tags.albumartist),
           genre: tags.genre,
           country: tags.country,
           language: tags.language,
@@ -589,8 +646,8 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
           artMime,
           artHash,
           lyricsPath,
-          artists: tags.artists,           // Individual artist names from tags
-          albumartists: tags.albumartists, // Individual album artist names from tags
+          artists: tags.artists.map(a => (isAllQuestionMarks(a) && folderArtistGuess ? folderArtistGuess : a)),
+          albumartists: tags.albumartists.map(a => (isAllQuestionMarks(a) && folderArtistGuess ? folderArtistGuess : a)),
           trackNumber: tags.trackNumber,
           trackTotal: tags.trackTotal,
           discNumber: tags.discNumber,
