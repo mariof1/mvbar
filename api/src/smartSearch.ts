@@ -120,6 +120,8 @@ function parseQuery(q: string): ParsedQuery {
     const year = parseInt(yearMatch[1]);
     result.yearStart = year;
     result.yearEnd = year;
+    // Remove the year token so a "year-only" query can use filters with an empty Meili query
+    textQuery = textQuery.replace(new RegExp(`\\b${yearMatch[1]}\\b`), '').trim();
   }
 
   // Check for country (with aliases)
@@ -274,17 +276,26 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
     const userId = req.user.userId;
 
     if (q.trim().length === 0) {
-      return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0 };
+      return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [] };
     }
 
     const index = meili().index('tracks');
     const allowed = await allowedLibrariesForUser(userId, req.user.role);
-    
+
     // Parse query for smart matching
     const parsed = parseQuery(q);
-    
+
+    // If the remaining text is just a genre keyword (e.g. "polish rap" -> country=Poland, genre=hiphop, textQuery="rap"),
+    // treat it as filter-only for entity search so we can return top matching artists/albums.
+    const entityTextQuery = (() => {
+      const t = parsed.textQuery.toLowerCase().trim();
+      if (!t) return '';
+      if (parsed.genreFamily && parsed.genres.some(g => g.toLowerCase() === t)) return '';
+      return parsed.textQuery;
+    })();
+
     // Build MeiliSearch filter - only use library_id initially (always filterable)
-    const libraryFilter = allowed !== null 
+    const libraryFilter = allowed !== null
       ? `library_id IN [${allowed.map(x => String(Number(x))).join(', ')}]`
       : undefined;
 
@@ -301,16 +312,18 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
       }
     }
 
+    const hasEntityFilters = Boolean(parsed.country || parsed.yearStart || parsed.genreFamily);
+
     try {
       // Get more results for re-ranking
       const fetchLimit = Math.min(200, limit * 4);
-      
+
       // Try with advanced filters first, fall back to basic if not available
       let res: any;
       const fullFilter = [libraryFilter, ...advancedFilters].filter(Boolean).join(' AND ') || undefined;
-      
+
       try {
-        res = await index.search(parsed.textQuery || q, {
+        res = await index.search(parsed.textQuery, {
           limit: fetchLimit,
           offset: 0,
           filter: fullFilter,
@@ -319,7 +332,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
       } catch (filterErr: any) {
         // If filter attribute not available, retry with just library filter
         if (filterErr.message?.includes('not filterable')) {
-          res = await index.search(q, {
+          res = await index.search(parsed.textQuery || q, {
             limit: fetchLimit,
             offset: 0,
             filter: libraryFilter,
@@ -329,7 +342,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
           throw filterErr;
         }
       }
-      
+
       // Compute display_artist for each hit (album_artist first, fallback to first artist)
       for (const hit of res.hits) {
         const albumArtist = hit.album_artist?.split(/[;|]/)[0]?.trim();
@@ -352,7 +365,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
       const scoredHits: ScoredHit[] = res.hits.map((hit: any, idx: number) => {
         const personalScore = personalizeScore(hit.id, hit.artist, userData);
         const meiliRank = fetchLimit - idx; // Higher = better rank
-        
+
         // Genre family match boost
         let genreBoost = 0;
         if (parsed.genreFamily && hit.genre) {
@@ -378,6 +391,171 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
       // Apply pagination
       const paginatedHits = scoredHits.slice(offset, offset + limit).map(s => s.hit);
 
+      // Entity search (artists/albums/playlists) - first page only
+      const wantEntities = offset === 0 && (entityTextQuery.length > 0 || hasEntityFilters);
+      const artists: any[] = [];
+      const albums: any[] = [];
+      const playlists: any[] = [];
+
+      if (wantEntities) {
+        // Artists
+        {
+          const params: any[] = [];
+          let i = 1;
+          const where: string[] = ["a.name is not null and a.name <> ''", "ta.role = 'artist'"];
+
+          if (entityTextQuery.length > 0) {
+            params.push(`%${entityTextQuery.toLowerCase()}%`);
+            where.push(`lower(a.name) like $${i++}`);
+          }
+          if (allowed !== null) {
+            params.push(allowed);
+            where.push(`t.library_id = any($${i++})`);
+          }
+          if (parsed.country) {
+            params.push(parsed.country);
+            where.push(`exists (select 1 from unnest(string_to_array(coalesce(t.country, ''), ';')) as c where lower(trim(c)) = lower($${i++}))`);
+          }
+          if (parsed.yearStart && parsed.yearEnd) {
+            if (parsed.yearStart === parsed.yearEnd) {
+              params.push(parsed.yearStart);
+              where.push(`t.year = $${i++}`);
+            } else {
+              params.push(parsed.yearStart, parsed.yearEnd);
+              where.push(`t.year >= $${i++} and t.year <= $${i++}`);
+            }
+          }
+          if (parsed.genreFamily && parsed.genres.length > 0) {
+            params.push(parsed.genres);
+            where.push(`exists (select 1 from unnest(string_to_array(coalesce(t.genre, ''), ';')) as g where lower(trim(g)) = any($${i++}))`);
+          }
+
+          const orderBy = entityTextQuery.length > 0
+            ? `case
+                 when lower(a.name) = $1 then 0
+                 when lower(a.name) like $1 then 1
+                 when lower(a.name) like replace($1, '%', '') || '%' then 2
+                 else 3
+               end, track_count desc, a.name asc`
+            : 'track_count desc, a.name asc';
+
+          const r = await db().query(
+            `
+            select
+              a.id::int,
+              a.name,
+              a.art_path,
+              a.art_hash,
+              count(distinct t.id)::int as track_count,
+              count(distinct nullif(t.album, ''))::int as album_count
+            from artists a
+            join track_artists ta on ta.artist_id = a.id
+            join active_tracks t on t.id = ta.track_id
+            where ${where.join(' and ')}
+            group by a.id, a.name, a.art_path, a.art_hash
+            order by ${orderBy}
+            limit 12
+          `,
+            params as any
+          );
+          artists.push(...r.rows);
+        }
+
+        // Albums
+        {
+          const params: any[] = [];
+          let i = 1;
+          const where: string[] = ["t.album is not null and t.album <> ''"];
+
+          if (entityTextQuery.length > 0) {
+            params.push(`%${entityTextQuery.toLowerCase()}%`);
+            where.push(`(lower(t.album) like $${i} or lower(coalesce(t.album_artist, t.artist)) like $${i})`);
+            i++;
+          }
+          if (allowed !== null) {
+            params.push(allowed);
+            where.push(`t.library_id = any($${i++})`);
+          }
+          if (parsed.country) {
+            params.push(parsed.country);
+            where.push(`exists (select 1 from unnest(string_to_array(coalesce(t.country, ''), ';')) as c where lower(trim(c)) = lower($${i++}))`);
+          }
+          if (parsed.yearStart && parsed.yearEnd) {
+            if (parsed.yearStart === parsed.yearEnd) {
+              params.push(parsed.yearStart);
+              where.push(`t.year = $${i++}`);
+            } else {
+              params.push(parsed.yearStart, parsed.yearEnd);
+              where.push(`t.year >= $${i++} and t.year <= $${i++}`);
+            }
+          }
+          if (parsed.genreFamily && parsed.genres.length > 0) {
+            params.push(parsed.genres);
+            where.push(`exists (select 1 from unnest(string_to_array(coalesce(t.genre, ''), ';')) as g where lower(trim(g)) = any($${i++}))`);
+          }
+
+          const r = await db().query(
+            `
+            with unique_albums as (
+              select distinct on (t.album)
+                t.album,
+                t.id as first_track_id,
+                t.art_path,
+                t.art_hash
+              from active_tracks t
+              where ${where.join(' and ')}
+              order by t.album, (t.art_path is null) asc, t.path
+            ),
+            album_counts as (
+              select t.album, count(*)::int as track_count
+              from active_tracks t
+              where ${where.join(' and ')}
+              group by t.album
+            )
+            select
+              ua.album,
+              coalesce(
+                (select a.name from track_artists ta join artists a on a.id = ta.artist_id
+                 where ta.track_id = ua.first_track_id and ta.role = 'albumartist'
+                 order by ta.position asc, a.name asc limit 1),
+                (select a.name from track_artists ta join artists a on a.id = ta.artist_id
+                 where ta.track_id = ua.first_track_id and ta.role = 'artist'
+                 order by ta.position asc, a.name asc limit 1)
+              ) as display_artist,
+              (select ta.artist_id::int from track_artists ta
+               where ta.track_id = ua.first_track_id and ta.role = 'albumartist'
+               order by ta.position asc limit 1) as artist_id,
+              ua.first_track_id::int as art_track_id,
+              ua.art_path,
+              ua.art_hash,
+              ac.track_count
+            from unique_albums ua
+            join album_counts ac on ac.album = ua.album
+            order by ac.track_count desc, ua.album asc
+            limit 12
+          `,
+            params as any
+          );
+          albums.push(...r.rows);
+        }
+
+        // Playlists (name match only)
+        if (entityTextQuery.length > 0) {
+          const pat = `%${entityTextQuery.toLowerCase()}%`;
+          const r = await db().query(
+            `select id::int, name, created_at from playlists where user_id = $1 and lower(name) like $2 order by id desc limit 12`,
+            [userId, pat]
+          );
+          playlists.push(...r.rows.map((x: any) => ({ ...x, kind: 'playlist' })));
+
+          const r2 = await db().query(
+            `select id::int, name, updated_at from smart_playlists where user_id = $1 and lower(name) like $2 order by updated_at desc limit 12`,
+            [userId, pat]
+          );
+          playlists.push(...r2.rows.map((x: any) => ({ ...x, kind: 'smart' })));
+        }
+      }
+
       // Log search for recommendations (only meaningful queries)
       const normalized = normalizeQuery(q);
       if (normalized.length >= 3 && offset === 0) {
@@ -387,10 +565,10 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
            ORDER BY created_at DESC LIMIT 5`,
           [userId]
         );
-        const isPrefix = recent.rows.some(r => 
+        const isPrefix = recent.rows.some(r =>
           r.query_normalized.startsWith(normalized) && r.query_normalized.length > normalized.length
         );
-        
+
         if (!isPrefix) {
           await db().query(
             `INSERT INTO search_logs(user_id, query, query_normalized, result_count) VALUES ($1, $2, $3, $4)`,
@@ -399,13 +577,16 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         }
       }
 
-      return { 
-        ok: true, 
-        q, 
-        limit, 
-        offset, 
-        hits: paginatedHits, 
+      return {
+        ok: true,
+        q,
+        limit,
+        offset,
+        hits: paginatedHits,
         estimatedTotalHits: res.estimatedTotalHits,
+        artists,
+        albums,
+        playlists,
         parsed: {
           genreFamily: parsed.genreFamily,
           country: parsed.country,
@@ -416,7 +597,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('Index `tracks` not found')) {
-        return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0 };
+        return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [] };
       }
       throw e;
     }
