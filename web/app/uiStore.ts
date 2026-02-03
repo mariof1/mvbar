@@ -20,11 +20,13 @@ export interface PodcastEpisode {
   audio_url: string;
   duration_ms: number | null;
   image_url: string | null;
+  image_path?: string | null;
   published_at: string | null;
   position_ms: number;
   played: boolean;
   podcast_title?: string;
   podcast_image_url?: string | null;
+  podcast_image_path?: string | null;
 }
 
 // Legacy NavState type for backward compatibility
