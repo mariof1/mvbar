@@ -2,8 +2,25 @@
 set -e
 
 mkdir -p /data/redis /meili_data /data/caddy /config/caddy \
-  /lyrics /art /hls /podcasts /avatars /run/postgresql
+  /data/cache/lyrics /data/cache/art /data/cache/avatars \
+  /hls /podcasts /run/postgresql
 chown -R postgres:postgres /run/postgresql || true
+
+migrate_cache_dir() {
+  old="$1"
+  new="$2"
+
+  if [ -d "$old" ] && [ "$(ls -A "$old" 2>/dev/null || true)" != "" ]; then
+    mkdir -p "$new"
+    # Copy to support cross-device migration (e.g., old named volumes -> new named volume)
+    cp -a "$old"/. "$new"/ 2>/dev/null || true
+    rm -rf "$old"/* "$old"/.[!.]* "$old"/..?* 2>/dev/null || true
+  fi
+}
+
+migrate_cache_dir /lyrics /data/cache/lyrics
+migrate_cache_dir /art /data/cache/art
+migrate_cache_dir /avatars /data/cache/avatars
 
 # If redis persistence from an older/newer redis version is incompatible, move it aside.
 if ls /data/redis/*.rdb /data/redis/appendonly* >/dev/null 2>&1; then

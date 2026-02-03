@@ -61,11 +61,9 @@ services:
       - meili:/meili_data
       - caddy_data:/data/caddy
       - caddy_config:/config/caddy
-      - lyrics:/lyrics
-      - art:/art
+      - cache:/data/cache
       - hls:/hls
       - podcasts:/podcasts
-      - avatars:/avatars
 
 volumes:
   pg:
@@ -73,11 +71,9 @@ volumes:
   meili:
   caddy_data:
   caddy_config:
-  lyrics:
-  art:
+  cache:
   hls:
   podcasts:
-  avatars:
 ```
 
 3) Start:

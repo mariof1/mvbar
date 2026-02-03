@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from './store';
 import { addTrackToPlaylist, apiFetch, listPlaylists } from './apiClient';
 import { useFavorites } from './favoritesStore';
+import { useRouter } from './router';
 
 type Hit = {
   id: number;
@@ -17,14 +18,72 @@ type Hit = {
   duration_ms: number | null;
 };
 
+type ArtistHit = {
+  id: number;
+  name: string;
+  art_path: string | null;
+  art_hash: string | null;
+  track_count: number;
+  album_count: number;
+};
+
+type AlbumHit = {
+  album: string;
+  display_artist: string | null;
+  artist_id: number | null;
+  art_track_id: number | null;
+  art_path: string | null;
+  art_hash: string | null;
+  track_count: number;
+};
+
+type PlaylistHit = {
+  id: number;
+  name: string;
+  kind?: 'playlist' | 'smart';
+};
+
+function getInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const a = parts[0]?.[0] ?? '?';
+  const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? '' : '';
+  return (a + b).toUpperCase();
+}
+
+function ArtistArt({ name, art_path, art_hash }: { name: string; art_path: string | null; art_hash: string | null }) {
+  const [error, setError] = useState(false);
+
+  if (!art_path || error) {
+    return (
+      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-slate-600 to-slate-700 flex-shrink-0 flex items-center justify-center text-sm font-bold text-white">
+        {getInitials(name)}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={`/api/art/${encodeURIComponent(art_path)}${art_hash ? `?h=${art_hash}` : ''}`}
+      alt=""
+      className="w-10 h-10 rounded-lg object-cover bg-slate-700 flex-shrink-0"
+      loading="lazy"
+      onError={() => setError(true)}
+    />
+  );
+}
+
 export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hit) => void }) {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
+  const navigate = useRouter((s) => s.navigate);
   const [q, setQ] = useState('');
   const favIds = useFavorites((s) => s.ids);
   const refreshFavs = useFavorites((s) => s.refresh);
   const toggleFav = useFavorites((s) => s.toggle);
   const [hits, setHits] = useState<Hit[]>([]);
+  const [artistHits, setArtistHits] = useState<ArtistHit[]>([]);
+  const [albumHits, setAlbumHits] = useState<AlbumHit[]>([]);
+  const [playlistHits, setPlaylistHits] = useState<PlaylistHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,7 +99,11 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
       setError(null);
       try {
         const r = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=20`, { method: 'GET' }, token!);
-        setHits(r.hits ?? []);
+        // Normalize IDs to numbers so favorites lookups work reliably.
+        setHits((r.hits ?? []).map((h: any) => ({ ...h, id: Number(h.id) })));
+        setArtistHits(r.artists ?? []);
+        setAlbumHits((r.albums ?? []).map((a: any) => ({ ...a, artist_id: a.artist_id == null ? null : Number(a.artist_id), art_track_id: a.art_track_id == null ? null : Number(a.art_track_id) })));
+        setPlaylistHits((r.playlists ?? []).map((p: any) => ({ ...p, id: Number(p.id) })));
       } catch (e: any) {
         if (e?.status === 401) clear();
         setError(e?.message ?? 'error');
@@ -50,6 +113,14 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
     }, 250);
     return () => clearTimeout(id);
   }, [q, canSearch, token, clear]);
+
+  useEffect(() => {
+    if (q.trim().length === 0) {
+      setArtistHits([]);
+      setAlbumHits([]);
+      setPlaylistHits([]);
+    }
+  }, [q]);
 
   useEffect(() => {
     if (!token) return;
@@ -116,107 +187,207 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
           >
             <option value="">Select playlist</option>
             {pls.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
             ))}
           </select>
         </div>
       )}
 
       {/* Results */}
-      <div className="space-y-2">
-        {hits.map((t) => (
-          <div
-            key={t.id}
-            className="group p-3 sm:p-4 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200"
-          >
-            <div className="flex items-center gap-3 sm:gap-4">
-              {/* Album Art with Play Button Overlay */}
-              <button
-                onClick={() => props.onPlay?.({ ...t, artist: t.display_artist || t.artist })}
-                className="relative flex-shrink-0 w-12 h-12 sm:w-14 sm:h-14 rounded-lg overflow-hidden group/art"
-              >
-                <img
-                  src={`/api/art/${t.id}`}
-                  alt=""
-                  className="w-full h-full object-cover bg-slate-700"
-                  onError={(e) => {
-                    e.currentTarget.style.display = 'none';
-                    e.currentTarget.nextElementSibling?.classList.remove('hidden');
-                  }}
-                />
-                <div className="hidden w-full h-full bg-slate-700 items-center justify-center">
-                  <svg className="w-6 h-6 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                  </svg>
-                </div>
-                {/* Play overlay */}
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/art:opacity-100 transition-opacity flex items-center justify-center">
-                  <div className="w-8 h-8 bg-cyan-500 rounded-full flex items-center justify-center shadow-lg">
-                    <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                  </div>
-                </div>
-              </button>
-
-              {/* Track Info */}
-              <div className="flex-1 min-w-0">
-                <div className="font-semibold text-white truncate text-sm sm:text-base">{t.title ?? t.path}</div>
-                <div className="text-xs sm:text-sm text-slate-400 truncate">
-                  {[t.display_artist || t.artist, t.album].filter(Boolean).join(' • ') || 'Unknown'}
+      <div className="space-y-6">
+        {(artistHits.length > 0 || albumHits.length > 0 || playlistHits.length > 0) && (
+          <div className="space-y-6">
+            {artistHits.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-slate-300">Artists</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {artistHits.slice(0, 8).map((a) => (
+                    <button
+                      key={a.id}
+                      onClick={() => navigate({ type: 'browse-artist', artistId: a.id, artistName: a.name })}
+                      className="p-3 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200 text-left flex items-center gap-3"
+                    >
+                      <ArtistArt name={a.name} art_path={a.art_path} art_hash={a.art_hash} />
+                      <div className="min-w-0">
+                        <div className="font-semibold text-white truncate">{a.name}</div>
+                        <div className="text-xs text-slate-400 truncate">
+                          {a.track_count} tracks • {a.album_count} albums
+                        </div>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               </div>
+            )}
 
-              {/* Actions - hidden on small screens */}
-              <div className="hidden sm:flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            {albumHits.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-slate-300">Albums</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {albumHits.slice(0, 8).map((a, idx) => (
+                    <button
+                      key={`${a.album}-${idx}`}
+                      onClick={() =>
+                        navigate({ type: 'browse-album', artist: a.display_artist || '', album: a.album, artistId: a.artist_id || undefined })
+                      }
+                      className="p-3 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200 text-left flex items-center gap-3"
+                    >
+                      <img
+                        src={a.art_track_id ? `/api/library/tracks/${a.art_track_id}/art` : ''}
+                        alt=""
+                        className="w-10 h-10 rounded-lg object-cover bg-slate-700 flex-shrink-0"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                          e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                        }}
+                      />
+                      <div className="hidden w-10 h-10 rounded-lg bg-slate-700 flex-shrink-0" />
+                      <div className="min-w-0">
+                        <div className="font-semibold text-white truncate">{a.album}</div>
+                        <div className="text-xs text-slate-400 truncate">
+                          {a.display_artist || 'Unknown Artist'} • {a.track_count} tracks
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {playlistHits.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-slate-300">Playlists</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {playlistHits.slice(0, 8).map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => (p.kind === 'smart' ? navigate({ type: 'playlists', sub: 'smart' }) : navigate({ type: 'playlist', playlistId: String(p.id) }))}
+                      className="p-3 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200 text-left"
+                    >
+                      <div className="font-semibold text-white truncate">
+                        {p.name}
+                        {p.kind === 'smart' ? ' (Smart)' : ''}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {hits.map((t) => (
+            <div
+              key={t.id}
+              className="group p-3 sm:p-4 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200"
+            >
+              <div className="flex items-center gap-3 sm:gap-4">
+                {/* Album Art with Play Button Overlay */}
                 <button
-                  onClick={() => props.onAddToQueue?.({ ...t, artist: t.display_artist || t.artist })}
-                  className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors"
-                  title="Add to queue"
+                  onClick={() => props.onPlay?.({ ...t, artist: t.display_artist || t.artist })}
+                  className="relative flex-shrink-0 w-12 h-12 sm:w-14 sm:h-14 rounded-lg overflow-hidden group/art"
                 >
-                  <svg className="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                  </svg>
+                  <img
+                    src={`/api/library/tracks/${t.id}/art`}
+                    alt=""
+                    className="w-full h-full object-cover bg-slate-700"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                    }}
+                  />
+                  <div className="hidden w-full h-full bg-slate-700 items-center justify-center">
+                    <svg className="w-6 h-6 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
+                      />
+                    </svg>
+                  </div>
+                  {/* Play overlay */}
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/art:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="w-8 h-8 bg-cyan-500 rounded-full flex items-center justify-center shadow-lg">
+                      <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z" />
+                      </svg>
+                    </div>
+                  </div>
                 </button>
-                <button
-                  onClick={async () => {
-                    try {
-                      await toggleFav(token!, t.id);
-                    } catch (e: any) {
-                      if (e?.status === 401) clear();
-                    }
-                  }}
-                  className={`p-2 hover:bg-slate-700/50 rounded-lg transition-colors ${favIds.has(t.id) ? 'text-pink-500' : 'text-slate-300'}`}
-                  title={favIds.has(t.id) ? 'Remove from favorites' : 'Add to favorites'}
-                >
-                  <svg className="w-5 h-5" fill={favIds.has(t.id) ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                  </svg>
-                </button>
-                {playlistId && (
+
+                {/* Track Info */}
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-white truncate text-sm sm:text-base">{t.title ?? t.path}</div>
+                  <div className="text-xs sm:text-sm text-slate-400 truncate">
+                    {[t.display_artist || t.artist, t.album].filter(Boolean).join(' • ') || 'Unknown'}
+                  </div>
+                </div>
+
+                {/* Actions - hidden on small screens */}
+                <div className="hidden sm:flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => props.onAddToQueue?.({ ...t, artist: t.display_artist || t.artist })}
+                    className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors"
+                    title="Add to queue"
+                  >
+                    <svg className="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                  </button>
                   <button
                     onClick={async () => {
                       try {
-                        await addTrackToPlaylist(token!, playlistId, t.id);
+                        await toggleFav(token!, Number(t.id));
                       } catch (e: any) {
                         if (e?.status === 401) clear();
                       }
                     }}
-                    className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors text-slate-300"
-                    title="Add to playlist"
+                    className={`p-2 hover:bg-slate-700/50 rounded-lg transition-colors ${favIds.has(Number(t.id)) ? 'text-pink-500' : 'text-slate-300'}`}
+                    title={favIds.has(Number(t.id)) ? 'Remove from favorites' : 'Add to favorites'}
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                    <svg className="w-5 h-5" fill={favIds.has(Number(t.id)) ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"
+                      />
                     </svg>
                   </button>
-                )}
+                  {playlistId && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await addTrackToPlaylist(token!, playlistId, t.id);
+                        } catch (e: any) {
+                          if (e?.status === 401) clear();
+                        }
+                      }}
+                      className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors text-slate-300"
+                      title="Add to playlist"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"
+                        />
+                      </svg>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
 
         {/* Empty state */}
-        {!loading && q && hits.length === 0 && (
+        {!loading && q && hits.length === 0 && artistHits.length === 0 && albumHits.length === 0 && playlistHits.length === 0 && (
           <div className="text-center py-12 text-slate-400">
             <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

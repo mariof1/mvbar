@@ -1,5 +1,5 @@
 import { parseFile, type IAudioMetadata } from 'music-metadata';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mimeFromFormat, pickBestPicture } from './art.js';
@@ -47,14 +47,35 @@ export type TagResult = {
   discTotal: number | null;
 };
 
+function ffprobeDurationMs(filePath: string, timeoutMs = 15000): Promise<number | null> {
+  return new Promise((resolve) => {
+    execFile(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', filePath],
+      { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
+      (err, stdout) => {
+        if (err) return resolve(null);
+        const s = String(stdout ?? '').trim();
+        const n = parseFloat(s);
+        if (!Number.isFinite(n) || n <= 0) return resolve(null);
+        resolve(Math.round(n * 1000));
+      }
+    );
+  });
+}
+
 export async function readTags(filePath: string): Promise<TagResult> {
-  const m = await parseFile(filePath, { duration: false });
+  // OPUS/OGG often requires full duration calculation; mp3/flac usually do not.
+  const ext = path.extname(filePath).toLowerCase();
+  const needDuration = ext === '.opus' || ext === '.ogg';
+  const m = await parseFile(filePath, { duration: needDuration });
 
   const title = sanitize(m.common.title);
   const artist = sanitize(m.common.artist);
   const album = sanitize(m.common.album);
   const albumartist = sanitize(m.common.albumartist);
-  const durationMs = m.format.duration ? Math.round(m.format.duration * 1000) : null;
+  let durationMs = m.format.duration ? Math.round(m.format.duration * 1000) : null;
+  if (!durationMs && needDuration) durationMs = await ffprobeDurationMs(filePath);
   const year = m.common.year ?? null;
   
   // Track and disc numbers
@@ -85,26 +106,60 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const artMime = pic ? mimeFromFormat(pic.format) : null;
   const artData = pic && artMime ? pic.data : null;
 
-  // Get artist list - prefer m.common.artist over m.common.artists when:
-  // - m.common.artist contains a comma (indicates artist name with comma like "Tyler, The Creator")
-  // - m.common.artists looks like a bad split of a comma-containing name
-  let artistSource: string[];
+  const dedupeCI = (items: string[]) => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const it of items) {
+      const s = sanitize(it);
+      if (!s) continue;
+      const key = s.trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(s.trim());
+    }
+    return out;
+  };
+
+  // Merge artists from *all* relevant sources (common + native), then split and dedupe.
+  // This handles files with repeated artist frames (e.g. multiple TPE1 / TXXX:ARTISTS).
   const mainArtist = m.common.artist || '';
   const hasCommaInName = mainArtist.includes(',') && !mainArtist.includes(';');
-  
-  if (hasCommaInName) {
-    // Use the main artist field as the source, it preserves comma-in-name artists
-    artistSource = [mainArtist];
-  } else if (m.common.artists && m.common.artists.length > 0) {
-    artistSource = m.common.artists;
-  } else if (mainArtist) {
-    artistSource = [mainArtist];
-  } else {
-    artistSource = [];
+
+  const candidates: string[] = [];
+  if (mainArtist) candidates.push(mainArtist);
+
+  // music-metadata may split comma-in-name artists into common.artists; avoid that specific corruption.
+  if (m.common.artists && m.common.artists.length > 0) {
+    const joined = m.common.artists.join(', ');
+    if (!(hasCommaInName && joined === mainArtist)) candidates.push(...m.common.artists);
   }
-  
-  const artists = artistSource.flatMap((v) => splitArtistValue(String(v ?? ''))).map(sanitize).filter(Boolean) as string[];
-  const albumartists = (m.common.albumartist ? [m.common.albumartist] : []).flatMap((v) => splitArtistValue(String(v ?? ''))).map(sanitize).filter(Boolean) as string[];
+
+  // Pull in repeated frames and custom tags (e.g. TXXX:ARTISTS).
+  candidates.push(
+    ...nativeValues(m, [
+      'tpe1',
+      'artist',
+      'artists',
+      'performer',
+      'performers',
+      'composer',
+      'composers'
+    ])
+  );
+
+  const artists = dedupeCI(candidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
+
+  const albumArtistCandidates: string[] = [];
+  if (m.common.albumartist) albumArtistCandidates.push(m.common.albumartist);
+  const commonAny2 = m.common as any;
+  if (Array.isArray(commonAny2.albumartists)) albumArtistCandidates.push(...commonAny2.albumartists);
+
+  albumArtistCandidates.push(
+    ...nativeValues(m, ['tpe2', 'albumartist', 'album artist', 'album_artist', 'albumartists'])
+  );
+
+  const albumartists = dedupeCI(albumArtistCandidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
 
   return { title, artist, album, albumartist, genre, country, language, year, durationMs, artMime, artData, artists, albumartists, trackNumber, trackTotal, discNumber, discTotal };
 }
@@ -120,9 +175,14 @@ export async function readTagsAsync(filePath: string, timeoutMs = 30000): Promis
     const encodedPath = Buffer.from(filePath).toString('base64');
     const cmd = `node ${childScriptPath} --base64 ${encodedPath}`;
     
+    let settled = false;
     const child = exec(cmd, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (settled) return;
+      settled = true;
       if (error) {
         console.error(`[readTagsAsync] Error: ${stderr || error.message}`);
+        // Ensure child process is killed on error
+        if (!child.killed) child.kill('SIGTERM');
         reject(new Error(stderr || error.message));
         return;
       }
@@ -140,12 +200,18 @@ export async function readTagsAsync(filePath: string, timeoutMs = 30000): Promis
         });
       } catch (e) {
         console.error(`[readTagsAsync] Parse error: ${e}`);
+        if (!child.killed) child.kill('SIGTERM');
         reject(new Error(`Failed to parse child output: ${e}`));
       }
     });
     
     child.on('spawn', () => {
       console.error(`[readTagsAsync] Child spawned for: ${filePath}`);
+    });
+
+    // Cleanup on timeout (exec timeout fires error callback, but ensure kill)
+    child.on('error', () => {
+      if (!child.killed) child.kill('SIGTERM');
     });
   });
 }

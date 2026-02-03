@@ -2,7 +2,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import * as repo from './scanRepo.js';
 import { readTags } from './metadata.js';
-const LYRICS_DIR = process.env.LYRICS_DIR ?? '/lyrics';
+const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wav']);
 export async function runScan(mountPath, musicDir, jobId) {
     const startedAt = Date.now();
@@ -78,7 +78,7 @@ export async function runScan(mountPath, musicDir, jobId) {
             catch {
                 parseFailed++;
             }
-            const artDir = process.env.ART_DIR ?? '/art';
+            const artDir = process.env.ART_DIR ?? '/data/cache/art';
             let art = null;
             if (tags.artData && tags.artMime) {
                 try {

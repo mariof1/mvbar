@@ -10,6 +10,7 @@
   "dependencies": {
     "chokidar": "^5.0.0",
     "dotenv": "^16.4.5",
+    "fast-xml-parser": "^5.3.4",
     "ioredis": "^5.9.2",
     "meilisearch": "^0.55.0",
     "music-metadata": "^11.11.0",

@@ -19,6 +19,7 @@ interface Podcast {
   author: string | null;
   description: string | null;
   image_url: string | null;
+  image_path?: string | null;
   unplayed_count: number;
 }
 
@@ -30,12 +31,14 @@ interface Episode {
   audio_url: string;
   duration_ms: number | null;
   image_url: string | null;
+  image_path?: string | null;
   published_at: string | null;
   position_ms: number;
   played: boolean;
   downloaded: boolean;
   podcast_title?: string;
   podcast_image_url?: string | null;
+  podcast_image_path?: string | null;
 }
 
 // ============================================================================
@@ -326,7 +329,11 @@ function EpisodeRow({
   const [expanded, setExpanded] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const progress = episode.duration_ms ? Math.round((episode.position_ms / episode.duration_ms) * 100) : 0;
-  const imageUrl = episode.image_url || episode.podcast_image_url;
+  const imageUrl = episode.image_path
+    ? `/api/podcast-art/${episode.image_path}`
+    : episode.podcast_image_path
+      ? `/api/podcast-art/${episode.podcast_image_path}`
+      : `/api/podcasts/episodes/${episode.id}/art`;
   const cleanDescription = stripHtml(episode.description);
 
   const handleDownload = async () => {
@@ -347,7 +354,7 @@ function EpisodeRow({
           className="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden bg-slate-700 group/play"
         >
           {imageUrl ? (
-            <img src={imageUrl} alt="" className="w-full h-full object-cover" />
+            <img src={imageUrl} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-2xl">🎙️</div>
           )}
@@ -502,9 +509,10 @@ export function PodcastPlayer({
       audioEl.currentTime = episode.position_ms / 1000;
     }
 
-    audioEl.addEventListener('timeupdate', () => setCurrentTime(audioEl.currentTime));
-    audioEl.addEventListener('loadedmetadata', () => setDuration(audioEl.duration));
-    audioEl.addEventListener('ended', () => {
+    // Event handlers - store references for cleanup
+    const onTimeUpdate = () => setCurrentTime(audioEl.currentTime);
+    const onLoadedMetadata = () => setDuration(audioEl.duration);
+    const onEnded = () => {
       setPlaying(false);
       onProgressUpdate?.(episode.id, Math.floor(audioEl.currentTime * 1000), true);
       sendWebSocketMessage('podcast:progress', {
@@ -512,11 +520,15 @@ export function PodcastPlayer({
         position_ms: Math.floor(audioEl.currentTime * 1000),
         played: true,
       });
-    });
-    
-    // Track play/pause state for Media Session
-    audioEl.addEventListener('play', () => setPlaying(true));
-    audioEl.addEventListener('pause', () => setPlaying(false));
+    };
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
+
+    audioEl.addEventListener('timeupdate', onTimeUpdate);
+    audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
+    audioEl.addEventListener('ended', onEnded);
+    audioEl.addEventListener('play', onPlay);
+    audioEl.addEventListener('pause', onPause);
 
     setAudio(audioEl);
     audioEl.play().then(() => setPlaying(true)).catch(() => {});
@@ -546,6 +558,12 @@ export function PodcastPlayer({
 
     return () => {
       clearInterval(interval);
+      // Remove all event listeners to prevent memory leaks
+      audioEl.removeEventListener('timeupdate', onTimeUpdate);
+      audioEl.removeEventListener('loadedmetadata', onLoadedMetadata);
+      audioEl.removeEventListener('ended', onEnded);
+      audioEl.removeEventListener('play', onPlay);
+      audioEl.removeEventListener('pause', onPause);
       // Save final position
       if (audioEl.currentTime > 0) {
         onProgressUpdate?.(episode.id, Math.floor(audioEl.currentTime * 1000), false);
@@ -559,20 +577,17 @@ export function PodcastPlayer({
   useEffect(() => {
     if (!episode || !('mediaSession' in navigator)) return;
     
-    const imageUrl = episode.image_url || episode.podcast_image_url;
+    const imageUrl = episode.image_path
+      ? `/api/podcast-art/${episode.image_path}`
+      : episode.podcast_image_path
+        ? `/api/podcast-art/${episode.podcast_image_path}`
+        : `/api/podcasts/episodes/${episode.id}/art`;
     
     navigator.mediaSession.metadata = new MediaMetadata({
       title: episode.title,
       artist: episode.podcast_title || 'Podcast',
       album: episode.podcast_title || 'Podcast',
-      artwork: imageUrl ? [
-        { src: imageUrl, sizes: '96x96', type: 'image/jpeg' },
-        { src: imageUrl, sizes: '128x128', type: 'image/jpeg' },
-        { src: imageUrl, sizes: '192x192', type: 'image/jpeg' },
-        { src: imageUrl, sizes: '256x256', type: 'image/jpeg' },
-        { src: imageUrl, sizes: '384x384', type: 'image/jpeg' },
-        { src: imageUrl, sizes: '512x512', type: 'image/jpeg' },
-      ] : [],
+      artwork: [{ src: imageUrl, sizes: '512x512', type: 'image/jpeg' }],
     });
     
     navigator.mediaSession.setActionHandler('play', () => {
@@ -661,7 +676,11 @@ export function PodcastPlayer({
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  const imageUrl = episode.image_url || episode.podcast_image_url;
+  const imageUrl = episode.image_path
+    ? `/api/podcast-art/${episode.image_path}`
+    : episode.podcast_image_path
+      ? `/api/podcast-art/${episode.podcast_image_path}`
+      : `/api/podcasts/episodes/${episode.id}/art`;
 
   return (
     <>
@@ -690,6 +709,8 @@ export function PodcastPlayer({
                   src={imageUrl}
                   alt=""
                   className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl object-cover shadow-2xl"
+                  loading="lazy"
+                  decoding="async"
                 />
               ) : (
                 <div className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl bg-white/10 flex items-center justify-center">
@@ -820,6 +841,8 @@ export function PodcastPlayer({
                 src={imageUrl}
                 alt=""
                 className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg object-cover flex-shrink-0"
+                loading="lazy"
+                decoding="async"
               />
             ) : (
               <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-white/10 flex items-center justify-center flex-shrink-0">
@@ -969,11 +992,17 @@ export function Podcasts() {
     back();
   }, [back]);
 
-  // Switch view with router
+  // Switch view with router - also clear selected podcast to return to list
   const switchView = useCallback((newView: 'subscriptions' | 'new') => {
-    if (newView === view) return;
-    navigate({ type: 'podcasts', sub: newView });
-  }, [view, navigate]);
+    // If we're in a podcast detail, go back first
+    if (selectedPodcastId) {
+      back();
+    }
+    setEpisodes([]);
+    if (newView !== view) {
+      navigate({ type: 'podcasts', sub: newView });
+    }
+  }, [view, navigate, selectedPodcastId, back]);
 
   // Update episode progress when WebSocket update arrives
   useEffect(() => {
@@ -1150,13 +1179,14 @@ export function Podcasts() {
             </button>
 
             <div className="flex items-start gap-4 mb-6">
-              {selectedPodcast.image_url && (
-                <img
-                  src={selectedPodcast.image_url}
-                  alt={selectedPodcast.title}
-                  className="w-24 h-24 sm:w-32 sm:h-32 rounded-xl object-cover"
-                />
-              )}
+              <img
+                src={selectedPodcast.image_path ? `/api/podcast-art/${selectedPodcast.image_path}` : `/api/podcasts/${selectedPodcast.id}/art`}
+                alt={selectedPodcast.title}
+                className="w-24 h-24 sm:w-32 sm:h-32 rounded-xl object-cover bg-slate-700"
+                loading="lazy"
+                decoding="async"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
               <div className="flex-1">
                 <h2 className="text-xl sm:text-2xl font-bold text-white">{selectedPodcast.title}</h2>
                 {selectedPodcast.author && (
@@ -1176,7 +1206,7 @@ export function Podcasts() {
                 <EpisodeRow
                   key={ep.id}
                   episode={ep}
-                  onPlay={() => setPodcastEpisode({ ...ep, podcast_title: selectedPodcast.title, podcast_image_url: selectedPodcast.image_url })}
+                  onPlay={() => setPodcastEpisode({ ...ep, podcast_title: selectedPodcast.title, podcast_image_url: selectedPodcast.image_url, podcast_image_path: (selectedPodcast as any).image_path })}
                   onMarkPlayed={(played) => handleMarkPlayed(ep.id, played)}
                   onDownload={() => handleDownload(ep.id)}
                   onDeleteDownload={() => handleDeleteDownload(ep.id)}
@@ -1224,11 +1254,18 @@ export function Podcasts() {
                     className="group cursor-pointer"
                   >
                     <div className="relative aspect-square rounded-xl overflow-hidden bg-slate-700 mb-2">
-                      {p.image_url ? (
-                        <img src={p.image_url} alt={p.title} className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-4xl">🎙️</div>
-                      )}
+                      <img 
+                        src={p.image_path ? `/api/podcast-art/${p.image_path}` : `/api/podcasts/${p.id}/art`} 
+                        alt={p.title} 
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                        decoding="async"
+                        onError={(e) => { 
+                          (e.target as HTMLImageElement).style.display = 'none'; 
+                          (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+                        }}
+                      />
+                      <div className="w-full h-full flex items-center justify-center text-4xl absolute inset-0 hidden">🎙️</div>
                       {p.unplayed_count > 0 && (
                         <div className="absolute top-2 right-2 bg-cyan-600 text-white text-xs font-bold px-2 py-1 rounded-full">
                           {p.unplayed_count}

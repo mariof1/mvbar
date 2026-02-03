@@ -10,8 +10,8 @@ import { writeArt } from './art.js';
 import { indexAllTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
 
-const LYRICS_DIR = process.env.LYRICS_DIR ?? '/lyrics';
-const ART_DIR = process.env.ART_DIR ?? '/art';
+const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
+const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wav']);
 
@@ -70,6 +70,7 @@ const DELETE_GRACE_MS = 3000;
 
 // Concurrency limiter to prevent DB connection exhaustion
 const MAX_CONCURRENT = parseInt(process.env.SCAN_CONCURRENCY ?? '25', 10);
+const MAX_QUEUE_SIZE = parseInt(process.env.SCAN_MAX_QUEUE ?? '1000', 10);
 let activeProcessing = 0;
 const processingQueue: (() => Promise<void>)[] = [];
 
@@ -87,6 +88,11 @@ function processNextInQueue() {
 
 async function runWithConcurrencyLimit(fn: () => Promise<void>) {
   if (activeProcessing >= MAX_CONCURRENT) {
+    // Prevent unbounded queue growth - drop oldest tasks if queue is full
+    if (processingQueue.length >= MAX_QUEUE_SIZE) {
+      logger.warn('scan', `Queue overflow (${processingQueue.length}), dropping oldest task`);
+      processingQueue.shift(); // Drop oldest
+    }
     // Queue the task and wait for it to complete
     return new Promise<void>((resolve) => {
       processingQueue.push(async () => {
@@ -356,5 +362,25 @@ export class LibraryWatcher {
           scanProgress.status = 'idle';
           updateScanProgress();
       }
+  }
+
+  /** Graceful cleanup: close watcher, clear timers, disconnect Redis */
+  async stop() {
+    if (this.watcher) {
+      await this.watcher.close();
+      this.watcher = null;
+    }
+    if (this.indexTimer) {
+      clearTimeout(this.indexTimer);
+      this.indexTimer = null;
+    }
+    // Clear pending deletes
+    for (const timeout of pendingDeletes.values()) {
+      clearTimeout(timeout);
+    }
+    pendingDeletes.clear();
+    // Close Redis publisher
+    await publisher.quit();
+    logger.info('scan', 'Watcher stopped');
   }
 }

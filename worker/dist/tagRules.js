@@ -57,6 +57,12 @@ const NATIONALITY_TO_COUNTRY = new Map([
     ['french', 'France'],
     ['italian', 'Italy'],
     ['english', 'England'],
+    ['british', 'United Kingdom'],
+    ['uk', 'United Kingdom'],
+    ['american', 'United States'],
+    ['us', 'United States'],
+    ['canadian', 'Canada'],
+    ['australian', 'Australia'],
     ['irish', 'Ireland'],
     ['scottish', 'Scotland'],
     ['welsh', 'Wales'],
@@ -72,7 +78,17 @@ const NATIONALITY_TO_COUNTRY = new Map([
     ['dutch', 'Netherlands'],
     ['greek', 'Greece'],
     ['turkish', 'Turkey'],
-    ['lithuanian', 'Lithuania']
+    ['lithuanian', 'Lithuania'],
+    ['japanese', 'Japan'],
+    ['korean', 'South Korea'],
+    ['chinese', 'China'],
+    ['indian', 'India'],
+    ['mexican', 'Mexico'],
+    ['jamaican', 'Jamaica'],
+    ['cuban', 'Cuba'],
+    ['african', 'Africa'],
+    ['nigerian', 'Nigeria'],
+    ['south african', 'South Africa']
 ]);
 const LANGUAGE_ABBREV = new Map([
     ['eng', 'English'],

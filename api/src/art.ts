@@ -6,7 +6,7 @@ import path from 'node:path';
 import { db } from './db.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 
-const ART_DIR = process.env.ART_DIR ?? '/art';
+const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
 
 function safeJoinArt(relPath: string) {
   const abs = path.resolve(ART_DIR, relPath);
