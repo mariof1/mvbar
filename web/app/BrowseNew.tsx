@@ -38,6 +38,8 @@ type Track = {
   art_path?: string | null;
   path?: string;
   genre?: string | null;
+  country?: string | null;
+  language?: string | null;
   year?: number | null;
   artists?: Array<{ id: number; name: string }>;
   discNumber?: number | null;
@@ -270,6 +272,8 @@ export function BrowseNew(props: {
   const [editDiscNumber, setEditDiscNumber] = useState('');
   const [editYear, setEditYear] = useState('');
   const [editGenre, setEditGenre] = useState('');
+  const [editCountry, setEditCountry] = useState('');
+  const [editLanguage, setEditLanguage] = useState('');
 
   const [genreTracks, setGenreTracks] = useState<Track[]>([]);
 
@@ -613,6 +617,10 @@ export function BrowseNew(props: {
       setEditYear(t.year ? String(t.year) : '');
       const g = (t.genre ?? '').split(';').map((x) => x.trim()).filter(Boolean).join('\n');
       setEditGenre(g);
+      const c = (t.country ?? '').split(';').map((x) => x.trim()).filter(Boolean).join('\n');
+      setEditCountry(c);
+      const l = (t.language ?? '').split(';').map((x) => x.trim()).filter(Boolean).join('\n');
+      setEditLanguage(l);
       setEditError(null);
       setEditOpen(true);
     };
@@ -819,6 +827,28 @@ export function BrowseNew(props: {
                   />
                 </label>
 
+                <label className="text-sm text-slate-300">
+                  Countries (one per line)
+                  <textarea
+                    value={editCountry}
+                    onChange={(e) => setEditCountry(e.target.value)}
+                    rows={3}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Poland\nUnited States"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300">
+                  Languages (one per line)
+                  <textarea
+                    value={editLanguage}
+                    onChange={(e) => setEditLanguage(e.target.value)}
+                    rows={3}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Polish\nEnglish"
+                  />
+                </label>
+
                 <label className="text-sm text-slate-300 sm:col-span-2">
                   Artists (one per line)
                   <textarea
@@ -923,6 +953,14 @@ export function BrowseNew(props: {
                         .split(/\r?\n/)
                         .map((x) => x.trim())
                         .filter(Boolean);
+                      const countries = editCountry
+                        .split(/\r?\n/)
+                        .map((x) => x.trim())
+                        .filter(Boolean);
+                      const languages = editLanguage
+                        .split(/\r?\n/)
+                        .map((x) => x.trim())
+                        .filter(Boolean);
 
                       await adminUpdateTrackMetadata(token, editTrack.id, {
                         title: toNull(editTitle),
@@ -933,6 +971,8 @@ export function BrowseNew(props: {
                         discNumber: toNumOrNull(editDiscNumber),
                         year: toNumOrNull(editYear),
                         genre: genres.length ? genres.join('; ') : null,
+                        country: countries.length ? countries.join('; ') : null,
+                        language: languages.length ? languages.join('; ') : null,
                       });
 
                       // If album name changed, navigate to the new album route.

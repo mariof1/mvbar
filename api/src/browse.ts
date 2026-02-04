@@ -727,7 +727,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       
       r = await db().query(
         `
-        select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.year,
+        select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
                t.track_number, t.track_total, t.disc_number, t.disc_total
         from active_tracks t
         join track_artists ta on ta.track_id = t.id
@@ -761,7 +761,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         
         r = await db().query(
           `
-          select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.year,
+          select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
                  t.track_number, t.track_total, t.disc_number, t.disc_total
           from active_tracks t
           join track_artists ta on ta.track_id = t.id
@@ -786,7 +786,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         params = allowed === null ? [artist, album] : [artist, album, allowed];
         r = await db().query(
           `
-          select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.year,
+          select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
                  t.track_number, t.track_total, t.disc_number, t.disc_total
           from active_tracks t
           where t.album = $2 and (
@@ -806,7 +806,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       params = allowed === null ? [album] : [album, allowed];
       r = await db().query(
         `
-        select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.year,
+        select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
                t.track_number, t.track_total, t.disc_number, t.disc_total
         from active_tracks t
         where t.album = $1

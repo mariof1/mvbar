@@ -196,6 +196,8 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
       discNumber?: number | null;
       year?: number | null;
       genre?: string | null;
+      country?: string | null;
+      language?: string | null;
     };
 
     const r = await db().query<{ path: string; ext: string; library_id: number; mount_path: string }>(
@@ -238,6 +240,8 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     const album = normStr(body.album);
     const albumArtist = normStr(body.albumArtist);
     const genre = normStr(body.genre);
+    const country = normStr(body.country);
+    const language = normStr(body.language);
     const year = normNum(body.year);
     const trackNumber = normNum(body.trackNumber);
     const discNumber = normNum(body.discNumber);
@@ -252,6 +256,14 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     if (title !== undefined) tags.title = title ?? '';
     if (album !== undefined) tags.album = album ?? '';
     if (genre !== undefined) tags.genre = genre ?? '';
+
+    if (country !== undefined || language !== undefined) {
+      const txxx: Array<{ description: string; value: string }> = [];
+      if (country !== undefined) txxx.push({ description: 'Country', value: country ?? '' });
+      if (language !== undefined) txxx.push({ description: 'Language', value: language ?? '' });
+      tags.TXXX = txxx;
+    }
+
     if (year !== undefined) tags.year = year ?? '';
     if (trackNumber !== undefined) tags.trackNumber = trackNumber ?? '';
     if (discNumber !== undefined) tags.partOfSet = discNumber ?? '';

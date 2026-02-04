@@ -71,6 +71,8 @@ export async function adminUpdateTrackMetadata(
     discNumber?: number | null;
     year?: number | null;
     genre?: string | null;
+    country?: string | null;
+    language?: string | null;
   }
 ) {
   return (await apiFetch(`/admin/tracks/${trackId}/metadata`, { method: 'POST', body: JSON.stringify(payload) }, token)) as { ok: boolean };
@@ -336,6 +338,8 @@ export async function browseAlbum(token: string, artist: string | null | undefin
       art_path: string | null;
       path?: string;
       genre?: string | null;
+      country?: string | null;
+      language?: string | null;
       year?: number | null;
       artists: Array<{ id: number; name: string }>;
       discNumber?: number | null;
