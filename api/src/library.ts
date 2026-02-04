@@ -4,6 +4,16 @@ import { audit, db, redis } from './db.js';
 import * as scans from './scanRepo.js';
 import { allowedLibrariesForUser } from './access.js';
 import { store } from './store.js';
+import { access, constants } from 'node:fs/promises';
+import path from 'node:path';
+import NodeID3 from 'node-id3';
+
+function safeJoinMount(mountPath: string, relPath: string) {
+  const abs = path.resolve(mountPath, relPath);
+  const base = path.resolve(mountPath);
+  if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
+  return abs;
+}
 
 export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   // Scan progress endpoint - available to all authenticated users
@@ -148,6 +158,130 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: req.user.userId, force }));
     await audit('rescan_triggered', { by: req.user.userId, force });
     return { ok: true, message: force ? 'Force full scan triggered' : 'Rescan triggered' };
+  });
+
+  // Whether any mounted library is writable inside the container
+  app.get('/api/admin/library/writable', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    const r = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries order by mount_path asc');
+
+    const results = await Promise.all(
+      r.rows.map(async (l) => {
+        try {
+          await access(l.mount_path, constants.W_OK);
+          return { id: l.id, mount_path: l.mount_path, writable: true };
+        } catch {
+          return { id: l.id, mount_path: l.mount_path, writable: false };
+        }
+      })
+    );
+
+    const writable = results.filter((x) => x.writable).map((x) => x.mount_path);
+    return { ok: true, anyWritable: writable.length > 0, writableMounts: writable, libraries: results };
+  });
+
+  // Edit track metadata (MP3 only) for writable libraries
+  app.post('/api/admin/tracks/:id/metadata', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id)) return reply.code(400).send({ ok: false, error: 'Invalid track id' });
+
+    const body = (req.body ?? {}) as {
+      title?: string | null;
+      artists?: string[] | null;
+      album?: string | null;
+      albumArtist?: string | null;
+      trackNumber?: number | null;
+      discNumber?: number | null;
+      year?: number | null;
+      genre?: string | null;
+    };
+
+    const r = await db().query<{ path: string; ext: string; library_id: number; mount_path: string }>(
+      'select t.path, t.ext, t.library_id, l.mount_path from active_tracks t join libraries l on l.id=t.library_id where t.id=$1',
+      [id]
+    );
+    const row = r.rows[0];
+    if (!row) return reply.code(404).send({ ok: false, error: 'Track not found' });
+
+    if ((row.ext ?? '').toLowerCase() !== '.mp3') {
+      return reply.code(400).send({ ok: false, error: 'Only .mp3 files are editable (v1)' });
+    }
+
+    // Must be writable
+    try {
+      await access(row.mount_path, constants.W_OK);
+    } catch {
+      return reply.code(400).send({ ok: false, error: `Library mount is not writable: ${row.mount_path}` });
+    }
+
+    const abs = safeJoinMount(row.mount_path, row.path);
+
+    // Normalize inputs
+    const normStr = (s: any) => {
+      if (s === undefined) return undefined;
+      if (s === null) return null;
+      const v = String(s).trim();
+      return v === '' ? null : v;
+    };
+
+    const normNum = (n: any) => {
+      if (n === undefined) return undefined;
+      if (n === null) return null;
+      const v = Number(n);
+      if (!Number.isFinite(v) || v <= 0) return null;
+      return Math.floor(v);
+    };
+
+    const title = normStr(body.title);
+    const album = normStr(body.album);
+    const albumArtist = normStr(body.albumArtist);
+    const genre = normStr(body.genre);
+    const year = normNum(body.year);
+    const trackNumber = normNum(body.trackNumber);
+    const discNumber = normNum(body.discNumber);
+
+    const artistsList = body.artists === undefined
+      ? undefined
+      : (body.artists ?? [])
+          .map((x) => String(x ?? '').trim())
+          .filter(Boolean);
+
+    const tags: Record<string, any> = {};
+    if (title !== undefined) tags.title = title ?? '';
+    if (album !== undefined) tags.album = album ?? '';
+    if (genre !== undefined) tags.genre = genre ?? '';
+    if (year !== undefined) tags.year = year ?? '';
+    if (trackNumber !== undefined) tags.trackNumber = trackNumber ?? '';
+    if (discNumber !== undefined) tags.partOfSet = discNumber ?? '';
+
+    if (artistsList !== undefined) {
+      const joined = artistsList.join('; ');
+      tags.artist = joined;
+      tags.raw = { ...(tags.raw ?? {}), TPE1: joined };
+    }
+
+    if (albumArtist !== undefined) {
+      tags.performerInfo = albumArtist ?? '';
+      tags.raw = { ...(tags.raw ?? {}), TPE2: albumArtist ?? '' };
+    }
+
+    try {
+      const ok = NodeID3.update(tags, abs);
+      if (ok !== true) {
+        return reply.code(500).send({ ok: false, error: ok instanceof Error ? ok.message : 'Failed to write tags' });
+      }
+    } catch (e: any) {
+      return reply.code(500).send({ ok: false, error: e?.message ?? String(e) });
+    }
+
+    await audit('track_metadata_updated', { trackId: id, by: req.user.userId });
+
+    // Force rescan so DB reflects new tags
+    await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: req.user.userId, force: true }));
+
+    return { ok: true };
   });
 
   app.get('/api/admin/library/scan/status', async (req, reply) => {

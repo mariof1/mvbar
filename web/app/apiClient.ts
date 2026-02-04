@@ -50,6 +50,32 @@ export async function scanStatus(token: string) {
   return (await apiFetch('/admin/library/scan/status', { method: 'GET' }, token)) as { ok: boolean; job: any };
 }
 
+export async function adminLibraryWritable(token: string) {
+  return (await apiFetch('/admin/library/writable', { method: 'GET' }, token)) as {
+    ok: boolean;
+    anyWritable: boolean;
+    writableMounts: string[];
+    libraries: Array<{ id: number; mount_path: string; writable: boolean }>;
+  };
+}
+
+export async function adminUpdateTrackMetadata(
+  token: string,
+  trackId: number,
+  payload: {
+    title?: string | null;
+    artists?: string[] | null;
+    album?: string | null;
+    albumArtist?: string | null;
+    trackNumber?: number | null;
+    discNumber?: number | null;
+    year?: number | null;
+    genre?: string | null;
+  }
+) {
+  return (await apiFetch(`/admin/tracks/${trackId}/metadata`, { method: 'POST', body: JSON.stringify(payload) }, token)) as { ok: boolean };
+}
+
 export async function listLibraries(token: string) {
   const r = (await apiFetch('/admin/libraries', { method: 'GET' }, token)) as {
     ok: boolean;
@@ -308,6 +334,7 @@ export async function browseAlbum(token: string, artist: string | null | undefin
       album: string | null;
       duration_ms: number | null;
       art_path: string | null;
+      path?: string;
       artists: Array<{ id: number; name: string }>;
       discNumber?: number | null;
       trackNumber?: number | null;

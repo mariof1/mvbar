@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  adminLibraryWritable,
+  adminUpdateTrackMetadata,
   browseAlbum,
   browseAlbums,
   browseArtistById,
@@ -34,6 +36,7 @@ type Track = {
   album: string | null;
   duration_ms: number | null;
   art_path?: string | null;
+  path?: string;
   artists?: Array<{ id: number; name: string }>;
   discNumber?: number | null;
   trackNumber?: number | null;
@@ -166,6 +169,7 @@ export function BrowseNew(props: {
   onNavigateArtist?: (artistId: number) => void;
 }) {
   const token = useAuth((s) => s.token);
+  const user = useAuth((s) => s.user);
   const clear = useAuth((s) => s.clear);
   const favIds = useFavorites((s) => s.ids);
   const toggleFav = useFavorites((s) => s.toggle);
@@ -249,6 +253,21 @@ export function BrowseNew(props: {
   const [artistArt, setArtistArt] = useState<{ art_path: string | null; art_hash: string | null } | null>(null);
 
   const [albumDetail, setAlbumDetail] = useState<{ name: string; artist: string; art_path: string | null; tracks: Track[]; totalDiscs: number } | null>(null);
+
+  const [anyWritable, setAnyWritable] = useState(false);
+  const [canEditMeta, setCanEditMeta] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editTrack, setEditTrack] = useState<Track | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editArtists, setEditArtists] = useState('');
+  const [editAlbum, setEditAlbum] = useState('');
+  const [editAlbumArtist, setEditAlbumArtist] = useState('');
+  const [editTrackNumber, setEditTrackNumber] = useState('');
+  const [editDiscNumber, setEditDiscNumber] = useState('');
+  const [editYear, setEditYear] = useState('');
+  const [editGenre, setEditGenre] = useState('');
 
   const [genreTracks, setGenreTracks] = useState<Track[]>([]);
 
@@ -378,6 +397,26 @@ export function BrowseNew(props: {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedFilter]);
+
+
+  useEffect(() => {
+    if (!token || user?.role !== 'admin') {
+      setAnyWritable(false);
+      setCanEditMeta(false);
+      return;
+    }
+    (async () => {
+      try {
+        const r = await adminLibraryWritable(token);
+        setAnyWritable(Boolean(r.anyWritable));
+        setCanEditMeta(Boolean(r.anyWritable));
+      } catch (e: any) {
+        if (e?.status === 401) clear();
+        setAnyWritable(false);
+        setCanEditMeta(false);
+      }
+    })();
+  }, [token, user?.role, clear]);
 
   // Initial load when tab changes
   useEffect(() => {
@@ -558,6 +597,23 @@ export function BrowseNew(props: {
 
   // Album Detail View
   if (albumDetail) {
+    const openEditTrack = (t: Track) => {
+      setEditTrack(t);
+      setEditTitle(t.title ?? '');
+      const a = (t.artists && t.artists.length > 0)
+        ? t.artists.map((x) => x.name).join('\n')
+        : (t.artist ?? '');
+      setEditArtists(a);
+      setEditAlbum(albumDetail.name);
+      setEditAlbumArtist(t.album_artist ?? '');
+      setEditTrackNumber(t.trackNumber ? String(t.trackNumber) : '');
+      setEditDiscNumber(t.discNumber ? String(t.discNumber) : '');
+      setEditYear('');
+      setEditGenre('');
+      setEditError(null);
+      setEditOpen(true);
+    };
+
     return (
       <div className="space-y-6">
         <button onClick={goBack} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors">
@@ -665,6 +721,23 @@ export function BrowseNew(props: {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                       </svg>
                     </button>
+
+                    {canEditMeta && (track.path ?? '').toLowerCase().endsWith('.mp3') && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditTrack(track);
+                        }}
+                        className="p-1.5 sm:p-2 rounded-full hover:bg-slate-700 text-slate-400"
+                        title="Edit metadata (MP3)"
+                      >
+                        <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                      </button>
+                    )}
+
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -683,6 +756,212 @@ export function BrowseNew(props: {
             );
           })}
         </div>
+
+        {editOpen && editTrack && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={() => {
+              if (editSaving) return;
+              setEditOpen(false);
+            }}
+          >
+            <div
+              className="bg-slate-800 border border-slate-700 rounded-xl p-5 w-full max-w-xl shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold text-white truncate">Edit metadata</h3>
+                  <p className="text-sm text-slate-400 truncate">{editTrack.title || 'Untitled'}</p>
+                </div>
+                <button
+                  className="p-2 rounded-lg hover:bg-slate-700 text-slate-300"
+                  onClick={() => {
+                    if (editSaving) return;
+                    setEditOpen(false);
+                  }}
+                  aria-label="Close"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {editError && (
+                <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+                  {editError}
+                </div>
+              )}
+
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className="text-sm text-slate-300">
+                  Title
+                  <input
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Track title"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300">
+                  Genre
+                  <input
+                    value={editGenre}
+                    onChange={(e) => setEditGenre(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Genre"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300 sm:col-span-2">
+                  Artists (one per line)
+                  <textarea
+                    value={editArtists}
+                    onChange={(e) => setEditArtists(e.target.value)}
+                    rows={3}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Artist 1\nArtist 2"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300 sm:col-span-2">
+                  Album
+                  <input
+                    value={editAlbum}
+                    onChange={(e) => setEditAlbum(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Album"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300 sm:col-span-2">
+                  Album Artist
+                  <input
+                    value={editAlbumArtist}
+                    onChange={(e) => setEditAlbumArtist(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Album artist"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300">
+                  Track #
+                  <input
+                    inputMode="numeric"
+                    value={editTrackNumber}
+                    onChange={(e) => setEditTrackNumber(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="1"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300">
+                  Disc #
+                  <input
+                    inputMode="numeric"
+                    value={editDiscNumber}
+                    onChange={(e) => setEditDiscNumber(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="1"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300">
+                  Year
+                  <input
+                    inputMode="numeric"
+                    value={editYear}
+                    onChange={(e) => setEditYear(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="2025"
+                  />
+                </label>
+
+                <div className="text-xs text-slate-500 sm:col-span-1 flex items-end">
+                  MP3 only (writes ID3 tags) · forces a rescan
+                </div>
+              </div>
+
+              <div className="mt-5 flex gap-3 justify-end">
+                <button
+                  onClick={() => {
+                    if (editSaving) return;
+                    setEditOpen(false);
+                  }}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={editSaving}
+                  onClick={async () => {
+                    if (!token || !editTrack) return;
+                    setEditSaving(true);
+                    setEditError(null);
+                    try {
+                      const toNull = (s: string) => {
+                        const v = s.trim();
+                        return v === '' ? null : v;
+                      };
+                      const toNumOrNull = (s: string) => {
+                        const v = s.trim();
+                        if (!v) return null;
+                        const n = Number(v);
+                        return Number.isFinite(n) ? n : null;
+                      };
+                      const artists = editArtists
+                        .split(/\r?\n/)
+                        .map((x) => x.trim())
+                        .filter(Boolean);
+
+                      await adminUpdateTrackMetadata(token, editTrack.id, {
+                        title: toNull(editTitle),
+                        artists,
+                        album: toNull(editAlbum),
+                        albumArtist: toNull(editAlbumArtist),
+                        trackNumber: toNumOrNull(editTrackNumber),
+                        discNumber: toNumOrNull(editDiscNumber),
+                        year: toNumOrNull(editYear),
+                        genre: toNull(editGenre),
+                      });
+
+                      // If album name changed, navigate to the new album route.
+                      const newAlbum = editAlbum.trim();
+                      if (newAlbum && newAlbum !== albumDetail.name) {
+                        navigate({ type: 'browse-album', artist: '', album: newAlbum, artistId: undefined });
+                      }
+
+                      // Best-effort refresh (rescan can take a moment)
+                      await new Promise((r) => setTimeout(r, 1500));
+                      if (selectedAlbum) {
+                        const r = await browseAlbum(token, selectedAlbum.artist, selectedAlbum.album, selectedAlbum.artistId);
+                        setAlbumDetail({
+                          name: r.album.name,
+                          artist: r.album.artist,
+                          art_path: r.album.art_path,
+                          tracks: r.tracks,
+                          totalDiscs: r.album.total_discs ?? 1,
+                        });
+                      }
+
+                      setEditOpen(false);
+                    } catch (e: any) {
+                      if (e?.status === 401) clear();
+                      setEditError(e?.data?.error || e?.data?.message || e?.message || 'Failed to save');
+                    } finally {
+                      setEditSaving(false);
+                    }
+                  }}
+                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium disabled:opacity-60"
+                >
+                  {editSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

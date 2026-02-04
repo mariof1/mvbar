@@ -18,6 +18,7 @@
     "google-auth-library": "^9.14.0",
     "ioredis": "^5.9.2",
     "meilisearch": "^0.55.0",
+    "node-id3": "^0.2.9",
     "pg": "^8.13.1",
     "pino-pretty": "^13.1.3"
   },
