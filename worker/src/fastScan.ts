@@ -250,7 +250,7 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       const artistsToInsert: { name: string; role: string; position: number }[] = [];
       const sanitize = (s: string) => s.replace(/\0/g, '');
       const norm = (s: string) => sanitize(s).trim();
-      const isAllQuestionMarks = (s: string) => /^\?+$/.test(s);
+      const isAllQuestionMarks = (s: string) => /^[?\s]+$/.test(s);
       const folderArtistGuess = (() => {
         // Try to guess artist from folder name for files like "Мэвл/..." when tags decode to "????".
         const first = (track.path.split(/[\\/]/).filter(Boolean)[0] ?? '').trim();
@@ -493,7 +493,7 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
        from tracks t
        join track_artists ta on ta.track_id = t.id
        join artists a on a.id = ta.artist_id
-       where t.library_id = $1 and t.deleted_at is null and a.name ~ '^[?]+$'`,
+       where t.library_id = $1 and t.deleted_at is null and a.name ~ '^[?[:space:]]+$'`,
       [libraryId]
     );
     for (const r of bad.rows) badArtistPaths.add(r.path);

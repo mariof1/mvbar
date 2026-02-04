@@ -141,7 +141,8 @@ function sendResponse(reply: FastifyReply, data: SubsonicResponse, format: strin
   if (format === 'json' || format === 'jsonp') {
     reply.type('application/json').send(data);
   } else {
-    reply.type('application/xml').send(toXml(data));
+    // Some Subsonic clients mis-decode UTF-8 unless charset is explicit.
+    reply.header('content-type', 'application/xml; charset=utf-8').send(toXml(data));
   }
 }
 
