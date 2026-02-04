@@ -611,15 +611,20 @@ export function BrowseNew(props: {
         : (t.artist ?? '');
       setEditArtists(a);
       setEditAlbum(albumDetail.name);
-      setEditAlbumArtist(t.album_artist ?? '');
+      const aa = (t.album_artist ?? '')
+        .split(/(?:\s*;\s*|\0|\uFEFF|\r?\n)+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .join('\n');
+      setEditAlbumArtist(aa);
       setEditTrackNumber(t.trackNumber ? String(t.trackNumber) : '');
       setEditDiscNumber(t.discNumber ? String(t.discNumber) : '');
       setEditYear(t.year ? String(t.year) : '');
       const g = (t.genre ?? '').split(';').map((x) => x.trim()).filter(Boolean).join('\n');
       setEditGenre(g);
-      const c = (t.country ?? '').split(';').map((x) => x.trim()).filter(Boolean).join('\n');
+      const c = (t.country ?? '').split(/[;\0\uFEFF]/).map((x) => x.trim()).filter(Boolean).join('\n');
       setEditCountry(c);
-      const l = (t.language ?? '').split(';').map((x) => x.trim()).filter(Boolean).join('\n');
+      const l = (t.language ?? '').split(/[;\0\uFEFF]/).map((x) => x.trim()).filter(Boolean).join('\n');
       setEditLanguage(l);
       setEditError(null);
       setEditOpen(true);
@@ -871,10 +876,11 @@ export function BrowseNew(props: {
                 </label>
 
                 <label className="text-sm text-slate-300 sm:col-span-2">
-                  Album Artist
-                  <input
+                  Album Artists (one per line)
+                  <textarea
                     value={editAlbumArtist}
                     onChange={(e) => setEditAlbumArtist(e.target.value)}
+                    rows={3}
                     className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
                     placeholder="Album artist"
                   />
@@ -962,11 +968,16 @@ export function BrowseNew(props: {
                         .map((x) => x.trim())
                         .filter(Boolean);
 
+                      const albumArtists = editAlbumArtist
+                        .split(/\r?\n/)
+                        .map((x) => x.trim())
+                        .filter(Boolean);
+
                       await adminUpdateTrackMetadata(token, editTrack.id, {
                         title: toNull(editTitle),
                         artists,
                         album: toNull(editAlbum),
-                        albumArtist: toNull(editAlbumArtist),
+                        albumArtist: albumArtists.length ? albumArtists.join('; ') : null,
                         trackNumber: toNumOrNull(editTrackNumber),
                         discNumber: toNumOrNull(editDiscNumber),
                         year: toNumOrNull(editYear),

@@ -50,7 +50,7 @@ export async function readTags(filePath) {
     const title = sanitize(m.common.title);
     const artist = sanitize(m.common.artist);
     const album = sanitize(m.common.album);
-    const albumartist = sanitize(m.common.albumartist);
+    let albumartist = sanitize(m.common.albumartist);
     let durationMs = m.format.duration ? Math.round(m.format.duration * 1000) : null;
     if (!durationMs && needDuration)
         durationMs = await ffprobeDurationMs(filePath);
@@ -138,6 +138,9 @@ export async function readTags(filePath) {
         const out = dedupeCI(albumArtistCandidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
         return out.filter((a, i) => !out.some((b, j) => j !== i && b.startsWith(a) && b.length > a.length));
     })();
+    // Standardize album artist string for display/filtering (e.g. handle "A\0\uFEFFB\0\uFEFFC")
+    if (albumartists.length)
+        albumartist = albumartists.join('; ');
     return { title, artist, album, albumartist, genre, country, language, year, durationMs, artMime, artData, artists, albumartists, trackNumber, trackTotal, discNumber, discTotal };
 }
 /**

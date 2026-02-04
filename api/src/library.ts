@@ -154,7 +154,9 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   app.post('/api/admin/library/rescan', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
     const qs = req.query as { force?: string };
-    const force = qs.force === 'true';
+    const forceQs = qs.force === 'true';
+    const forceBody = Boolean((req.body as any)?.force);
+    const force = forceQs || forceBody;
     await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: req.user.userId, force }));
     await audit('rescan_triggered', { by: req.user.userId, force });
     return { ok: true, message: force ? 'Force full scan triggered' : 'Rescan triggered' };
