@@ -1,7 +1,8 @@
 export function sanitize(str) {
     if (!str)
         return null;
-    return str.replace(/\0/g, '');
+    // Normalize to avoid duplicate DB rows from NFC/NFD differences.
+    return str.replace(/\0/g, '').normalize('NFC');
 }
 function normalizeToken(s) {
     const v = sanitize(s) ?? '';

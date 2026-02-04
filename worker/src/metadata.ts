@@ -106,19 +106,45 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const artMime = pic ? mimeFromFormat(pic.format) : null;
   const artData = pic && artMime ? pic.data : null;
 
-  const dedupeCI = (items: string[]) => {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const it of items) {
-      const s = sanitize(it);
-      if (!s) continue;
-      const key = s.trim().toLowerCase();
-      if (!key) continue;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(s.trim());
+  const foldKey = (v: string) => {
+    const s = (sanitize(v) ?? '').trim().replace(/\s+/g, ' ');
+    if (!s) return '';
+    // Make dedupe accent-insensitive (prefer the diacritic form when variants exist).
+    const nkfd = s.normalize('NFKD');
+    let out = '';
+    for (const ch of nkfd) {
+      if (ch === 'ł' || ch === 'Ł') {
+        out += 'l';
+        continue;
+      }
+      if (/[\p{Mark}]/u.test(ch)) continue;
+      out += ch;
     }
-    return out;
+    return out.trim().replace(/\s+/g, ' ').toLowerCase();
+  };
+
+  const scoreVariant = (s: string) => {
+    const nonAscii = [...s].filter((ch) => ch.charCodeAt(0) > 127).length;
+    return [nonAscii, s.length] as const;
+  };
+
+  const dedupeFold = (items: string[]) => {
+    const best = new Map<string, string>();
+    for (const it of items) {
+      const s = (sanitize(it) ?? '').trim().replace(/\s+/g, ' ');
+      if (!s) continue;
+      const k = foldKey(s);
+      if (!k) continue;
+      const cur = best.get(k);
+      if (!cur) {
+        best.set(k, s);
+        continue;
+      }
+      const [na, la] = scoreVariant(s);
+      const [nb, lb] = scoreVariant(cur);
+      if (na > nb || (na === nb && la > lb)) best.set(k, s);
+    }
+    return [...best.values()];
   };
 
   // Merge artists from *all* relevant sources (common + native), then split and dedupe.
@@ -148,8 +174,8 @@ export async function readTags(filePath: string): Promise<TagResult> {
     ])
   );
 
-  const artists = (() => {
-    const out = dedupeCI(candidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
+  let artists = (() => {
+    const out = dedupeFold(candidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
 
     // music-metadata can expose both a full artist string (e.g. from ID3v2) and
     // a truncated legacy value (e.g. ID3v1 30-char limit) as separate entries.
@@ -168,10 +194,27 @@ export async function readTags(filePath: string): Promise<TagResult> {
     ...nativeValues(m, ['tpe2', 'albumartist', 'album artist', 'album_artist', 'albumartists'])
   );
 
-  const albumartists = (() => {
-    const out = dedupeCI(albumArtistCandidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
+  let albumartists = (() => {
+    const out = dedupeFold(albumArtistCandidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
     return out.filter((a, i) => !out.some((b, j) => j !== i && b.startsWith(a) && b.length > a.length));
   })();
+
+  // Canonicalize across artist+albumartist so accent-variants map to the same DB artist row.
+  const canonByKey = new Map<string, string>();
+  for (const v of [...artists, ...albumartists]) {
+    const k = foldKey(v);
+    if (!k) continue;
+    const cur = canonByKey.get(k);
+    if (!cur) canonByKey.set(k, v);
+    else {
+      const [na, la] = scoreVariant(v);
+      const [nb, lb] = scoreVariant(cur);
+      if (na > nb || (na === nb && la > lb)) canonByKey.set(k, v);
+    }
+  }
+  const canon = (v: string) => canonByKey.get(foldKey(v)) ?? v;
+  artists = dedupeFold(artists.map(canon));
+  albumartists = dedupeFold(albumartists.map(canon));
 
   // Standardize album artist string for display/filtering (e.g. handle "A\0\uFEFFB\0\uFEFFC")
   if (albumartists.length) albumartist = albumartists.join('; ');
