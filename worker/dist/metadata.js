@@ -118,7 +118,15 @@ export async function readTags(filePath) {
         'composer',
         'composers'
     ]));
-    const artists = dedupeCI(candidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
+    const artists = (() => {
+        const out = dedupeCI(candidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
+        // music-metadata can expose both a full artist string (e.g. from ID3v2) and
+        // a truncated legacy value (e.g. ID3v1 30-char limit) as separate entries.
+        // If we keep both, we end up with duplicates like:
+        //   "A, B, C" and "A, B, C..." which breaks artist merging.
+        // Prefer the longer string when one is a strict prefix of another.
+        return out.filter((a, i) => !out.some((b, j) => j !== i && b.startsWith(a) && b.length > a.length));
+    })();
     const albumArtistCandidates = [];
     if (m.common.albumartist)
         albumArtistCandidates.push(m.common.albumartist);
@@ -126,7 +134,10 @@ export async function readTags(filePath) {
     if (Array.isArray(commonAny2.albumartists))
         albumArtistCandidates.push(...commonAny2.albumartists);
     albumArtistCandidates.push(...nativeValues(m, ['tpe2', 'albumartist', 'album artist', 'album_artist', 'albumartists']));
-    const albumartists = dedupeCI(albumArtistCandidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
+    const albumartists = (() => {
+        const out = dedupeCI(albumArtistCandidates.flatMap((v) => splitArtistValue(String(v ?? ''))));
+        return out.filter((a, i) => !out.some((b, j) => j !== i && b.startsWith(a) && b.length > a.length));
+    })();
     return { title, artist, album, albumartist, genre, country, language, year, durationMs, artMime, artData, artists, albumartists, trackNumber, trackTotal, discNumber, discTotal };
 }
 /**
