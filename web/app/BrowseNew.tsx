@@ -275,6 +275,19 @@ export function BrowseNew(props: {
   const [editCountry, setEditCountry] = useState('');
   const [editLanguage, setEditLanguage] = useState('');
 
+  const [editInitial, setEditInitial] = useState<{
+    title: string;
+    artists: string;
+    album: string;
+    albumArtist: string;
+    trackNumber: string;
+    discNumber: string;
+    year: string;
+    genre: string;
+    country: string;
+    language: string;
+  } | null>(null);
+
   const [genreTracks, setGenreTracks] = useState<Track[]>([]);
 
   const [countryTracks, setCountryTracks] = useState<Track[]>([]);
@@ -612,7 +625,7 @@ export function BrowseNew(props: {
       setEditArtists(a);
       setEditAlbum(albumDetail.name);
       const aa = (t.album_artist ?? '')
-        .split(/(?:\s*;\s*|\0|\uFEFF|\r?\n)+/)
+        .split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/)
         .map((x) => x.trim())
         .filter(Boolean)
         .join('\n');
@@ -634,6 +647,18 @@ export function BrowseNew(props: {
         .filter(Boolean)
         .join('\n');
       setEditLanguage(l);
+      setEditInitial({
+        title: t.title ?? '',
+        artists: a,
+        album: albumDetail.name,
+        albumArtist: aa,
+        trackNumber: t.trackNumber ? String(t.trackNumber) : '',
+        discNumber: t.discNumber ? String(t.discNumber) : '',
+        year: t.year ? String(t.year) : '',
+        genre: g,
+        country: c,
+        language: l,
+      });
       setEditError(null);
       setEditOpen(true);
     };
@@ -787,6 +812,7 @@ export function BrowseNew(props: {
             onClick={() => {
               if (editSaving) return;
               setEditOpen(false);
+              setEditInitial(null);
             }}
           >
             <div
@@ -803,6 +829,7 @@ export function BrowseNew(props: {
                   onClick={() => {
                     if (editSaving) return;
                     setEditOpen(false);
+                    setEditInitial(null);
                   }}
                   aria-label="Close"
                 >
@@ -937,6 +964,7 @@ export function BrowseNew(props: {
                   onClick={() => {
                     if (editSaving) return;
                     setEditOpen(false);
+                    setEditInitial(null);
                   }}
                   className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
                 >
@@ -959,40 +987,66 @@ export function BrowseNew(props: {
                         const n = Number(v);
                         return Number.isFinite(n) ? n : null;
                       };
-                      const artists = editArtists
-                        .split(/\r?\n/)
-                        .map((x) => x.trim())
-                        .filter(Boolean);
-                      const genres = editGenre
-                        .split(/\r?\n/)
-                        .map((x) => x.trim())
-                        .filter(Boolean);
-                      const countries = editCountry
-                        .split(/\r?\n/)
-                        .map((x) => x.trim())
-                        .filter(Boolean);
-                      const languages = editLanguage
-                        .split(/\\n|\r?\n/)
-                        .map((x) => x.trim())
-                        .filter(Boolean);
+                      const normLines = (s: string, splitRe: RegExp = /\r?\n/) =>
+                        s
+                          .split(splitRe)
+                          .map((x) => x.trim())
+                          .filter(Boolean);
+                      const canonLines = (s: string, splitRe?: RegExp) => normLines(s, splitRe).join('\n');
+                      const joinMulti = (lines: string[]) => lines.join('\u0000');
 
-                      const albumArtists = editAlbumArtist
-                        .split(/\r?\n/)
-                        .map((x) => x.trim())
-                        .filter(Boolean);
+                      const artists = normLines(editArtists);
+                      const genres = normLines(editGenre);
+                      const countries = normLines(editCountry, /\\n|\r?\n/);
+                      const languages = normLines(editLanguage, /\\n|\r?\n/);
+                      const albumArtists = normLines(editAlbumArtist);
 
-                      await adminUpdateTrackMetadata(token, editTrack.id, {
-                        title: toNull(editTitle),
-                        artists,
-                        album: toNull(editAlbum),
-                        albumArtist: albumArtists.length ? albumArtists.join('; ') : null,
-                        trackNumber: toNumOrNull(editTrackNumber),
-                        discNumber: toNumOrNull(editDiscNumber),
-                        year: toNumOrNull(editYear),
-                        genre: genres.length ? genres.join('; ') : null,
-                        country: countries.length ? countries.join('; ') : null,
-                        language: languages.length ? languages.join('; ') : null,
-                      });
+                      const init = editInitial ?? {
+                        title: editTitle,
+                        artists: canonLines(editArtists),
+                        album: editAlbum,
+                        albumArtist: canonLines(editAlbumArtist),
+                        trackNumber: editTrackNumber.trim(),
+                        discNumber: editDiscNumber.trim(),
+                        year: editYear.trim(),
+                        genre: canonLines(editGenre),
+                        country: canonLines(editCountry, /\\n|\r?\n/),
+                        language: canonLines(editLanguage, /\\n|\r?\n/),
+                      };
+
+                      const cur = {
+                        title: editTitle,
+                        artists: canonLines(editArtists),
+                        album: editAlbum,
+                        albumArtist: canonLines(editAlbumArtist),
+                        trackNumber: editTrackNumber.trim(),
+                        discNumber: editDiscNumber.trim(),
+                        year: editYear.trim(),
+                        genre: canonLines(editGenre),
+                        country: canonLines(editCountry, /\\n|\r?\n/),
+                        language: canonLines(editLanguage, /\\n|\r?\n/),
+                      };
+
+                      const payload: any = {};
+                      if (cur.title !== init.title) payload.title = toNull(editTitle);
+                      if (cur.album !== init.album) payload.album = toNull(editAlbum);
+                      if (cur.trackNumber !== init.trackNumber) payload.trackNumber = toNumOrNull(editTrackNumber);
+                      if (cur.discNumber !== init.discNumber) payload.discNumber = toNumOrNull(editDiscNumber);
+                      if (cur.year !== init.year) payload.year = toNumOrNull(editYear);
+
+                      if (cur.artists !== init.artists) payload.artists = artists;
+                      if (cur.albumArtist !== init.albumArtist) payload.albumArtist = albumArtists.length ? joinMulti(albumArtists) : null;
+                      if (cur.genre !== init.genre) payload.genre = genres.length ? joinMulti(genres) : null;
+                      if (cur.country !== init.country) payload.country = countries.length ? joinMulti(countries) : null;
+                      if (cur.language !== init.language) payload.language = languages.length ? joinMulti(languages) : null;
+
+                      if (Object.keys(payload).length === 0) {
+                        setEditOpen(false);
+                        setEditInitial(null);
+                        return;
+                      }
+
+                      await adminUpdateTrackMetadata(token, editTrack.id, payload);
 
                       // If album name changed, navigate to the new album route.
                       const newAlbum = editAlbum.trim();
@@ -1014,6 +1068,7 @@ export function BrowseNew(props: {
                       }
 
                       setEditOpen(false);
+                      setEditInitial(null);
                     } catch (e: any) {
                       if (e?.status === 401) clear();
                       setEditError(e?.data?.error || e?.data?.message || e?.message || 'Failed to save');

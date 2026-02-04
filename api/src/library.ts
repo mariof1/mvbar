@@ -5,14 +5,221 @@ import * as scans from './scanRepo.js';
 import { allowedLibrariesForUser } from './access.js';
 import { store } from './store.js';
 import { access, constants } from 'node:fs/promises';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import NodeID3 from 'node-id3';
 
 function safeJoinMount(mountPath: string, relPath: string) {
   const abs = path.resolve(mountPath, relPath);
   const base = path.resolve(mountPath);
   if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
   return abs;
+}
+
+type Id3Frame = { id: string; raw: Buffer; txxxDescription?: string };
+
+function decodeSyncSafeInt(buf: Buffer) {
+  // 4 bytes, 7 bits each
+  return ((buf[0] & 0x7f) << 21) | ((buf[1] & 0x7f) << 14) | ((buf[2] & 0x7f) << 7) | (buf[3] & 0x7f);
+}
+
+function encodeSyncSafeInt(n: number) {
+  return Buffer.from([(n >> 21) & 0x7f, (n >> 14) & 0x7f, (n >> 7) & 0x7f, n & 0x7f]);
+}
+
+function encodeUtf16WithBom(s: string) {
+  return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(s, 'utf16le')]);
+}
+
+function decodeText(buf: Buffer, encodingByte: number) {
+  if (!buf.length) return '';
+  if (encodingByte === 0x01 || encodingByte === 0x02) {
+    // UTF-16 with/without BOM (best-effort)
+    if (buf.length >= 2) {
+      const b0 = buf[0];
+      const b1 = buf[1];
+      if (b0 === 0xff && b1 === 0xfe) return buf.subarray(2).toString('utf16le');
+      if (b0 === 0xfe && b1 === 0xff) {
+        const swapped = Buffer.alloc(buf.length - 2);
+        for (let i = 2; i + 1 < buf.length; i += 2) {
+          swapped[i - 2] = buf[i + 1];
+          swapped[i - 1] = buf[i];
+        }
+        return swapped.toString('utf16le');
+      }
+    }
+    // Assume LE
+    return buf.toString('utf16le');
+  }
+  if (encodingByte === 0x03) return buf.toString('utf8');
+  return buf.toString('latin1');
+}
+
+function parseTxxxDescription(frameData: Buffer) {
+  if (!frameData.length) return undefined;
+  const enc = frameData[0] ?? 0x00;
+  const charSize = enc === 0x01 || enc === 0x02 ? 2 : 1;
+  let pos = 1;
+  for (; pos + charSize - 1 < frameData.length; pos += charSize) {
+    let isTerm = true;
+    for (let j = 0; j < charSize; j++) if (frameData[pos + j] !== 0x00) isTerm = false;
+    if (isTerm) break;
+  }
+  const descBuf = frameData.subarray(1, pos);
+  return decodeText(descBuf, enc).replace(/\0/g, '').trim() || undefined;
+}
+
+function parseId3Frames(file: Buffer): { frames: Id3Frame[]; audioOffset: number } {
+  if (file.length < 10 || file.toString('ascii', 0, 3) !== 'ID3') return { frames: [], audioOffset: 0 };
+
+  const version = file[3] ?? 3;
+  const flags = file[5] ?? 0;
+  const tagSize = decodeSyncSafeInt(file.subarray(6, 10));
+  const tagEnd = Math.min(file.length, 10 + tagSize);
+  let body = file.subarray(10, tagEnd);
+
+  // Skip extended header if present.
+  const hasExtended = (flags & 0x40) !== 0;
+  if (hasExtended && body.length >= 4) {
+    const extSize = version === 4 ? decodeSyncSafeInt(body.subarray(0, 4)) : body.readUInt32BE(0);
+    const extTotal = version === 4 ? extSize : extSize + 4;
+    if (extTotal > 0 && extTotal <= body.length) body = body.subarray(extTotal);
+  }
+
+  const frames: Id3Frame[] = [];
+  let pos = 0;
+  while (pos + 10 <= body.length) {
+    const id = body.toString('ascii', pos, pos + 4);
+    if (!id || /^\0{4}$/.test(id) || id.trim() === '') break;
+
+    const sizeBytes = body.subarray(pos + 4, pos + 8);
+    const size = version === 4 ? decodeSyncSafeInt(sizeBytes) : sizeBytes.readUInt32BE(0);
+    const end = pos + 10 + size;
+    if (size < 0 || end > body.length) break;
+
+    const raw = body.subarray(pos, end);
+    const data = body.subarray(pos + 10, end);
+    const f: Id3Frame = { id, raw };
+    if (id === 'TXXX') f.txxxDescription = parseTxxxDescription(data);
+    frames.push(f);
+    pos = end;
+  }
+
+  return { frames, audioOffset: tagEnd };
+}
+
+function buildTextFrame(id: string, value: string) {
+  const text = encodeUtf16WithBom(value);
+  const body = Buffer.concat([Buffer.from([0x01]), text]);
+  const header = Buffer.alloc(10);
+  header.write(id, 0, 4, 'ascii');
+  header.writeUInt32BE(body.length, 4);
+  header.writeUInt16BE(0, 8);
+  return Buffer.concat([header, body]);
+}
+
+function buildTxxxFrame(description: string, value: string) {
+  const desc = encodeUtf16WithBom(description);
+  const val = encodeUtf16WithBom(value);
+  const body = Buffer.concat([Buffer.from([0x01]), desc, Buffer.from([0x00, 0x00]), val]);
+  const header = Buffer.alloc(10);
+  header.write('TXXX', 0, 4, 'ascii');
+  header.writeUInt32BE(body.length, 4);
+  header.writeUInt16BE(0, 8);
+  return Buffer.concat([header, body]);
+}
+
+function updateId3Tag(absPath: string, opts: {
+  title?: string | null;
+  album?: string | null;
+  genre?: string[] | null;
+  artists?: string[] | null;
+  albumArtist?: string[] | null;
+  year?: number | null;
+  trackNumber?: number | null;
+  discNumber?: number | null;
+  country?: string[] | null;
+  language?: string[] | null;
+}) {
+  const file = readFileSync(absPath);
+  const parsed = parseId3Frames(file);
+
+  const removeIds = new Set<string>();
+  const removeTxxx = new Set<string>();
+
+  if (opts.title !== undefined) removeIds.add('TIT2');
+  if (opts.album !== undefined) removeIds.add('TALB');
+  if (opts.genre !== undefined) removeIds.add('TCON');
+  if (opts.artists !== undefined) {
+    removeIds.add('TPE1');
+    removeTxxx.add('artists');
+  }
+  if (opts.albumArtist !== undefined) removeIds.add('TPE2');
+  if (opts.year !== undefined) {
+    removeIds.add('TYER');
+    removeIds.add('TDRC');
+  }
+  if (opts.trackNumber !== undefined) removeIds.add('TRCK');
+  if (opts.discNumber !== undefined) removeIds.add('TPOS');
+  if (opts.language !== undefined) {
+    removeIds.add('TLAN');
+    removeTxxx.add('language');
+  }
+  if (opts.country !== undefined) removeTxxx.add('country');
+
+  const kept = parsed.frames.filter((f) => {
+    if (removeIds.has(f.id)) return false;
+    if (f.id === 'TXXX' && f.txxxDescription) {
+      const key = f.txxxDescription.trim().toLowerCase();
+      if (removeTxxx.has(key)) return false;
+    }
+    return true;
+  });
+
+  const added: Buffer[] = [];
+  const addManyText = (id: string, parts: string[] | null | undefined) => {
+    if (parts === undefined) return;
+    for (const p of parts ?? []) added.push(buildTextFrame(id, p));
+  };
+  const addOneText = (id: string, v: string | null | undefined) => {
+    if (v === undefined || v === null) return;
+    added.push(buildTextFrame(id, v));
+  };
+
+  if (opts.title !== undefined) addOneText('TIT2', opts.title);
+  if (opts.album !== undefined) addOneText('TALB', opts.album);
+  if (opts.genre !== undefined) addManyText('TCON', opts.genre);
+  if (opts.artists !== undefined) {
+    addManyText('TPE1', opts.artists);
+    for (const a of opts.artists ?? []) added.push(buildTxxxFrame('ARTISTS', a));
+  }
+  if (opts.albumArtist !== undefined) addManyText('TPE2', opts.albumArtist);
+  if (opts.year !== undefined && opts.year !== null) addOneText('TYER', String(opts.year));
+  if (opts.trackNumber !== undefined && opts.trackNumber !== null) addOneText('TRCK', String(opts.trackNumber));
+  if (opts.discNumber !== undefined && opts.discNumber !== null) addOneText('TPOS', String(opts.discNumber));
+  if (opts.country !== undefined) {
+    for (const c of opts.country ?? []) added.push(buildTxxxFrame('Country', c));
+  }
+  if (opts.language !== undefined) {
+    addManyText('TLAN', opts.language);
+    for (const l of opts.language ?? []) added.push(buildTxxxFrame('Language', l));
+  }
+
+  const framesBuf = Buffer.concat([...kept.map((f) => f.raw), ...added]);
+  if (framesBuf.length === 0) {
+    // Remove ID3 tag entirely.
+    writeFileSync(absPath, file.subarray(parsed.audioOffset));
+    return;
+  }
+
+  const header = Buffer.alloc(10);
+  header.write('ID3', 0, 3, 'ascii');
+  header[3] = 0x03;
+  header[4] = 0x00;
+  header[5] = 0x00;
+  encodeSyncSafeInt(framesBuf.length).copy(header, 6);
+
+  const out = Buffer.concat([header, framesBuf, file.subarray(parsed.audioOffset)]);
+  writeFileSync(absPath, out);
 }
 
 export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
@@ -244,6 +451,20 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     const genre = normStr(body.genre);
     const country = normStr(body.country);
     const language = normStr(body.language);
+
+    const multiParts = (s: string | null | undefined) => {
+      if (s === undefined) return undefined;
+      if (s === null) return null;
+      return String(s)
+        // Support both our preferred NUL-separated encoding and legacy/newline payloads.
+        .split(/(?:\u0000|\\n|\r?\n)+/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+    };
+
+    const genreParts = multiParts(genre);
+    const countryParts = multiParts(country);
+    const languageParts = multiParts(language);
     const year = normNum(body.year);
     const trackNumber = normNum(body.trackNumber);
     const discNumber = normNum(body.discNumber);
@@ -254,38 +475,29 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
           .map((x) => String(x ?? '').trim())
           .filter(Boolean);
 
-    const tags: Record<string, any> = {};
-    if (title !== undefined) tags.title = title ?? '';
-    if (album !== undefined) tags.album = album ?? '';
-    if (genre !== undefined) tags.genre = genre ?? '';
+    const updateOpts: Parameters<typeof updateId3Tag>[1] = {};
 
-    if (country !== undefined || language !== undefined) {
-      const txxx: Array<{ description: string; value: string }> = [];
-      if (country !== undefined) txxx.push({ description: 'Country', value: country ?? '' });
-      if (language !== undefined) txxx.push({ description: 'Language', value: language ?? '' });
-      tags.TXXX = txxx;
-    }
+    if (title !== undefined) updateOpts.title = title;
+    if (album !== undefined) updateOpts.album = album;
 
-    if (year !== undefined) tags.year = year ?? '';
-    if (trackNumber !== undefined) tags.trackNumber = trackNumber ?? '';
-    if (discNumber !== undefined) tags.partOfSet = discNumber ?? '';
+    if (genre !== undefined) updateOpts.genre = genreParts === null ? null : (genreParts ?? []);
 
-    if (artistsList !== undefined) {
-      const joined = artistsList.join('; ');
-      tags.artist = joined;
-      tags.raw = { ...(tags.raw ?? {}), TPE1: joined };
-    }
+    if (artistsList !== undefined) updateOpts.artists = artistsList;
 
     if (albumArtist !== undefined) {
-      tags.performerInfo = albumArtist ?? '';
-      tags.raw = { ...(tags.raw ?? {}), TPE2: albumArtist ?? '' };
+      const aaParts = multiParts(albumArtist);
+      updateOpts.albumArtist = aaParts === null ? null : (aaParts ?? []);
     }
 
+    if (year !== undefined) updateOpts.year = year;
+    if (trackNumber !== undefined) updateOpts.trackNumber = trackNumber;
+    if (discNumber !== undefined) updateOpts.discNumber = discNumber;
+
+    if (country !== undefined) updateOpts.country = countryParts === null ? null : (countryParts ?? []);
+    if (language !== undefined) updateOpts.language = languageParts === null ? null : (languageParts ?? []);
+
     try {
-      const ok = NodeID3.update(tags, abs);
-      if (ok !== true) {
-        return reply.code(500).send({ ok: false, error: ok instanceof Error ? ok.message : 'Failed to write tags' });
-      }
+      updateId3Tag(abs, updateOpts);
     } catch (e: any) {
       return reply.code(500).send({ ok: false, error: e?.message ?? String(e) });
     }
