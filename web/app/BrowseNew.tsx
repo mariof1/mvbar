@@ -37,6 +37,8 @@ type Track = {
   duration_ms: number | null;
   art_path?: string | null;
   path?: string;
+  genre?: string | null;
+  year?: number | null;
   artists?: Array<{ id: number; name: string }>;
   discNumber?: number | null;
   trackNumber?: number | null;
@@ -608,8 +610,9 @@ export function BrowseNew(props: {
       setEditAlbumArtist(t.album_artist ?? '');
       setEditTrackNumber(t.trackNumber ? String(t.trackNumber) : '');
       setEditDiscNumber(t.discNumber ? String(t.discNumber) : '');
-      setEditYear('');
-      setEditGenre('');
+      setEditYear(t.year ? String(t.year) : '');
+      const g = (t.genre ?? '').split(';').map((x) => x.trim()).filter(Boolean).join('\n');
+      setEditGenre(g);
       setEditError(null);
       setEditOpen(true);
     };
@@ -805,13 +808,14 @@ export function BrowseNew(props: {
                   />
                 </label>
 
-                <label className="text-sm text-slate-300">
-                  Genre
-                  <input
+                <label className="text-sm text-slate-300 sm:col-span-2">
+                  Genres (one per line)
+                  <textarea
                     value={editGenre}
                     onChange={(e) => setEditGenre(e.target.value)}
+                    rows={3}
                     className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                    placeholder="Genre"
+                    placeholder="Rock\nAlternative"
                   />
                 </label>
 
@@ -915,6 +919,10 @@ export function BrowseNew(props: {
                         .split(/\r?\n/)
                         .map((x) => x.trim())
                         .filter(Boolean);
+                      const genres = editGenre
+                        .split(/\r?\n/)
+                        .map((x) => x.trim())
+                        .filter(Boolean);
 
                       await adminUpdateTrackMetadata(token, editTrack.id, {
                         title: toNull(editTitle),
@@ -924,7 +932,7 @@ export function BrowseNew(props: {
                         trackNumber: toNumOrNull(editTrackNumber),
                         discNumber: toNumOrNull(editDiscNumber),
                         year: toNumOrNull(editYear),
-                        genre: toNull(editGenre),
+                        genre: genres.length ? genres.join('; ') : null,
                       });
 
                       // If album name changed, navigate to the new album route.

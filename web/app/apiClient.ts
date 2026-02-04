@@ -335,6 +335,8 @@ export async function browseAlbum(token: string, artist: string | null | undefin
       duration_ms: number | null;
       art_path: string | null;
       path?: string;
+      genre?: string | null;
+      year?: number | null;
       artists: Array<{ id: number; name: string }>;
       discNumber?: number | null;
       trackNumber?: number | null;
