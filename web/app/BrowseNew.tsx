@@ -288,6 +288,16 @@ export function BrowseNew(props: {
     language: string;
   } | null>(null);
 
+  // Prevent background scrolling while modal is open.
+  useEffect(() => {
+    if (!editOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [editOpen]);
+
   const [genreTracks, setGenreTracks] = useState<Track[]>([]);
 
   const [countryTracks, setCountryTracks] = useState<Track[]>([]);
@@ -845,7 +855,7 @@ export function BrowseNew(props: {
                 </div>
               )}
 
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="mt-4 space-y-3">
                 <label className="text-sm text-slate-300">
                   Title
                   <input
@@ -856,51 +866,7 @@ export function BrowseNew(props: {
                   />
                 </label>
 
-                <label className="text-sm text-slate-300 sm:col-span-2">
-                  Genres (one per line)
-                  <textarea
-                    value={editGenre}
-                    onChange={(e) => setEditGenre(e.target.value)}
-                    rows={3}
-                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                    placeholder="Rock\nAlternative"
-                  />
-                </label>
-
                 <label className="text-sm text-slate-300">
-                  Countries (one per line)
-                  <textarea
-                    value={editCountry}
-                    onChange={(e) => setEditCountry(e.target.value)}
-                    rows={3}
-                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                    placeholder="Poland\nUnited States"
-                  />
-                </label>
-
-                <label className="text-sm text-slate-300">
-                  Languages (one per line)
-                  <textarea
-                    value={editLanguage}
-                    onChange={(e) => setEditLanguage(e.target.value)}
-                    rows={3}
-                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                    placeholder="e.g.\nPolish\nEnglish"
-                  />
-                </label>
-
-                <label className="text-sm text-slate-300 sm:col-span-2">
-                  Artists (one per line)
-                  <textarea
-                    value={editArtists}
-                    onChange={(e) => setEditArtists(e.target.value)}
-                    rows={3}
-                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                    placeholder="Artist 1\nArtist 2"
-                  />
-                </label>
-
-                <label className="text-sm text-slate-300 sm:col-span-2">
                   Album
                   <input
                     value={editAlbum}
@@ -910,51 +876,99 @@ export function BrowseNew(props: {
                   />
                 </label>
 
-                <label className="text-sm text-slate-300 sm:col-span-2">
+                <label className="text-sm text-slate-300">
                   Album Artists (one per line)
                   <textarea
                     value={editAlbumArtist}
                     onChange={(e) => setEditAlbumArtist(e.target.value)}
                     rows={3}
                     className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                    placeholder="Album artist"
+                    placeholder="Album Artist"
                   />
                 </label>
 
                 <label className="text-sm text-slate-300">
-                  Track #
-                  <input
-                    inputMode="numeric"
-                    value={editTrackNumber}
-                    onChange={(e) => setEditTrackNumber(e.target.value)}
+                  Artists (one per line)
+                  <textarea
+                    value={editArtists}
+                    onChange={(e) => setEditArtists(e.target.value)}
+                    rows={3}
                     className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                    placeholder="1"
+                    placeholder="Artist name"
                   />
                 </label>
 
                 <label className="text-sm text-slate-300">
-                  Disc #
-                  <input
-                    inputMode="numeric"
-                    value={editDiscNumber}
-                    onChange={(e) => setEditDiscNumber(e.target.value)}
+                  Genres (one per line)
+                  <textarea
+                    value={editGenre}
+                    onChange={(e) => setEditGenre(e.target.value)}
+                    rows={3}
                     className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                    placeholder="1"
+                    placeholder="Genres"
                   />
                 </label>
 
-                <label className="text-sm text-slate-300">
-                  Year
-                  <input
-                    inputMode="numeric"
-                    value={editYear}
-                    onChange={(e) => setEditYear(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                    placeholder="2025"
-                  />
-                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="text-sm text-slate-300">
+                    Languages (one per line)
+                    <textarea
+                      value={editLanguage}
+                      onChange={(e) => setEditLanguage(e.target.value)}
+                      rows={3}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                      placeholder="Languages"
+                    />
+                  </label>
 
-                <div className="text-xs text-slate-500 sm:col-span-1 flex items-end">
+                  <label className="text-sm text-slate-300">
+                    Countries (one per line)
+                    <textarea
+                      value={editCountry}
+                      onChange={(e) => setEditCountry(e.target.value)}
+                      rows={3}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                      placeholder="Countries"
+                    />
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className="text-sm text-slate-300">
+                    Track #
+                    <input
+                      inputMode="numeric"
+                      value={editTrackNumber}
+                      onChange={(e) => setEditTrackNumber(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                      placeholder="1"
+                    />
+                  </label>
+
+                  <label className="text-sm text-slate-300">
+                    Disc #
+                    <input
+                      inputMode="numeric"
+                      value={editDiscNumber}
+                      onChange={(e) => setEditDiscNumber(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                      placeholder="1"
+                    />
+                  </label>
+
+                  <label className="text-sm text-slate-300">
+                    Year
+                    <input
+                      inputMode="numeric"
+                      value={editYear}
+                      onChange={(e) => setEditYear(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                      placeholder="2025"
+                    />
+                  </label>
+                </div>
+
+                <div className="text-xs text-slate-500 flex items-end">
                   MP3 only (writes ID3 tags) · forces a rescan
                 </div>
               </div>
