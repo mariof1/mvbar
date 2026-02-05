@@ -243,7 +243,6 @@ async function buildSmartPlaylistQuery(
 
   // Sorting
   let orderBy = 'order by random()';
-  const userIdParamForSort = paramIdx;
   
   if (sortMode === 'most_played' || sortMode === 'least_played' || sortMode === 'recently_played') {
     params.push(userId);

@@ -36,10 +36,6 @@ function splitGenreValue(v: string): string[] {
     .filter(Boolean);
 }
 
-function splitTagValue(v: string): string[] {
-  return splitGenreValue(v);
-}
-
 function dedupe(items: string[]) {
   const out: string[] = [];
   const seen = new Set<string>();

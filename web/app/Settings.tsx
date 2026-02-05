@@ -88,6 +88,7 @@ export function Settings() {
         .catch(() => {});
     }
     loadVersion();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, loadPreferences]);
 
   // Avatar upload

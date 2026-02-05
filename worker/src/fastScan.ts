@@ -135,7 +135,7 @@ async function processFilesParallel<T, R>(
       const i = index++;
       try {
         results[i] = await processor(items[i]);
-      } catch (e) {
+      } catch {
         results[i] = null as any;
       }
     }
@@ -434,9 +434,8 @@ async function scanArtistArtwork(musicDir: string): Promise<number> {
       const data = await readFile(artPath);
       const hash = createHash('sha1').update(data).digest('hex');
       
-      // Determine mime type
+      // Determine extension for file naming
       const ext = path.extname(artFile).toLowerCase();
-      const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
       
       // Store in art cache directory
       const relPath = `artists/${hash.slice(0, 2)}/${hash}${ext}`;

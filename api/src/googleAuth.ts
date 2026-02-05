@@ -159,7 +159,6 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
 
         const googleId = payload.sub;
         const email = payload.email;
-        const name = payload.name || email.split('@')[0];
         const pictureUrl = payload.picture;
         const refreshToken = tokens.refresh_token;
 
@@ -171,7 +170,6 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
         );
 
         let user = result.rows[0];
-        let isNewUser = false;
 
         if (!user) {
           // Check if user exists by email (for migration)
@@ -196,7 +194,6 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
           } else {
             // New user - create with pending approval
             const userId = crypto.randomUUID();
-            isNewUser = true;
 
             await pool.query(
               `INSERT INTO users (id, email, role, google_id, google_refresh_token, approval_status, session_version)

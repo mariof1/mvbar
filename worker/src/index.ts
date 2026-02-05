@@ -82,7 +82,7 @@ subscriber.on('message', async (channel, message) => {
       logger.info('scan', `Manual rescan triggered by ${cmd.by || 'unknown'}${cmd.force ? ' (FORCE FULL)' : ''}`);
       periodicRescan(cmd.force === true);
     }
-  } catch (e) {
+  } catch {
     logger.warn('worker', `Invalid command message: ${message}`);
   }
 });

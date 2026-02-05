@@ -492,6 +492,7 @@ function PlayerBar(props: {
     })();
 
     return () => { cancelled = true; cleanupHls(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.nowPlaying.id, props.token, preferHls]);
 
   useEffect(() => {
@@ -532,6 +533,7 @@ function PlayerBar(props: {
         try { navigator.mediaSession.setActionHandler(action, null); } catch {}
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.onPrev, props.onNext]);
 
   const togglePlay = () => {
@@ -1182,6 +1184,7 @@ function MobileSidebar(props: {
       document.removeEventListener('touchmove', handleTouchMove);
       document.removeEventListener('wheel', handleWheel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.isOpen, props.onClose]);
 
   const handleNavClick = (t: string) => {
