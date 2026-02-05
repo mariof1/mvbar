@@ -2,8 +2,6 @@ import 'dotenv/config';
 
 import Redis from 'ioredis';
 import { db, initDb } from './db.js';
-import * as jobs from './scanRepo.js';
-import { runScan } from './scanner.js';
 import * as transcodeJobs from './transcodeRepo.js';
 import { transcodeTrackToHls } from './transcoder.js';
 import { runFastScan } from './fastScan.js';

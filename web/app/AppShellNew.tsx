@@ -1380,11 +1380,6 @@ export function AppShellNew() {
   const navigate = useRouter((s) => s.navigate);
   const tab = getTabFromRoute(route);
   
-  // Debug logging for route changes
-  // useEffect(() => {
-  //   console.log('[AppShellNew] Route changed:', route.type, route);
-  // }, [route]);
-  
   // Helper to set tab (for backward compatibility with sidebar)
   const setTab = useCallback((tabName: string) => {
     switch (tabName) {

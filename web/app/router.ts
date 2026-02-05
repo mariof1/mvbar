@@ -271,8 +271,6 @@ export function initRouter() {
     const initialRoute = getInitialRoute();
     const hash = routeToHash(initialRoute);
     
-    console.log('[Router] Initializing with hash:', window.location.hash, '-> route:', initialRoute);
-    
     window.history.replaceState({ route: initialRoute, mvbar: true }, '', hash);
     useRouter.setState({ 
       route: initialRoute, 

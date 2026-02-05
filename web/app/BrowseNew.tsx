@@ -185,11 +185,6 @@ export function BrowseNew(props: {
   const navigate = useRouter((s) => s.navigate);
   const back = useRouter((s) => s.back);
 
-  // Debug logging for route changes
-  // useEffect(() => {
-  //   console.log('[BrowseNew] Route changed:', route.type, route);
-  // }, [route]);
-
   // Derive state from route - memoized to avoid unnecessary effect reruns
   const tab = (route.type === 'browse' && route.sub ? route.sub : 'artists') as Tab;
   
