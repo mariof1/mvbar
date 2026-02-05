@@ -106,6 +106,9 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const needDuration = ext === '.opus' || ext === '.ogg';
   const m = await parseFile(filePath, { duration: needDuration });
 
+  // Helper to get first element if array
+  const firstOf = <T>(v: T | T[] | undefined): T | undefined => Array.isArray(v) ? v[0] : v;
+
   const title = sanitize(m.common.title);
   const artist = sanitize(m.common.artist);
   const album = sanitize(m.common.album);
@@ -145,20 +148,19 @@ export async function readTags(filePath: string): Promise<TagResult> {
   ];
   const conductor = conductorRaw.length ? sanitize(conductorRaw.join('; ')) : null;
   
-  // Publisher/Label
-  const publisher = sanitize(
-    commonAny.label ?? commonAny.publisher ?? 
-    nativeValues(m, ['tpub', 'TPUB', 'label', 'LABEL', 'publisher', 'PUBLISHER'])[0]
-  );
+  // Publisher/Label (may be array in music-metadata)
+  const publisherRaw = firstOf(commonAny.label) ?? firstOf(commonAny.publisher) ?? 
+    nativeValues(m, ['tpub', 'TPUB', 'label', 'LABEL', 'publisher', 'PUBLISHER'])[0];
+  const publisher = sanitize(publisherRaw);
   
   // Copyright
   const copyright = sanitize(
-    commonAny.copyright ?? nativeValues(m, ['tcop', 'TCOP', 'copyright', 'COPYRIGHT'])[0]
+    firstOf(commonAny.copyright) ?? nativeValues(m, ['tcop', 'TCOP', 'copyright', 'COPYRIGHT'])[0]
   );
   
   // Comment
-  const commentRaw = commonAny.comment ?? nativeValues(m, ['comm', 'COMM', 'comment', 'COMMENT'])[0];
-  const comment = sanitize(Array.isArray(commentRaw) ? commentRaw[0]?.text ?? commentRaw[0] : commentRaw);
+  const commentRaw = firstOf(commonAny.comment) ?? nativeValues(m, ['comm', 'COMM', 'comment', 'COMMENT'])[0];
+  const comment = sanitize(typeof commentRaw === 'object' && commentRaw?.text ? commentRaw.text : commentRaw);
   
   // Mood
   const mood = sanitize(
@@ -167,12 +169,12 @@ export async function readTags(filePath: string): Promise<TagResult> {
   
   // Grouping
   const grouping = sanitize(
-    commonAny.grouping ?? nativeValues(m, ['tit1', 'TIT1', 'grouping', 'GROUPING', 'contentgroup'])[0]
+    firstOf(commonAny.grouping) ?? nativeValues(m, ['tit1', 'TIT1', 'grouping', 'GROUPING', 'contentgroup'])[0]
   );
   
-  // ISRC
+  // ISRC (may be array in music-metadata)
   const isrc = sanitize(
-    commonAny.isrc ?? nativeValues(m, ['tsrc', 'TSRC', 'isrc', 'ISRC'])[0]
+    firstOf(commonAny.isrc) ?? nativeValues(m, ['tsrc', 'TSRC', 'isrc', 'ISRC'])[0]
   );
   
   // Release date (full date if available)
