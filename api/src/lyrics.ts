@@ -43,7 +43,7 @@ async function fetchFromLrclib(
     };
 
     return data;
-  } catch (e) {
+  } catch {
     logger.error('lyrics', 'LRCLIB fetch error');
     return null;
   }
@@ -61,7 +61,7 @@ async function cacheLyrics(trackId: number, lyrics: string, synced: boolean): Pr
     const relPath = path.join('cache', filename);
     await db().query('UPDATE tracks SET lyrics_path = $1 WHERE id = $2', [relPath, trackId]);
     return relPath;
-  } catch (e) {
+  } catch {
     logger.error('lyrics', 'Cache write error');
     return null;
   }
@@ -100,7 +100,7 @@ async function prefetchLyrics(trackId: number): Promise<void> {
       await cacheLyrics(trackId, lrcData.syncedLyrics, true);
       logger.info('lyrics', `Prefetched synced lyrics for track ${trackId}`);
     }
-  } catch (e) {
+  } catch {
     logger.error('lyrics', `Prefetch error for track ${trackId}`);
   }
 }

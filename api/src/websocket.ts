@@ -17,7 +17,7 @@ const clients = new Map<WebSocket, ClientInfo>();
 // Broadcast to all connected clients
 export function broadcast(type: string, data: any): void {
   const payload = JSON.stringify({ type, data });
-  for (const [socket, info] of clients) {
+  for (const [socket] of clients) {
     if (socket.readyState === 1) { // WebSocket.OPEN
       socket.send(payload);
     }

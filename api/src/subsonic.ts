@@ -457,7 +457,7 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
   // getAlbum
   async function handleGetAlbum(req: FastifyRequest, reply: FastifyReply) {
     const params = getParams(req);
-    let albumId = params.id?.replace('al-', '');
+    const albumId = params.id?.replace('al-', '');
     if (!albumId) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f);
     
     const userId = (req as any).subsonicUser?.userId;

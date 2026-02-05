@@ -151,7 +151,7 @@ interface ScoringOptions {
 
 function scoreTrack(track: TrackData, opts: ScoringOptions): number {
   let score = 0;
-  const { purpose, now, recentlyPlayedIds, favoriteIds } = opts;
+  const { purpose, now } = opts;
   
   // Base signals
   if (track.is_favorite) score += 20;
@@ -231,7 +231,7 @@ function diversify(
   const { maxPerArtist = 2, maxPerAlbum = 3, limit = 25, seed, filterSkips = true } = opts;
   
   // Filter out heavily skipped tracks
-  let filtered = filterSkips ? filterHighSkipRatio(tracks) : tracks;
+  const filtered = filterSkips ? filterHighSkipRatio(tracks) : tracks;
   let sorted = [...filtered].sort((a, b) => (b.score || 0) - (a.score || 0));
   
   // Shuffle top tier for variety
@@ -271,7 +271,6 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const userId = req.user.userId;
     const allowed = await allowedLibrariesForUser(userId, req.user.role);
-    const libFilter = allowed ? `and t.library_id = any($lib::bigint[])` : '';
     const now = Date.now();
     const timeContext = getTimeContext();
     const buckets: Bucket[] = [];

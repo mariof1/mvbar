@@ -571,6 +571,7 @@ export function PodcastPlayer({
       audioEl.pause();
       audioEl.src = '';
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [episode?.id]);
   
   // Media Session API integration

@@ -236,7 +236,7 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     
     try {
       // Check if podcast already exists
-      let podcastR = await db().query<{ id: number }>('SELECT id FROM podcasts WHERE feed_url = $1', [feedUrl]);
+      const podcastR = await db().query<{ id: number }>('SELECT id FROM podcasts WHERE feed_url = $1', [feedUrl]);
       let podcastId: number;
       
       if (podcastR.rows.length === 0) {
@@ -496,7 +496,7 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
         
         const stream = fs.createReadStream(episode.downloaded_path);
         return reply.send(stream);
-      } catch (e) {
+      } catch {
         // File doesn't exist, fall through to redirect
         await db().query(
           `UPDATE podcast_episodes SET downloaded_path = NULL, downloaded_at = NULL WHERE id = $1`,
@@ -663,7 +663,7 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       try {
         const fs = await import('fs/promises');
         await fs.unlink(episode.downloaded_path);
-      } catch (e) {
+      } catch {
         // File might not exist, ignore
       }
       

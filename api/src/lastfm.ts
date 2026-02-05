@@ -57,7 +57,7 @@ async function setCache(key: string, data: unknown): Promise<void> {
        on conflict (cache_key) do update set data = $2, fetched_at = now()`,
       [key, JSON.stringify(data)]
     );
-  } catch (e) {
+  } catch {
     logger.error('lastfm', 'Cache write failed');
   }
 }
@@ -86,7 +86,7 @@ async function fetchLastfm(method: string, params: Record<string, string>): Prom
     }
 
     return await res.json();
-  } catch (e) {
+  } catch {
     logger.error('lastfm', 'Fetch failed');
     return null;
   }

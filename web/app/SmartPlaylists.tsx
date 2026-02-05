@@ -233,10 +233,12 @@ export function SmartPlaylists(props: {
   useEffect(() => {
     if (!token) return;
     loadPlaylists();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   useEffect(() => {
     if (selectedId != null) loadPlaylist(selectedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, token]);
 
   function buildFilters(): SmartFilters {

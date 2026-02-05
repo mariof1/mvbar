@@ -14,6 +14,13 @@ const eslintConfig = [
   {
     ignores: ['.next/**', 'node_modules/**'],
   },
+  {
+    rules: {
+      // Using native img elements intentionally - the app serves dynamic album art
+      // and doesn't benefit from Next.js Image optimization in this use case
+      '@next/next/no-img-element': 'off',
+    },
+  },
 ];
 
 export default eslintConfig;

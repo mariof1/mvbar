@@ -15,16 +15,6 @@ interface Podcast {
   image_path: string | null;
 }
 
-interface Episode {
-  id: number;
-  podcast_id: number;
-  guid: string;
-  title: string;
-  audio_url: string;
-  image_url: string | null;
-  image_path: string | null;
-}
-
 // Download and cache an image, return the cached path
 async function cacheImage(imageUrl: string, prefix: string): Promise<string | null> {
   if (!imageUrl) return null;

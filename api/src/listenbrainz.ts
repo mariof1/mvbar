@@ -60,7 +60,7 @@ export async function submitListen(
     });
 
     return res.ok;
-  } catch (e) {
+  } catch {
     logger.error('listenbrainz', 'Submit error');
     return false;
   }
@@ -101,7 +101,7 @@ export async function submitNowPlaying(
     });
 
     return res.ok;
-  } catch (e) {
+  } catch {
     logger.error('listenbrainz', 'Now playing error');
     return false;
   }
@@ -119,7 +119,7 @@ export async function fetchRecommendations(
     if (!res.ok) return [];
     const data = await res.json() as { payload?: { mbids?: Array<{ recording_mbid: string; score: number }> } };
     return data.payload?.mbids ?? [];
-  } catch (e) {
+  } catch {
     logger.error('listenbrainz', 'Recommendations error');
     return [];
   }
@@ -174,7 +174,7 @@ export async function submitFeedback(
 
     logger.success('listenbrainz', `Feedback: ${score === 1 ? 'love' : score === -1 ? 'hate' : 'remove'} - ${track.title}`);
     return true;
-  } catch (e) {
+  } catch {
     logger.error('listenbrainz', 'Feedback error');
     return false;
   }

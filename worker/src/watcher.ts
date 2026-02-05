@@ -4,8 +4,8 @@ import path from 'node:path';
 import { stat } from 'node:fs/promises';
 import Redis from 'ioredis';
 import { db, audit } from './db.js';
-import { upsertTrack, markSeen, getTrackByPath } from './scanRepo.js';
-import { readTags, readTagsAsync } from './metadata.js';
+import { upsertTrack, getTrackByPath } from './scanRepo.js';
+import { readTagsAsync } from './metadata.js';
 import { writeArt } from './art.js';
 import { indexAllTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
@@ -256,7 +256,7 @@ export class LibraryWatcher {
         try {
           const w = await writeArt(ART_DIR, tags.artData, tags.artMime);
           art = { relPath: w.relPath, mime: w.mime, hash: w.hash };
-        } catch (e) {
+        } catch {
           logger.warn('scan', `Failed to write art: ${relPath}`);
         }
       }
@@ -336,7 +336,7 @@ export class LibraryWatcher {
       
       // Publish live update to connected clients
       publishUpdate('track_removed', { path: relPath, library_id: libId });
-    } catch (e) {
+    } catch {
       logger.error('scan', `Failed to remove: ${relPath}`);
     }
   }
@@ -357,7 +357,7 @@ export class LibraryWatcher {
           await ensureTracksIndex();
           await indexAllTracks();
           logger.success('search', 'Search index updated');
-      } catch (e) {
+      } catch {
           logger.error('search', 'Search index update failed');
       } finally {
           scanProgress.status = 'idle';

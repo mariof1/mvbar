@@ -131,6 +131,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
       } catch {}
     }, 1000); // Poll every 1s for better responsiveness
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanProgress?.status, scanTriggered, token]);
 
   useEffect(() => {

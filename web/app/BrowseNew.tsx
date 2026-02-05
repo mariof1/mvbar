@@ -466,6 +466,7 @@ export function BrowseNew(props: {
     else if (tab === 'genres') loadGenres(true);
     else if (tab === 'countries') loadCountries();
     else if (tab === 'languages') loadLanguages();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastUpdate]); // intentionally only lastUpdate to avoid loops
 
   // Load artist detail
