@@ -571,7 +571,7 @@ export function Settings() {
               </h2>
 
               <p className="text-sm text-slate-400">
-                Last.fm integration is used for discovering similar artists and tracks. This powers the "Continue Playback" feature and artist recommendations.
+                Last.fm integration is used for discovering similar artists and tracks. This powers the &quot;Continue Playback&quot; feature and artist recommendations.
               </p>
 
               <div className="flex items-center gap-3 p-3 bg-slate-700/50 rounded-lg">

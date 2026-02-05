@@ -1416,8 +1416,8 @@ export function AppShellNew() {
   // Ensure number comparison for favorites (API may return string IDs)
   const isFavorite = nowPlaying ? favIds.has(Number(nowPlaying.id)) : false;
   
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _favChange = favLastChange; // Use the variable to prevent tree-shaking
+  // Keep favLastChange in scope to trigger re-renders on favorite changes
+  void favLastChange;
   
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [playlists, setPlaylists] = useState<{ id: number; name: string }[]>([]);
