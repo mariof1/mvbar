@@ -195,16 +195,6 @@ jobs:
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           no-cache: true
 
-      - name: Summary
-        run: |
-          cat >> "$GITHUB_SUMMARY" << 'EOF'
-          ## Dev Build Complete
-          
-          **Image:** `${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:dev`
-          **Platforms:** ${{ inputs.platforms }}
-          **Commit:** ${{ github.sha }}
-          EOF
-
   # ===========================================
   # DOCKER BUILD - RELEASE
   # ===========================================
@@ -265,19 +255,3 @@ jobs:
           repository: ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}
           short-description: "mvbar - self-hosted, local-first music player (all-in-one container)"
           readme-filepath: ./docs/docker/mvbar.md
-
-      - name: Summary
-        run: |
-          cat >> "$GITHUB_SUMMARY" << 'EOF'
-          ## Release Build Complete
-          
-          **Version:** ${{ needs.version.outputs.version }}
-          **Tag:** ${{ needs.version.outputs.tag }}
-          **Platforms:** ${{ inputs.platforms }}
-          
-          ### Docker Tags
-          - `${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:latest`
-          - `${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}`
-          - `${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ steps.version_parts.outputs.minor }}`
-          - `${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ steps.version_parts.outputs.major }}`
-          EOF
