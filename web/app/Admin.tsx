@@ -119,17 +119,18 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
 
   // Live updates: Update scan progress from WebSocket
   useEffect(() => {
-    if (!wsScanProgress.phase) return;
+    if (!wsScanProgress.status) return;
     setScanProgress((prev) => ({
       ...prev,
       ok: true,
       status: wsScanProgress.scanning ? 'scanning' : 'idle',
-      filesProcessed: wsScanProgress.current,
-      filesFound: wsScanProgress.total,
+      filesProcessed: wsScanProgress.filesProcessed,
+      filesFound: wsScanProgress.filesFound,
+      currentFile: wsScanProgress.currentFile,
     }));
 
     // Reset triggered flag when scan completes
-    if (!wsScanProgress.scanning && (wsScanProgress.phase === 'done' || wsScanProgress.phase === 'complete')) {
+    if (!wsScanProgress.scanning) {
       setScanTriggered(false);
     }
   }, [wsScanProgress]);

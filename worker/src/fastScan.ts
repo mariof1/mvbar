@@ -537,6 +537,7 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
         currentFile: `Discovering files... (${allFiles.length.toLocaleString()} found)`,
       };
       getPublisher().set('scan:progress', JSON.stringify(discoveryProgress));
+      publishUpdate('scan:progress', discoveryProgress);
     }
   }
   logger.success('scan', `Found ${allFiles.length} audio files`);

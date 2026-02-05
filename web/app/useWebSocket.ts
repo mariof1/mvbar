@@ -54,11 +54,16 @@ type HistoryUpdate = {
 type ScanProgressUpdate = {
   type: 'scan:progress';
   data: {
-    phase: string;
-    current?: number;
-    total?: number;
-    scanning?: boolean;
-    lastScan?: string;
+    // Worker sends these fields
+    event?: string;
+    status?: string;
+    filesFound?: number;
+    filesProcessed?: number;
+    currentFile?: string;
+    durationMs?: number;
+    newFiles?: number;
+    skipped?: number;
+    ts?: number;
   };
 };
 
@@ -116,26 +121,26 @@ export const useHistoryUpdates = create<HistoryUpdateStore>((set) => ({
 
 // Store for scan progress (admin)
 interface ScanProgressStore {
-  phase: string;
-  current: number;
-  total: number;
+  status: string;
+  filesFound: number;
+  filesProcessed: number;
+  currentFile: string;
   scanning: boolean;
-  lastScan: string | null;
   setProgress: (data: ScanProgressUpdate['data']) => void;
 }
 
 export const useScanProgress = create<ScanProgressStore>((set) => ({
-  phase: '',
-  current: 0,
-  total: 0,
+  status: '',
+  filesFound: 0,
+  filesProcessed: 0,
+  currentFile: '',
   scanning: false,
-  lastScan: null,
   setProgress: (data) => set({
-    phase: data.phase ?? '',
-    current: data.current ?? 0,
-    total: data.total ?? 0,
-    scanning: data.scanning ?? false,
-    lastScan: data.lastScan ?? null,
+    status: data.status ?? '',
+    filesFound: data.filesFound ?? 0,
+    filesProcessed: data.filesProcessed ?? 0,
+    currentFile: data.currentFile ?? '',
+    scanning: data.status === 'scanning',
   }),
 }));
 

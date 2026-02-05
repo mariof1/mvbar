@@ -53,19 +53,19 @@ export function ScanPanel(props: { onScanFinished?: () => void }) {
 
   // Update job state from WebSocket scan progress
   useEffect(() => {
-    if (!scanProgress.phase) return;
+    if (!scanProgress.status) return;
     
     setJob((prev: any) => ({
       ...prev,
-      state: scanProgress.scanning ? 'running' : (scanProgress.phase === 'done' ? 'done' : prev?.state),
-      phase: scanProgress.phase,
-      current: scanProgress.current,
-      total: scanProgress.total,
-      lastScan: scanProgress.lastScan,
+      state: scanProgress.scanning ? 'running' : 'done',
+      status: scanProgress.status,
+      filesFound: scanProgress.filesFound,
+      filesProcessed: scanProgress.filesProcessed,
+      currentFile: scanProgress.currentFile,
     }));
 
     // Notify when scan finishes
-    if (!scanProgress.scanning && (scanProgress.phase === 'done' || scanProgress.phase === 'complete')) {
+    if (!scanProgress.scanning && scanProgress.status === 'idle') {
       props.onScanFinished?.();
     }
   }, [scanProgress, props]);
