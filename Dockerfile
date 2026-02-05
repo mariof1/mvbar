@@ -1,5 +1,11 @@
 # Single-container image: web + api + worker + caddy + postgres + redis + meilisearch
 
+# Build args for version info
+ARG APP_VERSION=0.0.0-dev
+ARG GIT_COMMIT=unknown
+ARG GIT_BRANCH=unknown
+ARG BUILD_DATE=unknown
+
 FROM node:22-alpine AS api_builder
 WORKDIR /src/api
 COPY api/package*.json ./
@@ -28,6 +34,12 @@ RUN npm run build
 
 FROM alpine:3.20
 
+# Re-declare args to use in final stage
+ARG APP_VERSION
+ARG GIT_COMMIT
+ARG GIT_BRANCH
+ARG BUILD_DATE
+
 RUN apk add --no-cache \
     nodejs \
     npm \
@@ -49,7 +61,11 @@ ENV NODE_ENV=production \
     WEB_PORT=3000 \
     MEILI_PORT=7700 \
     REDIS_PORT=6379 \
-    POSTGRES_PORT=5432
+    POSTGRES_PORT=5432 \
+    APP_VERSION=${APP_VERSION} \
+    GIT_COMMIT=${GIT_COMMIT} \
+    GIT_BRANCH=${GIT_BRANCH} \
+    BUILD_DATE=${BUILD_DATE}
 
 WORKDIR /app
 

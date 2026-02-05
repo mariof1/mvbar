@@ -1,10 +1,12 @@
 {
   "name": "mvbar-web",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start -p 3000"
+    "start": "next start -p 3000",
+    "lint": "next lint"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",
@@ -15,10 +17,13 @@
     "zustand": "^5.0.10"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
     "@playwright/test": "^1.58.0",
     "@types/node": "^22.10.0",
     "@types/react": "19.2.10",
     "autoprefixer": "^10.4.23",
+    "eslint": "^9.27.0",
+    "eslint-config-next": "^15.5.10",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.18",
     "typescript": "5.9.3"

@@ -2,10 +2,17 @@ name: CI
 
 on:
   push:
+    branches: [main, dev]
   pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,20 +26,99 @@ jobs:
             worker/package-lock.json
             web/package-lock.json
 
-      - name: API install + build
+      - name: Install API dependencies
+        working-directory: api
+        run: npm ci
+
+      - name: Install Worker dependencies
+        working-directory: worker
+        run: npm ci
+
+      - name: Install Web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Lint API
+        working-directory: api
+        run: npm run lint
+
+      - name: Lint Worker
+        working-directory: worker
+        run: npm run lint
+
+      - name: Lint Web
+        working-directory: web
+        run: npm run lint
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            worker/package-lock.json
+            web/package-lock.json
+
+      - name: Build API
         working-directory: api
         run: |
           npm ci
           npm run build
 
-      - name: Worker install + build
+      - name: Build Worker
         working-directory: worker
         run: |
           npm ci
           npm run build
 
-      - name: Web install + build
+      - name: Build Web
         working-directory: web
         run: |
           npm ci
           npm run build
+
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            worker/package-lock.json
+            web/package-lock.json
+
+      - name: Install API dependencies
+        working-directory: api
+        run: npm ci
+
+      - name: Install Worker dependencies
+        working-directory: worker
+        run: npm ci
+
+      - name: Install Web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Type check API
+        working-directory: api
+        run: npx tsc --noEmit
+
+      - name: Type check Worker
+        working-directory: worker
+        run: npx tsc --noEmit
+
+      - name: Type check Web
+        working-directory: web
+        run: npx tsc --noEmit

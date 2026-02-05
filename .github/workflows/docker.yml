@@ -6,6 +6,10 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: docker.io
   DOCKERHUB_USER: mars148
@@ -13,16 +17,28 @@ env:
 
 jobs:
   build:
+    name: Build & Push
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Note
+      - name: Set version info
+        id: version
         run: |
-          echo "Publishing single all-in-one image: $DOCKERHUB_USER/$IMAGE_NAME"
-          echo "Legacy images (mvbar-api/mvbar-web/mvbar-worker) are deprecated and no longer built by this workflow."
+          # Determine version from tag or branch
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"  # Remove 'v' prefix
+          else
+            VERSION="0.0.0-dev"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          echo "Building version: ${VERSION}"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -42,11 +58,15 @@ jobs:
         with:
           images: ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}
           tags: |
+            # Branch builds
             type=ref,event=branch
+            type=sha,prefix={{branch}}-,enable=${{ github.ref_type == 'branch' }}
+            # Tag builds (SemVer)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+            # Latest on main branch or version tags
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref_type == 'tag' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -57,10 +77,16 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.commit }}
+            GIT_BRANCH=${{ steps.version.outputs.branch }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Update Docker Hub description
+        if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
         uses: peter-evans/dockerhub-description@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -68,3 +94,16 @@ jobs:
           repository: ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}
           short-description: "mvbar - self-hosted, local-first music player (all-in-one container)"
           readme-filepath: ./docs/docker/mvbar.md
+
+      - name: Summary
+        run: |
+          echo "## Docker Image Published 🐳" >> "$GITHUB_SUMMARY"
+          echo "" >> "$GITHUB_SUMMARY"
+          echo "**Version:** ${{ steps.version.outputs.version }}" >> "$GITHUB_SUMMARY"
+          echo "**Commit:** ${{ steps.version.outputs.commit }}" >> "$GITHUB_SUMMARY"
+          echo "**Branch:** ${{ steps.version.outputs.branch }}" >> "$GITHUB_SUMMARY"
+          echo "" >> "$GITHUB_SUMMARY"
+          echo "### Tags" >> "$GITHUB_SUMMARY"
+          echo '```' >> "$GITHUB_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_SUMMARY"
+          echo '```' >> "$GITHUB_SUMMARY"

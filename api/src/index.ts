@@ -79,6 +79,14 @@ app.get('/health', async () => ({ ok: true }));
 app.get('/api/health', async () => ({ ok: true }));
 app.get('/api/healthz', async () => ({ ok: true }));
 
+// Version endpoint - populated at build time via environment variables
+app.get('/api/version', async () => ({
+  version: process.env.APP_VERSION || '0.0.0-dev',
+  commit: process.env.GIT_COMMIT || 'unknown',
+  branch: process.env.GIT_BRANCH || 'unknown',
+  buildDate: process.env.BUILD_DATE || new Date().toISOString(),
+}));
+
 await app.register(authPlugin);
 await app.register(googleAuthPlugin);
 await app.register(libraryPlugin);
