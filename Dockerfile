@@ -18,6 +18,7 @@ RUN npm run build && npm prune --omit=dev
 FROM node:22-alpine AS web_builder
 WORKDIR /src/web
 # Avoid QEMU SIGILL when building multi-arch images in CI (use portable SWC/WASM)
+# Cache bust: 2026-02-05
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NEXT_DISABLE_SWC_BINARY=1
 COPY web/package*.json ./
