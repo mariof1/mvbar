@@ -13,6 +13,7 @@ import {
 } from './apiClient';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
+import { useLibraryUpdates } from './useWebSocket';
 
 const SORT_OPTIONS = [
   { value: 'random', label: 'Random' },
@@ -149,6 +150,7 @@ export function SmartPlaylists(props: {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
   const { setQueueAndPlay } = usePlayer();
+  const lastLibraryUpdate = useLibraryUpdates((s) => s.lastUpdate);
 
   const [playlists, setPlaylists] = useState<SmartPlaylist[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -240,6 +242,14 @@ export function SmartPlaylists(props: {
     if (selectedId != null) loadPlaylist(selectedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, token]);
+
+  // Refresh selected smart playlist when library updates (tracks may have changed)
+  useEffect(() => {
+    if (selectedId != null && lastLibraryUpdate) {
+      loadPlaylist(selectedId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastLibraryUpdate]);
 
   function buildFilters(): SmartFilters {
     return {

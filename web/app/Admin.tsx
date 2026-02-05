@@ -18,6 +18,7 @@ import {
   type ScanProgress,
 } from './apiClient';
 import { useAuth } from './store';
+import { useScanProgress, useLibraryUpdates } from './useWebSocket';
 
 type Tab = 'library' | 'users' | 'settings';
 
@@ -90,6 +91,10 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
   const [scanTriggered, setScanTriggered] = useState(false);
   const [showForceConfirm, setShowForceConfirm] = useState(false);
 
+  // Live updates from WebSocket
+  const wsScanProgress = useScanProgress();
+  const libraryLastUpdate = useLibraryUpdates((s) => s.lastUpdate);
+
   async function loadData() {
     setLoading(true);
     setError(null);
@@ -112,27 +117,37 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
     }
   }
 
-  // Poll scan progress while scanning or just triggered
+  // Live updates: Update scan progress from WebSocket
   useEffect(() => {
-    if (!scanTriggered && (!scanProgress || scanProgress.status === 'idle')) return;
-    const interval = setInterval(async () => {
-      try {
-        const progress = await getScanProgress(token);
-        setScanProgress(progress);
-        // Stop polling once scan completes
-        if (progress.status === 'idle') {
-          setScanTriggered(false);
-        }
-        // Also refresh stats if still scanning
-        if (progress.status !== 'idle') {
-          const statsRes = await getLibraryStats(token);
-          setStats(statsRes.stats);
-        }
-      } catch {}
-    }, 1000); // Poll every 1s for better responsiveness
-    return () => clearInterval(interval);
+    if (!wsScanProgress.status) return;
+    setScanProgress((prev) => ({
+      ...prev,
+      ok: true,
+      status: wsScanProgress.scanning ? 'scanning' : 'idle',
+      filesProcessed: wsScanProgress.filesProcessed,
+      filesFound: wsScanProgress.filesFound,
+      currentFile: wsScanProgress.currentFile,
+    }));
+
+    // Reset triggered flag when scan completes
+    if (!wsScanProgress.scanning) {
+      setScanTriggered(false);
+    }
+  }, [wsScanProgress]);
+
+  // Live updates: Refresh stats and activity when library changes
+  useEffect(() => {
+    if (!libraryLastUpdate || !token) return;
+    // Refresh stats
+    getLibraryStats(token)
+      .then((res) => setStats(res.stats))
+      .catch(() => {});
+    // Refresh activity
+    getLibraryActivity(token, 30)
+      .then((res) => setActivity(res.activity))
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanProgress?.status, scanTriggered, token]);
+  }, [libraryLastUpdate]);
 
   useEffect(() => {
     loadData();
@@ -446,23 +461,12 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
 
       {/* Recent Activity */}
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-            <svg className="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Recent Activity
-          </h3>
-          <button
-            onClick={loadData}
-            className="p-2 hover:bg-slate-800/50 rounded-lg transition-colors text-slate-400 hover:text-white"
-            title="Refresh"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
-        </div>
+        <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+          <svg className="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          Recent Activity
+        </h3>
         <div className="space-y-1 max-h-96 overflow-y-auto">
           {activity.map((item) => (
             <div key={item.id} className="flex items-center gap-3 p-3 hover:bg-slate-800/30 rounded-lg transition-colors">

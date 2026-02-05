@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { listFavorites } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useAuth } from './store';
+import { useLibraryUpdates } from './useWebSocket';
 
 export function Favorites(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
@@ -16,6 +17,7 @@ export function Favorites(props: {
 
   const toggleFav = useFavorites((s) => s.toggle);
   const lastChange = useFavorites((s) => s.lastChange);
+  const lastLibraryUpdate = useLibraryUpdates((s) => s.lastUpdate);
 
   async function refresh() {
     if (!token) return;
@@ -31,7 +33,7 @@ export function Favorites(props: {
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, lastChange]);
+  }, [token, lastChange, lastLibraryUpdate]);
 
   if (!token) return null;
 

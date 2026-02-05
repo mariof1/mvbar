@@ -11,6 +11,7 @@ const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
 interface ClientInfo {
   socket: WebSocket;
   userId?: string;
+  isAdmin?: boolean;
 }
 const clients = new Map<WebSocket, ClientInfo>();
 
@@ -34,6 +35,16 @@ export function broadcastToUser(userId: string, type: string, data: any): void {
   }
 }
 
+// Broadcast to all admin users
+export function broadcastToAdmins(type: string, data: any): void {
+  const payload = JSON.stringify({ type, data });
+  for (const [socket, info] of clients) {
+    if (socket.readyState === 1 && info.isAdmin) {
+      socket.send(payload);
+    }
+  }
+}
+
 export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
   // Register WebSocket support
   await app.register(websocket);
@@ -51,8 +62,14 @@ export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
 
   subscriber.on('message', (channel, message) => {
     if (channel === 'library:updates') {
-      // Broadcast to all connected WebSocket clients (silent - too noisy)
-      broadcast('library:update', JSON.parse(message));
+      const data = JSON.parse(message);
+      // Route scan progress/complete events to admins only
+      if (data.event === 'scan:progress' || data.event === 'scan:complete') {
+        broadcastToAdmins('scan:progress', data);
+      } else {
+        // Broadcast regular library updates to all connected WebSocket clients
+        broadcast('library:update', data);
+      }
     }
   });
 
@@ -60,8 +77,9 @@ export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/ws', { websocket: true }, (socket, req) => {
     // Get user ID from the request if authenticated
     const userId = req.user?.userId;
-    clients.set(socket, { socket, userId });
-    logger.info('ws', `Client connected (${clients.size} total)${userId ? ` user=${userId.substring(0, 8)}...` : ''}`);
+    const isAdmin = req.user?.role === 'admin';
+    clients.set(socket, { socket, userId, isAdmin });
+    logger.info('ws', `Client connected (${clients.size} total)${userId ? ` user=${userId.substring(0, 8)}...` : ''}${isAdmin ? ' (admin)' : ''}`);
 
     // Send initial connection confirmation
     socket.send(JSON.stringify({ type: 'connected' }));

@@ -2,6 +2,7 @@ import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
 import { audit } from './db.js';
 import * as playlists from './playlistsRepo.js';
+import { broadcastToUser } from './websocket.js';
 
 export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/playlists', async (req, reply) => {
@@ -19,6 +20,7 @@ export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
     try {
       const pl = await playlists.createPlaylist(req.user.userId, name);
       await audit('playlist_create', { by: req.user.userId, playlistId: pl.id, name });
+      broadcastToUser(req.user.userId, 'playlist:created', { id: pl.id, name });
       return { ok: true, playlist: pl };
     } catch {
       return reply.code(409).send({ ok: false, error: 'conflict' });
@@ -47,6 +49,7 @@ export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
     const r = await playlists.addItem(req.user.userId, playlistId, trackId, body.position);
     if (!r) return reply.code(404).send({ ok: false });
     await audit('playlist_add_item', { by: req.user.userId, playlistId, trackId, position: r.position });
+    broadcastToUser(req.user.userId, 'playlist:item_added', { playlistId, trackId, position: r.position });
     return { ok: true, position: r.position };
   });
 
@@ -59,6 +62,7 @@ export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
     const r = await playlists.removeItem(req.user.userId, playlistId, trackId);
     if (!r) return reply.code(404).send({ ok: false });
     await audit('playlist_remove_item', { by: req.user.userId, playlistId, trackId });
+    broadcastToUser(req.user.userId, 'playlist:item_removed', { playlistId, trackId });
     return { ok: true };
   });
 
@@ -75,6 +79,7 @@ export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
     const r = await playlists.setPosition(req.user.userId, playlistId, trackId, position);
     if (!r) return reply.code(404).send({ ok: false });
     await audit('playlist_set_position', { by: req.user.userId, playlistId, trackId, position });
+    broadcastToUser(req.user.userId, 'playlist:updated', { playlistId });
     return { ok: true };
   });
 });

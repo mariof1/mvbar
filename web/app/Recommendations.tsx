@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { getRecommendations, getListenBrainzRecommendations } from './apiClient';
+import { useHistoryUpdates } from './useWebSocket';
 
 type Track = {
   id: number;
@@ -129,13 +130,16 @@ export function Recommendations() {
   const [lbRecs, setLbRecs] = useState<LBRecommendation[]>([]);
   const [lbLoading, setLbLoading] = useState(false);
 
+  // Live updates
+  const historyLastUpdate = useHistoryUpdates((s) => s.lastUpdate);
+
   const playBucket = (bucket: Bucket) => {
     if (bucket.tracks.length > 0) {
       setQueueAndPlay(bucket.tracks, 0);
     }
   };
 
-  useEffect(() => {
+  const loadRecommendations = () => {
     if (!token) return;
     setLoading(true);
     setError(null);
@@ -157,7 +161,23 @@ export function Recommendations() {
       })
       .catch(() => {})
       .finally(() => setLbLoading(false));
-  }, [token, clear]);
+  };
+
+  useEffect(() => {
+    loadRecommendations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  // Live updates: refresh recommendations when history changes (debounced)
+  useEffect(() => {
+    if (!historyLastUpdate || !token) return;
+    // Use a timeout to debounce rapid updates
+    const timeout = setTimeout(() => {
+      loadRecommendations();
+    }, 2000);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyLastUpdate]);
 
   if (!token) return null;
 

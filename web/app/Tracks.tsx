@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { addTrackToPlaylist, listPlaylists, listTracks } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useAuth } from './store';
+import { useLibraryUpdates } from './useWebSocket';
 
 export function Tracks(props: {
   refreshNonce?: number;
@@ -22,18 +23,31 @@ export function Tracks(props: {
   const [pls, setPls] = useState<Array<{ id: string; name: string }>>([]);
   const [playlistId, setPlaylistId] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('mvbar_playlist_id') ?? '' : ''));
 
-  useEffect(() => {
+  // Live updates
+  const libraryLastUpdate = useLibraryUpdates((s) => s.lastUpdate);
+
+  async function loadTracks() {
     if (!token) return;
-    (async () => {
-      try {
-        const r = await listTracks(token, 100, 0);
-        setTracks(r.tracks);
-      } catch (e: any) {
-        if (e?.status === 401) clear();
-        setError(e?.message ?? 'error');
-      }
-    })();
-  }, [token, clear, props.refreshNonce]);
+    try {
+      const r = await listTracks(token, 100, 0);
+      setTracks(r.tracks);
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      setError(e?.message ?? 'error');
+    }
+  }
+
+  useEffect(() => {
+    loadTracks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, props.refreshNonce]);
+
+  // Live updates: refresh when library changes
+  useEffect(() => {
+    if (!libraryLastUpdate || !token) return;
+    loadTracks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [libraryLastUpdate]);
 
   useEffect(() => {
     if (!token) return;
