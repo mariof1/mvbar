@@ -457,6 +457,69 @@ export function BrowseNew(props: {
     }
   }, [tab, artists.length, albums.length, genres.length, countries.length, languages.length, loadArtists, loadAlbums, loadGenres, loadCountries, loadLanguages]);
 
+  // Helper to refresh album detail
+  const refreshAlbumDetail = useCallback(async () => {
+    if (!token || !selectedAlbum) return;
+    try {
+      const r = await browseAlbum(token, selectedAlbum.artist, selectedAlbum.album, selectedAlbum.artistId);
+      setAlbumDetail({
+        name: r.album.name,
+        artist: r.album.artist,
+        art_path: r.album.art_path,
+        tracks: r.tracks,
+        totalDiscs: r.album.total_discs ?? 1,
+      });
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+    }
+  }, [token, selectedAlbum, clear]);
+
+  // Helper to refresh artist detail
+  const refreshArtistDetail = useCallback(async () => {
+    if (!token || !selectedArtist) return;
+    try {
+      const r = await browseArtistById(token, selectedArtist.id);
+      setArtistAlbums(r.albums);
+      setArtistAppearsOn(r.appearsOn);
+      setArtistArt({ art_path: r.artist.art_path, art_hash: r.artist.art_hash });
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+    }
+  }, [token, selectedArtist, clear]);
+
+  // Helper to refresh genre tracks
+  const refreshGenreTracks = useCallback(async () => {
+    if (!token || !selectedGenre) return;
+    try {
+      const r = await browseGenreTracks(token, selectedGenre, 100);
+      setGenreTracks(r.tracks);
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+    }
+  }, [token, selectedGenre, clear]);
+
+  // Helper to refresh country tracks
+  const refreshCountryTracks = useCallback(async () => {
+    if (!token || !selectedCountry) return;
+    try {
+      const r = await browseCountryTracks(token, selectedCountry, 100);
+      setCountryTracks(r.tracks);
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+    }
+  }, [token, selectedCountry, clear]);
+
+  // Helper to refresh language tracks
+  const refreshLanguageTracks = useCallback(async () => {
+    if (!token || !selectedLanguage) return;
+    try {
+      const r = await browseLanguageTracks(token, selectedLanguage, 100);
+      setLanguageTracks(r.tracks);
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+    }
+  }, [token, selectedLanguage, clear]);
+
   // Refresh data when library updates arrive via WebSocket
   useEffect(() => {
     if (!lastUpdate || !lastEvent) return;
@@ -466,98 +529,61 @@ export function BrowseNew(props: {
     else if (tab === 'genres') loadGenres(true);
     else if (tab === 'countries') loadCountries();
     else if (tab === 'languages') loadLanguages();
+    // Also refresh detail views if open
+    if (selectedAlbum) refreshAlbumDetail();
+    if (selectedArtist) refreshArtistDetail();
+    if (selectedGenre) refreshGenreTracks();
+    if (selectedCountry) refreshCountryTracks();
+    if (selectedLanguage) refreshLanguageTracks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastUpdate]); // intentionally only lastUpdate to avoid loops
 
   // Load artist detail
   useEffect(() => {
-    if (!token || !selectedArtist) {
+    if (!selectedArtist) {
       setArtistAlbums([]);
       setArtistAppearsOn([]);
       setArtistArt(null);
       return;
     }
-    (async () => {
-      try {
-        const r = await browseArtistById(token, selectedArtist.id);
-        setArtistAlbums(r.albums);
-        setArtistAppearsOn(r.appearsOn);
-        setArtistArt({ art_path: r.artist.art_path, art_hash: r.artist.art_hash });
-      } catch (e: any) {
-        if (e?.status === 401) clear();
-      }
-    })();
-  }, [token, selectedArtist, clear]);
+    refreshArtistDetail();
+  }, [selectedArtist, refreshArtistDetail]);
 
   // Load album detail
   useEffect(() => {
-    if (!token || !selectedAlbum) {
+    if (!selectedAlbum) {
       setAlbumDetail(null);
       return;
     }
-    (async () => {
-      try {
-        const r = await browseAlbum(token, selectedAlbum.artist, selectedAlbum.album, selectedAlbum.artistId);
-        setAlbumDetail({
-          name: r.album.name,
-          artist: r.album.artist,
-          art_path: r.album.art_path,
-          tracks: r.tracks,
-          totalDiscs: r.album.total_discs ?? 1,
-        });
-      } catch (e: any) {
-        if (e?.status === 401) clear();
-      }
-    })();
-  }, [token, selectedAlbum, clear]);
+    refreshAlbumDetail();
+  }, [selectedAlbum, refreshAlbumDetail]);
 
   // Load genre tracks
   useEffect(() => {
-    if (!token || !selectedGenre) {
+    if (!selectedGenre) {
       setGenreTracks([]);
       return;
     }
-    (async () => {
-      try {
-        const r = await browseGenreTracks(token, selectedGenre, 100);
-        setGenreTracks(r.tracks);
-      } catch (e: any) {
-        if (e?.status === 401) clear();
-      }
-    })();
-  }, [token, selectedGenre, clear]);
+    refreshGenreTracks();
+  }, [selectedGenre, refreshGenreTracks]);
 
   // Load country tracks
   useEffect(() => {
-    if (!token || !selectedCountry) {
+    if (!selectedCountry) {
       setCountryTracks([]);
       return;
     }
-    (async () => {
-      try {
-        const r = await browseCountryTracks(token, selectedCountry, 100);
-        setCountryTracks(r.tracks);
-      } catch (e: any) {
-        if (e?.status === 401) clear();
-      }
-    })();
-  }, [token, selectedCountry, clear]);
+    refreshCountryTracks();
+  }, [selectedCountry, refreshCountryTracks]);
 
   // Load language tracks
   useEffect(() => {
-    if (!token || !selectedLanguage) {
+    if (!selectedLanguage) {
       setLanguageTracks([]);
       return;
     }
-    (async () => {
-      try {
-        const r = await browseLanguageTracks(token, selectedLanguage, 100);
-        setLanguageTracks(r.tracks);
-      } catch (e: any) {
-        if (e?.status === 401) clear();
-      }
-    })();
-  }, [token, selectedLanguage, clear]);
+    refreshLanguageTracks();
+  }, [selectedLanguage, refreshLanguageTracks]);
 
   // Infinite scroll handler
   const scrollRef = useRef<HTMLDivElement>(null);
