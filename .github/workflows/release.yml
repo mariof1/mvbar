@@ -197,11 +197,13 @@ jobs:
 
       - name: Summary
         run: |
-          echo "## Dev Build Complete 🚀" >> "$GITHUB_SUMMARY"
-          echo "" >> "$GITHUB_SUMMARY"
-          echo "**Image:** \`${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:dev\`" >> "$GITHUB_SUMMARY"
-          echo "**Platforms:** ${{ inputs.platforms }}" >> "$GITHUB_SUMMARY"
-          echo "**Commit:** ${{ github.sha }}" >> "$GITHUB_SUMMARY"
+          cat >> "$GITHUB_SUMMARY" << 'EOF'
+          ## Dev Build Complete
+          
+          **Image:** `${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:dev`
+          **Platforms:** ${{ inputs.platforms }}
+          **Commit:** ${{ github.sha }}
+          EOF
 
   # ===========================================
   # DOCKER BUILD - RELEASE
@@ -266,14 +268,16 @@ jobs:
 
       - name: Summary
         run: |
-          echo "## Release Build Complete 🎉" >> "$GITHUB_SUMMARY"
-          echo "" >> "$GITHUB_SUMMARY"
-          echo "**Version:** ${{ needs.version.outputs.version }}" >> "$GITHUB_SUMMARY"
-          echo "**Tag:** ${{ needs.version.outputs.tag }}" >> "$GITHUB_SUMMARY"
-          echo "**Platforms:** ${{ inputs.platforms }}" >> "$GITHUB_SUMMARY"
-          echo "" >> "$GITHUB_SUMMARY"
-          echo "### Docker Tags" >> "$GITHUB_SUMMARY"
-          echo "- \`${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:latest\`" >> "$GITHUB_SUMMARY"
-          echo "- \`${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}\`" >> "$GITHUB_SUMMARY"
-          echo "- \`${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ steps.version_parts.outputs.minor }}\`" >> "$GITHUB_SUMMARY"
-          echo "- \`${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ steps.version_parts.outputs.major }}\`" >> "$GITHUB_SUMMARY"
+          cat >> "$GITHUB_SUMMARY" << 'EOF'
+          ## Release Build Complete
+          
+          **Version:** ${{ needs.version.outputs.version }}
+          **Tag:** ${{ needs.version.outputs.tag }}
+          **Platforms:** ${{ inputs.platforms }}
+          
+          ### Docker Tags
+          - `${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:latest`
+          - `${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}`
+          - `${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ steps.version_parts.outputs.minor }}`
+          - `${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ steps.version_parts.outputs.major }}`
+          EOF
