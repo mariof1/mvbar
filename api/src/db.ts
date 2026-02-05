@@ -212,6 +212,31 @@ export async function initDb() {
   await pool.query('alter table tracks add column if not exists language text');
   await pool.query('alter table tracks add column if not exists year integer');
 
+  // Extended metadata columns (Phase 1 - Scanner Polish)
+  await pool.query('alter table tracks add column if not exists bpm integer');
+  await pool.query('alter table tracks add column if not exists initial_key text');
+  await pool.query('alter table tracks add column if not exists composer text');
+  await pool.query('alter table tracks add column if not exists conductor text');
+  await pool.query('alter table tracks add column if not exists publisher text');
+  await pool.query('alter table tracks add column if not exists copyright text');
+  await pool.query('alter table tracks add column if not exists comment text');
+  await pool.query('alter table tracks add column if not exists mood text');
+  await pool.query('alter table tracks add column if not exists grouping text');
+  await pool.query('alter table tracks add column if not exists isrc text');
+  await pool.query('alter table tracks add column if not exists release_date text');
+  await pool.query('alter table tracks add column if not exists original_year integer');
+  await pool.query('alter table tracks add column if not exists compilation boolean');
+  // Sort fields
+  await pool.query('alter table tracks add column if not exists title_sort text');
+  await pool.query('alter table tracks add column if not exists artist_sort text');
+  await pool.query('alter table tracks add column if not exists album_sort text');
+  await pool.query('alter table tracks add column if not exists album_artist_sort text');
+  // MusicBrainz IDs
+  await pool.query('alter table tracks add column if not exists musicbrainz_track_id text');
+  await pool.query('alter table tracks add column if not exists musicbrainz_release_id text');
+  await pool.query('alter table tracks add column if not exists musicbrainz_artist_id text');
+  await pool.query('alter table tracks add column if not exists musicbrainz_album_artist_id text');
+
   await pool.query(`
     create table if not exists artists (
       id bigserial primary key,
@@ -234,6 +259,11 @@ export async function initDb() {
     EXCEPTION WHEN others THEN NULL;
     END $$;
   `);
+  // Artist sort and ASCII name columns for search
+  await pool.query('alter table artists add column if not exists sort_name text');
+  await pool.query('alter table artists add column if not exists ascii_name text');
+  await pool.query('alter table artists add column if not exists musicbrainz_id text');
+  await pool.query('create index if not exists artists_ascii_name_idx on artists(ascii_name)');
 
   await pool.query(`
     create table if not exists track_artists (
@@ -268,6 +298,19 @@ export async function initDb() {
   await pool.query('create index if not exists track_artists_artist_role_idx on track_artists(artist_id, role)');
   await pool.query('create index if not exists track_artists_track_role_idx on track_artists(track_id, role)');
   await pool.query('create index if not exists track_artists_track_role_pos_idx on track_artists(track_id, role, position)');
+
+  // Track credits table for composer, conductor, etc.
+  await pool.query(`
+    create table if not exists track_credits (
+      track_id bigint not null references tracks(id) on delete cascade,
+      artist_id bigint not null references artists(id) on delete cascade,
+      role text not null check (role in ('composer','conductor','lyricist','producer','remixer','performer')),
+      position integer not null default 0,
+      primary key (track_id, artist_id, role)
+    );
+  `);
+  await pool.query('create index if not exists track_credits_artist_role_idx on track_credits(artist_id, role)');
+  await pool.query('create index if not exists track_credits_track_role_idx on track_credits(track_id, role)');
 
   // Track genres table for smart playlists
   await pool.query(`
@@ -402,7 +445,11 @@ export async function initDb() {
     select id, library_id, path, mtime_ms, size_bytes, ext, title, artist, album, duration_ms,
            last_seen_job_id, updated_at, art_path, art_mime, art_hash, lyrics_path, album_artist,
            genre, country, language, year, bpm, deleted_at, track_number, track_total, 
-           disc_number, disc_total, created_at, birthtime_ms
+           disc_number, disc_total, created_at, birthtime_ms,
+           initial_key, composer, conductor, publisher, copyright, comment, mood, grouping,
+           isrc, release_date, original_year, compilation,
+           title_sort, artist_sort, album_sort, album_artist_sort,
+           musicbrainz_track_id, musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id
     from tracks where deleted_at is null
   `);
 
