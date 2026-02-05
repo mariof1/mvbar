@@ -82,8 +82,8 @@ jobs:
             GIT_COMMIT=${{ steps.version.outputs.commit }}
             GIT_BRANCH=${{ steps.version.outputs.branch }}
             BUILD_DATE=${{ steps.version.outputs.build_date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Skip cache for now to ensure clean ARM64 build with NEXT_DISABLE_SWC_BINARY
+          no-cache: true
 
       - name: Update Docker Hub description
         if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
