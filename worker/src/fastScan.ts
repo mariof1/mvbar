@@ -688,10 +688,14 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
           newFiles++;
           // Emit audit event for new track
           await audit('track_added', { path: r.path, title: r.title, artist: r.artist });
+          // Publish live update
+          publishUpdate('track_added', { path: r.path, title: r.title, artist: r.artist, album: r.album });
         } else {
           updatedFiles++;
           // Emit audit event for updated track
           await audit('track_updated', { path: r.path, title: r.title, artist: r.artist });
+          // Publish live update
+          publishUpdate('track_updated', { path: r.path, title: r.title, artist: r.artist, album: r.album });
         }
         
         // Batch insert
@@ -740,9 +744,10 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
         [libraryId, pathBatch]
       );
       
-      // Emit audit events for deletions
+      // Emit audit events and live updates for deletions
       for (const p of pathBatch) {
         audit('track_removed', { path: p, actor: 'worker' });
+        publishUpdate('track_removed', { path: p });
       }
     }
     
