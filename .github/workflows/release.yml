@@ -38,6 +38,9 @@ env:
   DOCKERHUB_USER: mars148
   IMAGE_NAME: mvbar
 
+permissions:
+  contents: write
+
 jobs:
   # ===========================================
   # LINT & BUILD CHECK (runs for all builds)
