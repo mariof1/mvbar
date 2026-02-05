@@ -96,6 +96,7 @@ export async function runScan(mountPath, musicDir, jobId) {
                     mountPath,
                     path: rel,
                     mtimeMs: Math.round(st.mtimeMs),
+                    birthtimeMs: Math.round(st.birthtimeMs),
                     sizeBytes: st.size,
                     ext,
                     title: tags.title,

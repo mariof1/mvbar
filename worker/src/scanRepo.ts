@@ -96,6 +96,7 @@ export async function upsertTrack(params: {
   mountPath: string;
   path: string;
   mtimeMs: number;
+  birthtimeMs: number;
   sizeBytes: number;
   ext: string;
   title?: string | null;
@@ -139,10 +140,11 @@ export async function upsertTrack(params: {
       // Upsert track
       const trackRes = await client.query<{ id: number }>(
         refreshMeta
-          ? `insert into tracks(library_id, path, mtime_ms, size_bytes, ext, title, artist, album, genre, country, language, year, duration_ms, last_seen_job_id, art_path, art_mime, art_hash, lyrics_path)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          ? `insert into tracks(library_id, path, mtime_ms, birthtime_ms, size_bytes, ext, title, artist, album, genre, country, language, year, duration_ms, last_seen_job_id, art_path, art_mime, art_hash, lyrics_path, created_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, to_timestamp($4::double precision / 1000.0))
          on conflict (library_id, path) do update set
            mtime_ms=excluded.mtime_ms,
+           birthtime_ms=excluded.birthtime_ms,
            size_bytes=excluded.size_bytes,
            ext=excluded.ext,
            title=excluded.title,
@@ -158,12 +160,14 @@ export async function upsertTrack(params: {
            art_mime=excluded.art_mime,
            art_hash=excluded.art_hash,
            lyrics_path=excluded.lyrics_path,
+           created_at=excluded.created_at,
            updated_at=now()
          returning id`
-          : `insert into tracks(library_id, path, mtime_ms, size_bytes, ext, title, artist, album, genre, country, language, year, duration_ms, last_seen_job_id, art_path, art_mime, art_hash, lyrics_path)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          : `insert into tracks(library_id, path, mtime_ms, birthtime_ms, size_bytes, ext, title, artist, album, genre, country, language, year, duration_ms, last_seen_job_id, art_path, art_mime, art_hash, lyrics_path, created_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, to_timestamp($4::double precision / 1000.0))
          on conflict (library_id, path) do update set
            mtime_ms=excluded.mtime_ms,
+           birthtime_ms=excluded.birthtime_ms,
            size_bytes=excluded.size_bytes,
            ext=excluded.ext,
            title=excluded.title,
@@ -179,12 +183,14 @@ export async function upsertTrack(params: {
            art_mime=excluded.art_mime,
            art_hash=excluded.art_hash,
            lyrics_path=excluded.lyrics_path,
+           created_at=excluded.created_at,
            updated_at=now()
          returning id`,
         [
           libraryId,
           trackPath,
           params.mtimeMs,
+          Math.round(params.birthtimeMs),
           params.sizeBytes,
           ext,
           title,

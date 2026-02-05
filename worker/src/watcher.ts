@@ -277,6 +277,7 @@ export class LibraryWatcher {
         mountPath: this.root,
         path: relPath,
         mtimeMs: Math.round(st.mtimeMs),
+        birthtimeMs: Math.round(st.birthtimeMs),
         sizeBytes: st.size,
         ext: path.extname(filePath).toLowerCase(),
         title: tags.title,

@@ -120,7 +120,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       : sort === 'recent'
         ? 'max_updated desc, display_artist asc'
         : sort === 'created'
-          ? 'min_created desc, display_artist asc'
+          ? 'min_birthtime_ms desc nulls last, display_artist asc'
           : 'display_artist asc, album asc';
 
     // Use CTE to get unique albums, then get first album artist from track_artists table
@@ -142,7 +142,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         order by t.album, t.path
       ),
       album_counts as (
-        select t.album, count(*)::int as track_count, max(t.updated_at) as max_updated, min(t.created_at) as min_created
+        select t.album, count(*)::int as track_count, max(t.updated_at) as max_updated, min(t.birthtime_ms) as min_birthtime_ms
         from active_tracks t
         where t.album is not null and t.album <> ''
         ${artistFilter}
@@ -164,7 +164,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         ua.art_path,
         ua.art_hash,
         ac.max_updated,
-        ac.min_created
+        ac.min_birthtime_ms
       from unique_albums ua
       join album_counts ac on ac.album = ua.album
       order by ${orderBy}
