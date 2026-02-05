@@ -93,6 +93,11 @@ export const usePodcastProgress = create<PodcastProgressStore>((set) => ({
   setProgress: (data) => set({ lastProgress: data }),
 }));
 
+// Helper to update podcast progress from local player (for UI sync)
+export function updateLocalPodcastProgress(episodeId: number, position_ms: number, played: boolean) {
+  usePodcastProgress.getState().setProgress({ episodeId, position_ms, played });
+}
+
 // Store for playlist update notifications
 interface PlaylistUpdateStore {
   lastUpdate: number;
