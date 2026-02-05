@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { listHistory } from './apiClient';
 import { useAuth } from './store';
+import { useHistoryUpdates } from './useWebSocket';
 
 export function History(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
@@ -12,6 +13,9 @@ export function History(props: {
   const clear = useAuth((s) => s.clear);
   const [tracks, setTracks] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Live updates
+  const historyLastUpdate = useHistoryUpdates((s) => s.lastUpdate);
 
   async function refresh() {
     if (!token) return;
@@ -28,6 +32,13 @@ export function History(props: {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  // Live updates: refresh when new track is played
+  useEffect(() => {
+    if (!historyLastUpdate || !token) return;
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyLastUpdate]);
 
   if (!token) return null;
 

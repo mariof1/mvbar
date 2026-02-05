@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { scanNow, scanStatus } from './apiClient';
 import { useAuth } from './store';
+import { useScanProgress } from './useWebSocket';
 
 export function ScanPanel(props: { onScanFinished?: () => void }) {
   const token = useAuth((s) => s.token);
@@ -11,6 +12,9 @@ export function ScanPanel(props: { onScanFinished?: () => void }) {
   const [job, setJob] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Live updates from WebSocket
+  const scanProgress = useScanProgress();
 
   const isAdmin = user?.role === 'admin';
 
@@ -41,16 +45,30 @@ export function ScanPanel(props: { onScanFinished?: () => void }) {
     }
   }
 
+  // Initial load
   useEffect(() => {
     refresh();
-    const id = setInterval(() => {
-      if (!token || !isAdmin) return;
-      // poll faster while active
-      if (job?.state === 'running' || job?.state === 'queued') refresh();
-    }, 2000);
-    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, isAdmin, job?.state]);
+  }, [token, isAdmin]);
+
+  // Update job state from WebSocket scan progress
+  useEffect(() => {
+    if (!scanProgress.phase) return;
+    
+    setJob((prev: any) => ({
+      ...prev,
+      state: scanProgress.scanning ? 'running' : (scanProgress.phase === 'done' ? 'done' : prev?.state),
+      phase: scanProgress.phase,
+      current: scanProgress.current,
+      total: scanProgress.total,
+      lastScan: scanProgress.lastScan,
+    }));
+
+    // Notify when scan finishes
+    if (!scanProgress.scanning && (scanProgress.phase === 'done' || scanProgress.phase === 'complete')) {
+      props.onScanFinished?.();
+    }
+  }, [scanProgress, props]);
 
   if (!token || !isAdmin) return null;
 

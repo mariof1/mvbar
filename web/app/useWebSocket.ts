@@ -32,7 +32,37 @@ type PodcastProgressUpdate = {
   };
 };
 
-type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | { type: 'connected' } | { type: 'ping' };
+type PlaylistUpdate = {
+  type: 'playlist:created' | 'playlist:updated' | 'playlist:item_added' | 'playlist:item_removed';
+  data: {
+    playlistId?: number;
+    id?: number;
+    name?: string;
+    trackId?: number;
+    position?: number;
+  };
+};
+
+type HistoryUpdate = {
+  type: 'history:added';
+  data: {
+    trackId: number;
+    ts: number;
+  };
+};
+
+type ScanProgressUpdate = {
+  type: 'scan:progress';
+  data: {
+    phase: string;
+    current?: number;
+    total?: number;
+    scanning?: boolean;
+    lastScan?: string;
+  };
+};
+
+type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | { type: 'connected' } | { type: 'ping' };
 
 // Store for library update notifications
 interface LibraryUpdateStore {
@@ -56,6 +86,57 @@ interface PodcastProgressStore {
 export const usePodcastProgress = create<PodcastProgressStore>((set) => ({
   lastProgress: null,
   setProgress: (data) => set({ lastProgress: data }),
+}));
+
+// Store for playlist update notifications
+interface PlaylistUpdateStore {
+  lastUpdate: number;
+  lastEvent: PlaylistUpdate['data'] | null;
+  triggerRefresh: () => void;
+}
+
+export const usePlaylistUpdates = create<PlaylistUpdateStore>((set) => ({
+  lastUpdate: 0,
+  lastEvent: null,
+  triggerRefresh: () => set({ lastUpdate: Date.now() }),
+}));
+
+// Store for history update notifications
+interface HistoryUpdateStore {
+  lastUpdate: number;
+  lastTrackId: number | null;
+  triggerRefresh: () => void;
+}
+
+export const useHistoryUpdates = create<HistoryUpdateStore>((set) => ({
+  lastUpdate: 0,
+  lastTrackId: null,
+  triggerRefresh: () => set({ lastUpdate: Date.now() }),
+}));
+
+// Store for scan progress (admin)
+interface ScanProgressStore {
+  phase: string;
+  current: number;
+  total: number;
+  scanning: boolean;
+  lastScan: string | null;
+  setProgress: (data: ScanProgressUpdate['data']) => void;
+}
+
+export const useScanProgress = create<ScanProgressStore>((set) => ({
+  phase: '',
+  current: 0,
+  total: 0,
+  scanning: false,
+  lastScan: null,
+  setProgress: (data) => set({
+    phase: data.phase ?? '',
+    current: data.current ?? 0,
+    total: data.total ?? 0,
+    scanning: data.scanning ?? false,
+    lastScan: data.lastScan ?? null,
+  }),
 }));
 
 // Global WebSocket reference for sending messages
@@ -106,6 +187,21 @@ export function useWebSocket(isAdmin = false) {
           } else if (msg.type === 'podcast:progress') {
             // Podcast progress update from another device
             usePodcastProgress.getState().setProgress(msg.data);
+          } else if (msg.type === 'playlist:created' || msg.type === 'playlist:updated' || msg.type === 'playlist:item_added' || msg.type === 'playlist:item_removed') {
+            // Playlist updates
+            usePlaylistUpdates.setState({
+              lastUpdate: Date.now(),
+              lastEvent: msg.data,
+            });
+          } else if (msg.type === 'history:added') {
+            // History update
+            useHistoryUpdates.setState({
+              lastUpdate: Date.now(),
+              lastTrackId: msg.data.trackId,
+            });
+          } else if (msg.type === 'scan:progress') {
+            // Scan progress update (admin)
+            useScanProgress.getState().setProgress(msg.data);
           }
         } catch {
           // Ignore malformed messages

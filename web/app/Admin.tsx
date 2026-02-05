@@ -18,6 +18,7 @@ import {
   type ScanProgress,
 } from './apiClient';
 import { useAuth } from './store';
+import { useScanProgress, useLibraryUpdates } from './useWebSocket';
 
 type Tab = 'library' | 'users' | 'settings';
 
@@ -90,6 +91,10 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
   const [scanTriggered, setScanTriggered] = useState(false);
   const [showForceConfirm, setShowForceConfirm] = useState(false);
 
+  // Live updates from WebSocket
+  const wsScanProgress = useScanProgress();
+  const libraryLastUpdate = useLibraryUpdates((s) => s.lastUpdate);
+
   async function loadData() {
     setLoading(true);
     setError(null);
@@ -112,27 +117,36 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
     }
   }
 
-  // Poll scan progress while scanning or just triggered
+  // Live updates: Update scan progress from WebSocket
   useEffect(() => {
-    if (!scanTriggered && (!scanProgress || scanProgress.status === 'idle')) return;
-    const interval = setInterval(async () => {
-      try {
-        const progress = await getScanProgress(token);
-        setScanProgress(progress);
-        // Stop polling once scan completes
-        if (progress.status === 'idle') {
-          setScanTriggered(false);
-        }
-        // Also refresh stats if still scanning
-        if (progress.status !== 'idle') {
-          const statsRes = await getLibraryStats(token);
-          setStats(statsRes.stats);
-        }
-      } catch {}
-    }, 1000); // Poll every 1s for better responsiveness
-    return () => clearInterval(interval);
+    if (!wsScanProgress.phase) return;
+    setScanProgress((prev) => ({
+      ...prev,
+      ok: true,
+      status: wsScanProgress.scanning ? 'scanning' : 'idle',
+      filesProcessed: wsScanProgress.current,
+      filesFound: wsScanProgress.total,
+    }));
+
+    // Reset triggered flag when scan completes
+    if (!wsScanProgress.scanning && (wsScanProgress.phase === 'done' || wsScanProgress.phase === 'complete')) {
+      setScanTriggered(false);
+    }
+  }, [wsScanProgress]);
+
+  // Live updates: Refresh stats and activity when library changes
+  useEffect(() => {
+    if (!libraryLastUpdate || !token) return;
+    // Refresh stats
+    getLibraryStats(token)
+      .then((res) => setStats(res.stats))
+      .catch(() => {});
+    // Refresh activity
+    getLibraryActivity(token, 30)
+      .then((res) => setActivity(res.activity))
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanProgress?.status, scanTriggered, token]);
+  }, [libraryLastUpdate]);
 
   useEffect(() => {
     loadData();

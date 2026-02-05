@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { apiFetch } from './apiClient';
+import { useLibraryUpdates } from './useWebSocket';
 
 type Album = {
   album: string;
@@ -69,6 +70,10 @@ export function RecentlyAdded({
   const [tracksLoading, setTracksLoading] = useState(false);
   const { setQueueAndPlay, addToQueue: addToPlayerQueue } = usePlayer();
 
+  // Live updates
+  const libraryLastUpdate = useLibraryUpdates((s) => s.lastUpdate);
+  const libraryLastEvent = useLibraryUpdates((s) => s.lastEvent);
+
   const loadAlbums = useCallback(async () => {
     if (!token) return;
     try {
@@ -84,6 +89,16 @@ export function RecentlyAdded({
   useEffect(() => {
     loadAlbums();
   }, [loadAlbums]);
+
+  // Live updates: refresh when new tracks are added
+  useEffect(() => {
+    if (!libraryLastUpdate || !token) return;
+    // Only refresh on track_added events to show new albums
+    if (libraryLastEvent?.event === 'track_added') {
+      loadAlbums();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [libraryLastUpdate]);
 
   const loadAlbumTracks = useCallback(async (album: Album) => {
     if (!token) return;

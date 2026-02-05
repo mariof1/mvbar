@@ -5,6 +5,7 @@ import { createPlaylist, getPlaylistItems, listPlaylists, addTrackToPlaylist, re
 import { useAuth } from './store';
 import { SmartPlaylists } from './SmartPlaylists';
 import { useRouter } from './router';
+import { usePlaylistUpdates } from './useWebSocket';
 
 type PlaylistTab = 'regular' | 'smart';
 
@@ -40,6 +41,10 @@ export function Playlists(props: {
   const [name, setName] = useState('');
   const [addTrackId, setAddTrackId] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  // Live updates
+  const playlistLastUpdate = usePlaylistUpdates((s) => s.lastUpdate);
+  const playlistLastEvent = usePlaylistUpdates((s) => s.lastEvent);
 
   // Wrapper to select playlist with router
   const selectPlaylist = useCallback((id: string) => {
@@ -90,6 +95,23 @@ export function Playlists(props: {
     refreshItems(selectedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, token]);
+
+  // Live updates: refresh playlists list when a playlist is created
+  useEffect(() => {
+    if (!playlistLastUpdate || !token) return;
+    refreshPlaylists();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playlistLastUpdate]);
+
+  // Live updates: refresh items when current playlist is modified
+  useEffect(() => {
+    if (!playlistLastEvent || !selectedId || !token) return;
+    const eventPlaylistId = playlistLastEvent.playlistId ?? playlistLastEvent.id;
+    if (eventPlaylistId && String(eventPlaylistId) === selectedId) {
+      refreshItems(selectedId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playlistLastEvent, selectedId]);
 
   async function handleCreate() {
     if (!token) return;
