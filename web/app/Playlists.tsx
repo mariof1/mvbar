@@ -5,7 +5,7 @@ import { createPlaylist, getPlaylistItems, listPlaylists, addTrackToPlaylist, re
 import { useAuth } from './store';
 import { SmartPlaylists } from './SmartPlaylists';
 import { useRouter } from './router';
-import { usePlaylistUpdates } from './useWebSocket';
+import { usePlaylistUpdates, useLibraryUpdates } from './useWebSocket';
 
 type PlaylistTab = 'regular' | 'smart';
 
@@ -45,6 +45,7 @@ export function Playlists(props: {
   // Live updates
   const playlistLastUpdate = usePlaylistUpdates((s) => s.lastUpdate);
   const playlistLastEvent = usePlaylistUpdates((s) => s.lastEvent);
+  const lastLibraryUpdate = useLibraryUpdates((s) => s.lastUpdate);
 
   // Wrapper to select playlist with router
   const selectPlaylist = useCallback((id: string) => {
@@ -112,6 +113,13 @@ export function Playlists(props: {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playlistLastEvent, selectedId]);
+
+  // Live updates: refresh items when library changes (track metadata updates)
+  useEffect(() => {
+    if (!lastLibraryUpdate || !selectedId || !token) return;
+    refreshItems(selectedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastLibraryUpdate, selectedId]);
 
   async function handleCreate() {
     if (!token) return;
