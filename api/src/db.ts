@@ -389,17 +389,20 @@ export async function initDb() {
   await pool.query('alter table tracks add column if not exists bpm real');
   await pool.query('create index if not exists tracks_bpm_idx on tracks(bpm) where bpm is not null');
 
+  // Add birthtime_ms (on-disk creation time) + created_at (derived for convenience)
+  await pool.query('alter table tracks add column if not exists birthtime_ms bigint');
+
   // Add created_at to tracks for sorting by date added
   await pool.query('alter table tracks add column if not exists created_at timestamptz not null default now()');
   await pool.query('create index if not exists tracks_created_at_idx on tracks(created_at desc)');
 
-  // Recreate active_tracks view to include created_at
+  // Recreate active_tracks view; only append columns to avoid breaking CREATE OR REPLACE VIEW
   await pool.query(`
     create or replace view active_tracks as
     select id, library_id, path, mtime_ms, size_bytes, ext, title, artist, album, duration_ms,
            last_seen_job_id, updated_at, art_path, art_mime, art_hash, lyrics_path, album_artist,
            genre, country, language, year, bpm, deleted_at, track_number, track_total, 
-           disc_number, disc_total, created_at
+           disc_number, disc_total, created_at, birthtime_ms
     from tracks where deleted_at is null
   `);
 

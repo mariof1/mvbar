@@ -224,7 +224,7 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
         {tab === 'rss' && (
           <form onSubmit={handleRssSubmit}>
             <p className="text-slate-400 text-sm mb-3">
-              Enter a podcast RSS feed URL directly if you can't find it through search.
+              Enter a podcast RSS feed URL directly if you cannot find it through search.
             </p>
             <input
               type="url"
@@ -1243,7 +1243,7 @@ export function Podcasts() {
             {podcasts.length === 0 ? (
               <div className="text-center py-12 text-slate-400">
                 <p>No subscriptions yet</p>
-                <p className="text-sm mt-1">Click "Subscribe" to add a podcast</p>
+                <p className="text-sm mt-1">Click &quot;Subscribe&quot; to add a podcast</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">

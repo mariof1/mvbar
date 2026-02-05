@@ -1007,19 +1007,20 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // BUCKET: RECENTLY ADDED
     // ========================================================================
 
-    const recentlyAddedR = await db().query<TrackData>(
-      `select distinct on (t.album) t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.created_at,
+    const recentlyAddedR = await db().query<TrackData & { birthtime_ms: number }>(
+      `select distinct on (t.album) t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.birthtime_ms,
               0 as play_count, 0 as skip_count, null as last_played_at, false as is_favorite
        from active_tracks t
-       where t.art_path is not null and t.created_at > now() - interval '30 days'
+       where t.art_path is not null and t.birthtime_ms is not null
+         and t.birthtime_ms > (extract(epoch from (now() - interval '30 days')) * 1000)::bigint
          ${allowed ? `and t.library_id = any($1::bigint[])` : ''}
-       order by t.album, t.created_at desc limit 50`,
+       order by t.album, t.birthtime_ms desc nulls last limit 50`,
       allowed ? [allowed] : []
     );
 
-    // Re-sort by created_at after distinct
+    // Re-sort by birthtime_ms after distinct
     const recentlyAddedSorted = recentlyAddedR.rows.sort((a: any, b: any) => 
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      Number(b.birthtime_ms) - Number(a.birthtime_ms)
     ).slice(0, 25);
 
     if (recentlyAddedSorted.length >= 4) {

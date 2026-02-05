@@ -84,7 +84,6 @@ export function useWebSocket(isAdmin = false) {
       globalWs = ws;
 
       ws.onopen = () => {
-        console.log('[ws] Connected');
         reconnectAttempts.current = 0;
       };
 
@@ -96,10 +95,6 @@ export function useWebSocket(isAdmin = false) {
             // Respond to heartbeat
             ws.send(JSON.stringify({ type: 'pong' }));
           } else if (msg.type === 'library:update') {
-            // Only log library updates for admin users
-            if (isAdmin) {
-              console.log('[ws] Library update:', msg.data);
-            }
             useLibraryUpdates.setState({
               lastUpdate: Date.now(),
               lastEvent: msg.data,
@@ -112,13 +107,12 @@ export function useWebSocket(isAdmin = false) {
             // Podcast progress update from another device
             usePodcastProgress.getState().setProgress(msg.data);
           }
-        } catch (e) {
-          console.error('[ws] Failed to parse message:', e);
+        } catch {
+          // Ignore malformed messages
         }
       };
 
       ws.onclose = () => {
-        console.log('[ws] Disconnected');
         wsRef.current = null;
         globalWs = null;
         
@@ -129,11 +123,11 @@ export function useWebSocket(isAdmin = false) {
         reconnectTimeoutRef.current = setTimeout(connect, delay);
       };
 
-      ws.onerror = (error) => {
-        console.error('[ws] Error:', error);
+      ws.onerror = () => {
+        // Error logged via onclose
       };
-    } catch (e) {
-      console.error('[ws] Failed to connect:', e);
+    } catch {
+      // Connection failed, will retry via onclose
     }
   }, []);
 

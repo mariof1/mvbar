@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  adminLibraryWritable,
+  adminUpdateTrackMetadata,
   browseAlbum,
   browseAlbums,
   browseArtistById,
@@ -34,6 +36,11 @@ type Track = {
   album: string | null;
   duration_ms: number | null;
   art_path?: string | null;
+  path?: string;
+  genre?: string | null;
+  country?: string | null;
+  language?: string | null;
+  year?: number | null;
   artists?: Array<{ id: number; name: string }>;
   discNumber?: number | null;
   trackNumber?: number | null;
@@ -166,6 +173,7 @@ export function BrowseNew(props: {
   onNavigateArtist?: (artistId: number) => void;
 }) {
   const token = useAuth((s) => s.token);
+  const user = useAuth((s) => s.user);
   const clear = useAuth((s) => s.clear);
   const favIds = useFavorites((s) => s.ids);
   const toggleFav = useFavorites((s) => s.toggle);
@@ -176,11 +184,6 @@ export function BrowseNew(props: {
   const route = useRoute();
   const navigate = useRouter((s) => s.navigate);
   const back = useRouter((s) => s.back);
-
-  // Debug logging for route changes
-  // useEffect(() => {
-  //   console.log('[BrowseNew] Route changed:', route.type, route);
-  // }, [route]);
 
   // Derive state from route - memoized to avoid unnecessary effect reruns
   const tab = (route.type === 'browse' && route.sub ? route.sub : 'artists') as Tab;
@@ -249,6 +252,46 @@ export function BrowseNew(props: {
   const [artistArt, setArtistArt] = useState<{ art_path: string | null; art_hash: string | null } | null>(null);
 
   const [albumDetail, setAlbumDetail] = useState<{ name: string; artist: string; art_path: string | null; tracks: Track[]; totalDiscs: number } | null>(null);
+
+  const [anyWritable, setAnyWritable] = useState(false);
+  const [canEditMeta, setCanEditMeta] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editTrack, setEditTrack] = useState<Track | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editArtists, setEditArtists] = useState('');
+  const [editAlbum, setEditAlbum] = useState('');
+  const [editAlbumArtist, setEditAlbumArtist] = useState('');
+  const [editTrackNumber, setEditTrackNumber] = useState('');
+  const [editDiscNumber, setEditDiscNumber] = useState('');
+  const [editYear, setEditYear] = useState('');
+  const [editGenre, setEditGenre] = useState('');
+  const [editCountry, setEditCountry] = useState('');
+  const [editLanguage, setEditLanguage] = useState('');
+
+  const [editInitial, setEditInitial] = useState<{
+    title: string;
+    artists: string;
+    album: string;
+    albumArtist: string;
+    trackNumber: string;
+    discNumber: string;
+    year: string;
+    genre: string;
+    country: string;
+    language: string;
+  } | null>(null);
+
+  // Prevent background scrolling while modal is open.
+  useEffect(() => {
+    if (!editOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [editOpen]);
 
   const [genreTracks, setGenreTracks] = useState<Track[]>([]);
 
@@ -378,6 +421,26 @@ export function BrowseNew(props: {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedFilter]);
+
+
+  useEffect(() => {
+    if (!token || user?.role !== 'admin') {
+      setAnyWritable(false);
+      setCanEditMeta(false);
+      return;
+    }
+    (async () => {
+      try {
+        const r = await adminLibraryWritable(token);
+        setAnyWritable(Boolean(r.anyWritable));
+        setCanEditMeta(Boolean(r.anyWritable));
+      } catch (e: any) {
+        if (e?.status === 401) clear();
+        setAnyWritable(false);
+        setCanEditMeta(false);
+      }
+    })();
+  }, [token, user?.role, clear]);
 
   // Initial load when tab changes
   useEffect(() => {
@@ -558,6 +621,53 @@ export function BrowseNew(props: {
 
   // Album Detail View
   if (albumDetail) {
+    const openEditTrack = (t: Track) => {
+      setEditTrack(t);
+      setEditTitle(t.title ?? '');
+      const a = (t.artists && t.artists.length > 0)
+        ? t.artists.map((x) => x.name).join('\n')
+        : (t.artist ?? '');
+      setEditArtists(a);
+      setEditAlbum(albumDetail.name);
+      const aa = (t.album_artist ?? '')
+        .split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .join('\n');
+      setEditAlbumArtist(aa);
+      setEditTrackNumber(t.trackNumber ? String(t.trackNumber) : '');
+      setEditDiscNumber(t.discNumber ? String(t.discNumber) : '');
+      setEditYear(t.year ? String(t.year) : '');
+      const g = (t.genre ?? '').split(';').map((x) => x.trim()).filter(Boolean).join('\n');
+      setEditGenre(g);
+      const c = (t.country ?? '')
+        .split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .join('\n');
+      setEditCountry(c);
+      const l = (t.language ?? '')
+        .split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .join('\n');
+      setEditLanguage(l);
+      setEditInitial({
+        title: t.title ?? '',
+        artists: a,
+        album: albumDetail.name,
+        albumArtist: aa,
+        trackNumber: t.trackNumber ? String(t.trackNumber) : '',
+        discNumber: t.discNumber ? String(t.discNumber) : '',
+        year: t.year ? String(t.year) : '',
+        genre: g,
+        country: c,
+        language: l,
+      });
+      setEditError(null);
+      setEditOpen(true);
+    };
+
     return (
       <div className="space-y-6">
         <button onClick={goBack} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors">
@@ -665,6 +775,23 @@ export function BrowseNew(props: {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                       </svg>
                     </button>
+
+                    {canEditMeta && (track.path ?? '').toLowerCase().endsWith('.mp3') && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditTrack(track);
+                        }}
+                        className="p-1.5 sm:p-2 rounded-full hover:bg-slate-700 text-slate-400"
+                        title="Edit metadata (MP3)"
+                      >
+                        <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                      </button>
+                    )}
+
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -683,6 +810,289 @@ export function BrowseNew(props: {
             );
           })}
         </div>
+
+        {editOpen && editTrack && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={() => {
+              if (editSaving) return;
+              setEditOpen(false);
+              setEditInitial(null);
+            }}
+          >
+            <div
+              className="bg-slate-800 border border-slate-700 rounded-xl p-5 w-full max-w-xl shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold text-white truncate">Edit metadata</h3>
+                  <p className="text-sm text-slate-400 truncate">{editTrack.title || 'Untitled'}</p>
+                </div>
+                <button
+                  className="p-2 rounded-lg hover:bg-slate-700 text-slate-300"
+                  onClick={() => {
+                    if (editSaving) return;
+                    setEditOpen(false);
+                    setEditInitial(null);
+                  }}
+                  aria-label="Close"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {editError && (
+                <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+                  {editError}
+                </div>
+              )}
+
+              <div className="mt-4 space-y-3">
+                <label className="text-sm text-slate-300">
+                  Title
+                  <input
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Track title"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300">
+                  Album
+                  <input
+                    value={editAlbum}
+                    onChange={(e) => setEditAlbum(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Album"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300">
+                  Album Artists (one per line)
+                  <textarea
+                    value={editAlbumArtist}
+                    onChange={(e) => setEditAlbumArtist(e.target.value)}
+                    rows={3}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Album Artist"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300">
+                  Artists (one per line)
+                  <textarea
+                    value={editArtists}
+                    onChange={(e) => setEditArtists(e.target.value)}
+                    rows={3}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Artist name"
+                  />
+                </label>
+
+                <label className="text-sm text-slate-300">
+                  Genres (one per line)
+                  <textarea
+                    value={editGenre}
+                    onChange={(e) => setEditGenre(e.target.value)}
+                    rows={3}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="Genres"
+                  />
+                </label>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="text-sm text-slate-300">
+                    Languages (one per line)
+                    <textarea
+                      value={editLanguage}
+                      onChange={(e) => setEditLanguage(e.target.value)}
+                      rows={3}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                      placeholder="Languages"
+                    />
+                  </label>
+
+                  <label className="text-sm text-slate-300">
+                    Countries (one per line)
+                    <textarea
+                      value={editCountry}
+                      onChange={(e) => setEditCountry(e.target.value)}
+                      rows={3}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                      placeholder="Countries"
+                    />
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className="text-sm text-slate-300">
+                    Track #
+                    <input
+                      inputMode="numeric"
+                      value={editTrackNumber}
+                      onChange={(e) => setEditTrackNumber(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                      placeholder="1"
+                    />
+                  </label>
+
+                  <label className="text-sm text-slate-300">
+                    Disc #
+                    <input
+                      inputMode="numeric"
+                      value={editDiscNumber}
+                      onChange={(e) => setEditDiscNumber(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                      placeholder="1"
+                    />
+                  </label>
+
+                  <label className="text-sm text-slate-300">
+                    Year
+                    <input
+                      inputMode="numeric"
+                      value={editYear}
+                      onChange={(e) => setEditYear(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                      placeholder="2025"
+                    />
+                  </label>
+                </div>
+
+                <div className="text-xs text-slate-500 flex items-end">
+                  MP3 only (writes ID3 tags) · forces a rescan
+                </div>
+              </div>
+
+              <div className="mt-5 flex gap-3 justify-end">
+                <button
+                  onClick={() => {
+                    if (editSaving) return;
+                    setEditOpen(false);
+                    setEditInitial(null);
+                  }}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={editSaving}
+                  onClick={async () => {
+                    if (!token || !editTrack) return;
+                    setEditSaving(true);
+                    setEditError(null);
+                    try {
+                      const toNull = (s: string) => {
+                        const v = s.trim();
+                        return v === '' ? null : v;
+                      };
+                      const toNumOrNull = (s: string) => {
+                        const v = s.trim();
+                        if (!v) return null;
+                        const n = Number(v);
+                        return Number.isFinite(n) ? n : null;
+                      };
+                      const normLines = (s: string, splitRe: RegExp = /\r?\n/) =>
+                        s
+                          .split(splitRe)
+                          .map((x) => x.trim())
+                          .filter(Boolean);
+                      const canonLines = (s: string, splitRe?: RegExp) => normLines(s, splitRe).join('\n');
+                      const joinMulti = (lines: string[]) => lines.join('\u0000');
+
+                      const artists = normLines(editArtists);
+                      const genres = normLines(editGenre);
+                      const countries = normLines(editCountry, /\\n|\r?\n/);
+                      const languages = normLines(editLanguage, /\\n|\r?\n/);
+                      const albumArtists = normLines(editAlbumArtist);
+
+                      const init = editInitial ?? {
+                        title: editTitle,
+                        artists: canonLines(editArtists),
+                        album: editAlbum,
+                        albumArtist: canonLines(editAlbumArtist),
+                        trackNumber: editTrackNumber.trim(),
+                        discNumber: editDiscNumber.trim(),
+                        year: editYear.trim(),
+                        genre: canonLines(editGenre),
+                        country: canonLines(editCountry, /\\n|\r?\n/),
+                        language: canonLines(editLanguage, /\\n|\r?\n/),
+                      };
+
+                      const cur = {
+                        title: editTitle,
+                        artists: canonLines(editArtists),
+                        album: editAlbum,
+                        albumArtist: canonLines(editAlbumArtist),
+                        trackNumber: editTrackNumber.trim(),
+                        discNumber: editDiscNumber.trim(),
+                        year: editYear.trim(),
+                        genre: canonLines(editGenre),
+                        country: canonLines(editCountry, /\\n|\r?\n/),
+                        language: canonLines(editLanguage, /\\n|\r?\n/),
+                      };
+
+                      const payload: any = {};
+                      if (cur.title !== init.title) payload.title = toNull(editTitle);
+                      if (cur.album !== init.album) payload.album = toNull(editAlbum);
+                      if (cur.trackNumber !== init.trackNumber) payload.trackNumber = toNumOrNull(editTrackNumber);
+                      if (cur.discNumber !== init.discNumber) payload.discNumber = toNumOrNull(editDiscNumber);
+                      if (cur.year !== init.year) payload.year = toNumOrNull(editYear);
+
+                      if (cur.artists !== init.artists) payload.artists = artists;
+                      if (cur.albumArtist !== init.albumArtist) payload.albumArtist = albumArtists.length ? joinMulti(albumArtists) : null;
+                      if (cur.genre !== init.genre) payload.genre = genres.length ? joinMulti(genres) : null;
+                      if (cur.country !== init.country) payload.country = countries.length ? joinMulti(countries) : null;
+                      if (cur.language !== init.language) payload.language = languages.length ? joinMulti(languages) : null;
+
+                      if (Object.keys(payload).length === 0) {
+                        setEditOpen(false);
+                        setEditInitial(null);
+                        return;
+                      }
+
+                      await adminUpdateTrackMetadata(token, editTrack.id, payload);
+
+                      // If album name changed, navigate to the new album route.
+                      const newAlbum = editAlbum.trim();
+                      if (newAlbum && newAlbum !== albumDetail.name) {
+                        navigate({ type: 'browse-album', artist: '', album: newAlbum, artistId: undefined });
+                      }
+
+                      // Best-effort refresh (rescan can take a moment)
+                      await new Promise((r) => setTimeout(r, 1500));
+                      if (selectedAlbum) {
+                        const r = await browseAlbum(token, selectedAlbum.artist, selectedAlbum.album, selectedAlbum.artistId);
+                        setAlbumDetail({
+                          name: r.album.name,
+                          artist: r.album.artist,
+                          art_path: r.album.art_path,
+                          tracks: r.tracks,
+                          totalDiscs: r.album.total_discs ?? 1,
+                        });
+                      }
+
+                      setEditOpen(false);
+                      setEditInitial(null);
+                    } catch (e: any) {
+                      if (e?.status === 401) clear();
+                      setEditError(e?.data?.error || e?.data?.message || e?.message || 'Failed to save');
+                    } finally {
+                      setEditSaving(false);
+                    }
+                  }}
+                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium disabled:opacity-60"
+                >
+                  {editSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

@@ -4,7 +4,7 @@ import { create } from 'zustand';
 
 /**
  * UI Store - manages UI state that is NOT navigation
- * Navigation is now handled by router.ts
+ * Navigation is handled by router.ts
  * 
  * This store manages:
  * - Podcast episode playback (persists across navigation)
@@ -29,34 +29,11 @@ export interface PodcastEpisode {
   podcast_image_path?: string | null;
 }
 
-// Legacy NavState type for backward compatibility
-export interface NavState {
-  browseTab?: 'artists' | 'albums' | 'genres' | 'countries' | 'languages';
-  browseArtist?: { id: number; name: string };
-  browseAlbum?: { artist: string; album: string; artistId?: number };
-  browseGenre?: string;
-  browseCountry?: string;
-  browseLanguage?: string;
-  playlistTab?: 'regular' | 'smart';
-  playlistId?: string;
-  podcastView?: 'subscriptions' | 'new';
-  podcastId?: number;
-}
-
-export type Tab = 'for-you' | 'search' | 'library' | 'browse' | 'playlists' | 'favorites' | 'history' | 'podcasts' | 'settings' | 'admin';
-
 type UiState = {
-  // Podcast player state (persists across navigation - never closes unless explicit)
+  // Podcast player state (persists across navigation)
   podcastEpisode: PodcastEpisode | null;
   setPodcastEpisode: (episode: PodcastEpisode | null) => void;
   closePodcastPlayer: () => void;
-  
-  // Legacy navigation stubs (for AppShell.tsx compatibility - not used in main app)
-  tab: Tab;
-  setTab: (tab: Tab) => void;
-  nav: NavState;
-  pushNav: (patch: Partial<NavState>) => void;
-  clearNav: () => void;
 };
 
 export const useUi = create<UiState>((set) => ({
@@ -71,22 +48,9 @@ export const useUi = create<UiState>((set) => ({
     set({ podcastEpisode: episode });
   },
   closePodcastPlayer: () => set({ podcastEpisode: null }),
-  
-  // Legacy stubs - navigation is now handled by router.ts
-  tab: 'search',
-  setTab: () => {},
-  nav: {},
-  pushNav: () => {},
-  clearNav: () => {},
 }));
 
 // Helper to close podcast when music starts (called from playerStore)
 export function closePodcastPlayer() {
   useUi.setState({ podcastEpisode: null });
 }
-
-// Legacy init function - now handled by router.ts
-export function initUiFromStorage() {
-  // No-op - navigation is now handled by router.ts
-}
-

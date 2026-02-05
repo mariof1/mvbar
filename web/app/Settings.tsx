@@ -17,6 +17,13 @@ interface UserProfile {
   created_at: string;
 }
 
+interface VersionInfo {
+  version: string;
+  commit: string;
+  branch: string;
+  buildDate: string;
+}
+
 export function Settings() {
   const token = useAuth((s) => s.token);
   const user = useAuth((s) => s.user);
@@ -29,6 +36,7 @@ export function Settings() {
 
   const [activeTab, setActiveTab] = useState<Tab>('account');
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Password change state
@@ -58,6 +66,16 @@ export function Settings() {
     } catch {}
   };
 
+  // Load version info
+  const loadVersion = async () => {
+    try {
+      const r = await fetch('/api/version');
+      if (r.ok) {
+        setVersionInfo(await r.json());
+      }
+    } catch {}
+  };
+
   useEffect(() => {
     if (token) {
       loadProfile();
@@ -69,6 +87,7 @@ export function Settings() {
         })
         .catch(() => {});
     }
+    loadVersion();
   }, [token, loadPreferences]);
 
   // Avatar upload
@@ -552,7 +571,7 @@ export function Settings() {
               </h2>
 
               <p className="text-sm text-slate-400">
-                Last.fm integration is used for discovering similar artists and tracks. This powers the "Continue Playback" feature and artist recommendations.
+                Last.fm integration is used for discovering similar artists and tracks. This powers the &quot;Continue Playback&quot; feature and artist recommendations.
               </p>
 
               <div className="flex items-center gap-3 p-3 bg-slate-700/50 rounded-lg">
@@ -575,12 +594,30 @@ export function Settings() {
               <div className="grid grid-cols-2 gap-4 mt-4">
                 <div>
                   <div className="text-xs text-slate-500 uppercase tracking-wide">Version</div>
-                  <div className="text-white">1.0.0</div>
+                  <div className="text-white font-mono">
+                    {versionInfo?.version && versionInfo.version !== '0.0.0-dev' 
+                      ? versionInfo.version 
+                      : versionInfo?.branch && versionInfo?.commit 
+                        ? `${versionInfo.branch}-${versionInfo.commit.slice(0, 7)}`
+                        : 'dev'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-xs text-slate-500 uppercase tracking-wide">License</div>
                   <div className="text-white">MIT</div>
                 </div>
+                {versionInfo?.commit && versionInfo.commit !== 'unknown' && (
+                  <div>
+                    <div className="text-xs text-slate-500 uppercase tracking-wide">Commit</div>
+                    <div className="text-white font-mono text-sm">{versionInfo.commit.slice(0, 7)}</div>
+                  </div>
+                )}
+                {versionInfo?.buildDate && versionInfo.buildDate !== 'unknown' && (
+                  <div>
+                    <div className="text-xs text-slate-500 uppercase tracking-wide">Build Date</div>
+                    <div className="text-white text-sm">{new Date(versionInfo.buildDate).toLocaleDateString()}</div>
+                  </div>
+                )}
               </div>
             </div>
           </section>

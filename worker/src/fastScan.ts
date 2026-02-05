@@ -184,13 +184,14 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
     
     // Insert/update tracks and get their IDs
     const trackResult = await client.query<{ id: number; path: string }>(`
-      INSERT INTO tracks (library_id, path, mtime_ms, size_bytes, ext, title, artist, album, album_artist, genre, country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path, track_number, track_total, disc_number, disc_total, last_seen_job_id, updated_at, created_at)
+      INSERT INTO tracks (library_id, path, mtime_ms, size_bytes, ext, title, artist, album, album_artist, genre, country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path, track_number, track_total, disc_number, disc_total, last_seen_job_id, updated_at, birthtime_ms, created_at)
       SELECT 
         u.library_id, u.path, u.mtime_ms, u.size_bytes, u.ext,
         u.title, u.artist, u.album, u.album_artist, u.genre,
         u.country, u.language, u.year, u.duration_ms, u.art_path,
         u.art_mime, u.art_hash, u.lyrics_path, u.track_number, u.track_total,
         u.disc_number, u.disc_total, u.last_seen_job_id, u.updated_at,
+        u.birthtime_ms,
         to_timestamp(u.birthtime_ms::double precision / 1000.0)
       FROM unnest(
         $1::bigint[], $2::text[], $3::bigint[], $4::bigint[], $5::text[],
@@ -221,6 +222,7 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
         disc_number = EXCLUDED.disc_number,
         disc_total = EXCLUDED.disc_total,
         last_seen_job_id = EXCLUDED.last_seen_job_id,
+        birthtime_ms = EXCLUDED.birthtime_ms,
         created_at = EXCLUDED.created_at,
         updated_at = now()
       RETURNING id, path
@@ -250,7 +252,7 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       const artistsToInsert: { name: string; role: string; position: number }[] = [];
       const sanitize = (s: string) => s.replace(/\0/g, '');
       const norm = (s: string) => sanitize(s).trim();
-      const isAllQuestionMarks = (s: string) => /^\?+$/.test(s);
+      const isAllQuestionMarks = (s: string) => /^[?\s]+$/.test(s);
       const folderArtistGuess = (() => {
         // Try to guess artist from folder name for files like "Мэвл/..." when tags decode to "????".
         const first = (track.path.split(/[\\/]/).filter(Boolean)[0] ?? '').trim();
@@ -340,14 +342,18 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
 }
 
 // Load existing tracks for comparison (only non-deleted ones for change detection)
-async function loadExistingTracks(libraryId: number): Promise<Map<string, { mtimeMs: number; sizeBytes: number }>> {
-  const result = await db().query<{ path: string; mtime_ms: string; size_bytes: string }>(
-    'SELECT path, mtime_ms, size_bytes FROM tracks WHERE library_id = $1 AND deleted_at IS NULL',
+async function loadExistingTracks(libraryId: number): Promise<Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null }>> {
+  const result = await db().query<{ path: string; mtime_ms: string; size_bytes: string; birthtime_ms: string | null }>(
+    'SELECT path, mtime_ms, size_bytes, birthtime_ms FROM tracks WHERE library_id = $1 AND deleted_at IS NULL',
     [libraryId]
   );
-  const map = new Map<string, { mtimeMs: number; sizeBytes: number }>();
+  const map = new Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null }>();
   for (const row of result.rows) {
-    map.set(row.path, { mtimeMs: Number(row.mtime_ms), sizeBytes: Number(row.size_bytes) });
+    map.set(row.path, {
+      mtimeMs: Number(row.mtime_ms),
+      sizeBytes: Number(row.size_bytes),
+      birthtimeMs: row.birthtime_ms == null ? null : Number(row.birthtime_ms),
+    });
   }
   return map;
 }
@@ -493,7 +499,7 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
        from tracks t
        join track_artists ta on ta.track_id = t.id
        join artists a on a.id = ta.artist_id
-       where t.library_id = $1 and t.deleted_at is null and a.name ~ '^[?]+$'`,
+       where t.library_id = $1 and t.deleted_at is null and a.name ~ '^[?[:space:]]+$'`,
       [libraryId]
     );
     for (const r of bad.rows) badArtistPaths.add(r.path);
@@ -550,7 +556,8 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
       }
       filesToProcess.push(file);
     } else if (existing && existing.mtimeMs === file.mtimeMs && existing.sizeBytes === file.sizeBytes) {
-      if (badArtistPaths.has(file.relPath) || missingDurationPaths.has(file.relPath)) {
+      // If we're missing birthtime_ms in the DB (older rows), re-process unchanged files to backfill it.
+      if (existing.birthtimeMs == null || badArtistPaths.has(file.relPath) || missingDurationPaths.has(file.relPath)) {
         filesToProcess.push(file);
       } else {
         skippedFiles++;

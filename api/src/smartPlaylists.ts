@@ -257,9 +257,9 @@ async function buildSmartPlaylistQuery(
       orderBy = `${statsJoin} order by uts.last_played_at desc nulls last, t.title`;
     }
   } else if (sortMode === 'newest_added') {
-    orderBy = 'order by t.updated_at desc, t.id desc';
+    orderBy = 'order by t.birthtime_ms desc nulls last, t.id desc';
   } else if (sortMode === 'oldest_added') {
-    orderBy = 'order by t.updated_at asc, t.id asc';
+    orderBy = 'order by t.birthtime_ms asc nulls last, t.id asc';
   } else if (sortMode === 'title_asc') {
     orderBy = 'order by t.title asc, t.artist asc';
   } else if (sortMode === 'title_desc') {

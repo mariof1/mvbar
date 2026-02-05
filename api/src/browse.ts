@@ -120,7 +120,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       : sort === 'recent'
         ? 'max_updated desc, display_artist asc'
         : sort === 'created'
-          ? 'min_created desc, display_artist asc'
+          ? 'min_birthtime_ms desc nulls last, display_artist asc'
           : 'display_artist asc, album asc';
 
     // Use CTE to get unique albums, then get first album artist from track_artists table
@@ -142,7 +142,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         order by t.album, t.path
       ),
       album_counts as (
-        select t.album, count(*)::int as track_count, max(t.updated_at) as max_updated, min(t.created_at) as min_created
+        select t.album, count(*)::int as track_count, max(t.updated_at) as max_updated, min(t.birthtime_ms) as min_birthtime_ms
         from active_tracks t
         where t.album is not null and t.album <> ''
         ${artistFilter}
@@ -164,7 +164,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         ua.art_path,
         ua.art_hash,
         ac.max_updated,
-        ac.min_created
+        ac.min_birthtime_ms
       from unique_albums ua
       join album_counts ac on ac.album = ua.album
       order by ${orderBy}
@@ -727,7 +727,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       
       r = await db().query(
         `
-        select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path,
+        select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
                t.track_number, t.track_total, t.disc_number, t.disc_total
         from active_tracks t
         join track_artists ta on ta.track_id = t.id
@@ -761,7 +761,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         
         r = await db().query(
           `
-          select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path,
+          select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
                  t.track_number, t.track_total, t.disc_number, t.disc_total
           from active_tracks t
           join track_artists ta on ta.track_id = t.id
@@ -786,7 +786,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         params = allowed === null ? [artist, album] : [artist, album, allowed];
         r = await db().query(
           `
-          select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path,
+          select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
                  t.track_number, t.track_total, t.disc_number, t.disc_total
           from active_tracks t
           where t.album = $2 and (
@@ -806,7 +806,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       params = allowed === null ? [album] : [album, allowed];
       r = await db().query(
         `
-        select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path,
+        select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
                t.track_number, t.track_total, t.disc_number, t.disc_total
         from active_tracks t
         where t.album = $1

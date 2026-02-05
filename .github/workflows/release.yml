@@ -1,0 +1,279 @@
+name: Build & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        type: choice
+        options:
+          - dev
+          - release
+        default: dev
+      version_bump:
+        description: 'Version bump (release only)'
+        required: false
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+        default: patch
+      custom_version:
+        description: 'Custom version (e.g., 1.2.3) - only used if version_bump is "custom"'
+        required: false
+        type: string
+      platforms:
+        description: 'Build platforms'
+        required: true
+        type: choice
+        options:
+          - linux/amd64
+          - linux/amd64,linux/arm64
+        default: linux/amd64
+
+env:
+  DOCKERHUB_USER: mars148
+  IMAGE_NAME: mvbar
+
+jobs:
+  # ===========================================
+  # LINT & BUILD CHECK (runs for all builds)
+  # ===========================================
+  check:
+    name: Lint & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            worker/package-lock.json
+            web/package-lock.json
+
+      - name: Install & Lint API
+        working-directory: api
+        run: npm ci && npm run lint
+
+      - name: Install & Lint Worker
+        working-directory: worker
+        run: npm ci && npm run lint
+
+      - name: Install & Lint Web
+        working-directory: web
+        run: npm ci && npm run lint
+
+      - name: Build API
+        working-directory: api
+        run: npm run build
+
+      - name: Build Worker
+        working-directory: worker
+        run: npm run build
+
+      - name: Build Web
+        working-directory: web
+        run: npm run build
+
+  # ===========================================
+  # VERSION BUMP (release only)
+  # ===========================================
+  version:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    needs: check
+    if: inputs.build_type == 'release'
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get current version
+        id: current
+        run: |
+          VERSION=$(node -p "require('./api/package.json').version")
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Current version: ${VERSION}"
+
+      - name: Calculate new version
+        id: bump
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          BUMP_TYPE="${{ inputs.version_bump }}"
+          CUSTOM="${{ inputs.custom_version }}"
+          
+          if [[ "$BUMP_TYPE" == "custom" && -n "$CUSTOM" ]]; then
+            NEW_VERSION="$CUSTOM"
+          else
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+            case "$BUMP_TYPE" in
+              major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
+              minor) NEW_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+              patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+              *) NEW_VERSION="$CURRENT" ;;
+            esac
+          fi
+          
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "New version: ${NEW_VERSION}"
+
+      - name: Update package.json files
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.version }}"
+          
+          # Update all package.json files
+          for pkg in api worker web; do
+            jq --arg v "$NEW_VERSION" '.version = $v' "$pkg/package.json" > tmp.json
+            mv tmp.json "$pkg/package.json"
+          done
+          
+          echo "Updated all package.json files to ${NEW_VERSION}"
+
+      - name: Commit version bump
+        run: |
+          git add api/package.json worker/package.json web/package.json
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }}"
+          git push
+
+      - name: Create and push tag
+        run: |
+          git tag -a "${{ steps.bump.outputs.tag }}" -m "Release ${{ steps.bump.outputs.version }}"
+          git push origin "${{ steps.bump.outputs.tag }}"
+
+  # ===========================================
+  # DOCKER BUILD - DEV
+  # ===========================================
+  docker-dev:
+    name: Docker (dev)
+    runs-on: ubuntu-latest
+    needs: check
+    if: inputs.build_type == 'dev'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: contains(inputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:dev
+            ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:dev-${{ github.sha }}
+          build-args: |
+            APP_VERSION=0.0.0-dev
+            GIT_COMMIT=${{ github.sha }}
+            GIT_BRANCH=${{ github.ref_name }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          no-cache: true
+
+      - name: Summary
+        run: |
+          echo "## Dev Build Complete 🚀" >> "$GITHUB_SUMMARY"
+          echo "" >> "$GITHUB_SUMMARY"
+          echo "**Image:** \`${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:dev\`" >> "$GITHUB_SUMMARY"
+          echo "**Platforms:** ${{ inputs.platforms }}" >> "$GITHUB_SUMMARY"
+          echo "**Commit:** ${{ github.sha }}" >> "$GITHUB_SUMMARY"
+
+  # ===========================================
+  # DOCKER BUILD - RELEASE
+  # ===========================================
+  docker-release:
+    name: Docker (release)
+    runs-on: ubuntu-latest
+    needs: version
+    if: inputs.build_type == 'release'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - name: Set up QEMU
+        if: contains(inputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract version parts
+        id: version_parts
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          echo "major=${MAJOR}" >> "$GITHUB_OUTPUT"
+          echo "minor=${MAJOR}.${MINOR}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}
+            ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ steps.version_parts.outputs.minor }}
+            ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ steps.version_parts.outputs.major }}
+          build-args: |
+            APP_VERSION=${{ needs.version.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            GIT_BRANCH=${{ github.ref_name }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          no-cache: true
+
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}
+          short-description: "mvbar - self-hosted, local-first music player (all-in-one container)"
+          readme-filepath: ./docs/docker/mvbar.md
+
+      - name: Summary
+        run: |
+          echo "## Release Build Complete 🎉" >> "$GITHUB_SUMMARY"
+          echo "" >> "$GITHUB_SUMMARY"
+          echo "**Version:** ${{ needs.version.outputs.version }}" >> "$GITHUB_SUMMARY"
+          echo "**Tag:** ${{ needs.version.outputs.tag }}" >> "$GITHUB_SUMMARY"
+          echo "**Platforms:** ${{ inputs.platforms }}" >> "$GITHUB_SUMMARY"
+          echo "" >> "$GITHUB_SUMMARY"
+          echo "### Docker Tags" >> "$GITHUB_SUMMARY"
+          echo "- \`${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:latest\`" >> "$GITHUB_SUMMARY"
+          echo "- \`${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}\`" >> "$GITHUB_SUMMARY"
+          echo "- \`${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ steps.version_parts.outputs.minor }}\`" >> "$GITHUB_SUMMARY"
+          echo "- \`${{ env.DOCKERHUB_USER }}/${{ env.IMAGE_NAME }}:${{ steps.version_parts.outputs.major }}\`" >> "$GITHUB_SUMMARY"

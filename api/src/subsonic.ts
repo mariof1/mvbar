@@ -141,7 +141,8 @@ function sendResponse(reply: FastifyReply, data: SubsonicResponse, format: strin
   if (format === 'json' || format === 'jsonp') {
     reply.type('application/json').send(data);
   } else {
-    reply.type('application/xml').send(toXml(data));
+    // Some Subsonic clients mis-decode UTF-8 unless charset is explicit.
+    reply.header('content-type', 'application/xml; charset=utf-8').send(toXml(data));
   }
 }
 
@@ -199,7 +200,7 @@ function formatSong(track: any): Record<string, any> {
     bitRate: 320,
     path: track.path || '',
     discNumber: track.disc_number || 1,
-    created: track.updated_at || new Date().toISOString(),
+    created: track.birthtime_ms ? new Date(Number(track.birthtime_ms)).toISOString() : (track.updated_at || new Date().toISOString()),
     albumId: track.album ? `al-${encodeURIComponent(track.album)}` : undefined,
     type: 'music',
     isVideo: false,
@@ -216,7 +217,7 @@ function formatAlbum(album: any): Record<string, any> {
     coverArt: album.art_track_id ? String(album.art_track_id) : undefined,
     songCount: album.track_count || 0,
     duration: Math.round((album.total_duration_ms || 0) / 1000),
-    created: album.created_at || new Date().toISOString(),
+    created: album.birthtime_ms ? new Date(Number(album.birthtime_ms)).toISOString() : (album.created_at || new Date().toISOString()),
     year: album.year || 0,
     genre: album.genre || '',
     playCount: album.play_count || 0,
@@ -480,7 +481,7 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
       coverArt: String(firstTrack.id),
       songCount: tracks.rows.length,
       duration: Math.round(tracks.rows.reduce((sum: number, t: any) => sum + (t.duration_ms || 0), 0) / 1000),
-      created: firstTrack.updated_at || new Date().toISOString(),
+      created: firstTrack.birthtime_ms ? new Date(Number(firstTrack.birthtime_ms)).toISOString() : (firstTrack.updated_at || new Date().toISOString()),
       year: firstTrack.year || 0,
       genre: firstTrack.genre || '',
     };
@@ -521,7 +522,7 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
     let orderBy = 'ua.album';
     switch (type) {
       case 'random': orderBy = 'RANDOM()'; break;
-      case 'newest': orderBy = 'ac.max_updated DESC'; break;
+      case 'newest': orderBy = 'ac.max_birthtime_ms DESC NULLS LAST'; break;
       case 'alphabeticalByName': orderBy = 'ua.album'; break;
       case 'alphabeticalByArtist': orderBy = 'display_artist, ua.album'; break;
       case 'byYear': orderBy = 'ua.year DESC, ua.album'; break;
@@ -558,7 +559,7 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
         ORDER BY t.album, t.path
       ),
       album_counts AS (
-        SELECT t.album, COUNT(*)::int as track_count, SUM(t.duration_ms) as total_duration_ms, MAX(t.updated_at) as max_updated
+        SELECT t.album, COUNT(*)::int as track_count, SUM(t.duration_ms) as total_duration_ms, MAX(t.birthtime_ms) as max_birthtime_ms
         FROM active_tracks t
         WHERE t.album IS NOT NULL AND t.album <> ''
           ${whereGenre}
@@ -578,7 +579,7 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
         ac.total_duration_ms,
         ua.first_track_id as art_track_id,
         ua.year,
-        ac.max_updated
+        ac.max_birthtime_ms
       FROM unique_albums ua
       JOIN album_counts ac ON ac.album = ua.album
       ORDER BY ${orderBy}
@@ -592,6 +593,7 @@ export const subsonicPlugin: FastifyPluginAsync = async (app) => {
       coverArt: row.art_track_id ? String(row.art_track_id) : undefined,
       songCount: row.track_count || 0,
       duration: Math.round((row.total_duration_ms || 0) / 1000),
+      created: row.max_birthtime_ms ? new Date(Number(row.max_birthtime_ms)).toISOString() : undefined,
       year: row.year || 0,
     }));
     
