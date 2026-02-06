@@ -15,7 +15,7 @@ function safeJoinMount(mountPath: string, relPath: string) {
   return abs;
 }
 
-type Id3Frame = { id: string; raw: Buffer; txxxDescription?: string };
+type Id3Frame = { id: string; data: Buffer; flags: Buffer; txxxDescription?: string };
 
 function decodeSyncSafeInt(buf: Buffer) {
   // 4 bytes, 7 bits each
@@ -68,10 +68,50 @@ function parseTxxxDescription(frameData: Buffer) {
   return decodeText(descBuf, enc).replace(/\0/g, '').trim() || undefined;
 }
 
-function parseId3Frames(file: Buffer): { frames: Id3Frame[]; audioOffset: number } {
-  if (file.length < 10 || file.toString('ascii', 0, 3) !== 'ID3') return { frames: [], audioOffset: 0 };
+function buildFrame(id: string, data: Buffer, version: 3 | 4, flags?: Buffer) {
+  const header = Buffer.alloc(10);
+  header.write(id, 0, 4, 'ascii');
+  if (version === 4) encodeSyncSafeInt(data.length).copy(header, 4);
+  else header.writeUInt32BE(data.length, 4);
+  (flags ?? Buffer.from([0x00, 0x00])).copy(header, 8);
+  return Buffer.concat([header, data]);
+}
 
-  const version = file[3] ?? 3;
+function buildTextFrame(id: string, values: string[], version: 3 | 4) {
+  if (!values.length) return null;
+  const joined = version === 4 ? values.join('\u0000') : values.join('/');
+  const text = encodeUtf16WithBom(joined);
+  const body = Buffer.concat([Buffer.from([0x01]), text]);
+  return buildFrame(id, body, version);
+}
+
+function buildTxxxFrame(description: string, values: string[], version: 3 | 4) {
+  if (!values.length) return null;
+  const joined = version === 4 ? values.join('\u0000') : values.join('/');
+  const desc = encodeUtf16WithBom(description);
+  const val = encodeUtf16WithBom(joined);
+  const body = Buffer.concat([Buffer.from([0x01]), desc, Buffer.from([0x00, 0x00]), val]);
+  return buildFrame('TXXX', body, version);
+}
+
+function applyUnsync(buf: Buffer) {
+  // Insert 0x00 after 0xFF if next byte is 0x00 or >= 0xE0 (prevents false MPEG syncs).
+  const out: number[] = [];
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i]!;
+    out.push(b);
+    if (b === 0xff) {
+      const next = buf[i + 1];
+      if (next === 0x00 || (next !== undefined && (next & 0xe0) === 0xe0)) out.push(0x00);
+    }
+  }
+  return Buffer.from(out);
+}
+
+function parseId3Frames(file: Buffer): { frames: Id3Frame[]; audioOffset: number; version: 3 | 4; usesSyncsafeFrameSizes: boolean; headerFlags: number } {
+  if (file.length < 10 || file.toString('ascii', 0, 3) !== 'ID3') return { frames: [], audioOffset: 0, version: 3, usesSyncsafeFrameSizes: false, headerFlags: 0 };
+
+  const version = (file[3] === 4 ? 4 : 3) as 3 | 4;
   const flags = file[5] ?? 0;
   const tagSize = decodeSyncSafeInt(file.subarray(6, 10));
   const tagEnd = Math.min(file.length, 10 + tagSize);
@@ -80,6 +120,7 @@ function parseId3Frames(file: Buffer): { frames: Id3Frame[]; audioOffset: number
   // Skip extended header if present.
   const hasExtended = (flags & 0x40) !== 0;
   if (hasExtended && body.length >= 4) {
+    // v2.3 extended headers are messy in the wild; if present we just skip a conservative amount.
     const extSize = version === 4 ? decodeSyncSafeInt(body.subarray(0, 4)) : body.readUInt32BE(0);
     const extTotal = version === 4 ? extSize : extSize + 4;
     if (extTotal > 0 && extTotal <= body.length) body = body.subarray(extTotal);
@@ -87,45 +128,41 @@ function parseId3Frames(file: Buffer): { frames: Id3Frame[]; audioOffset: number
 
   const frames: Id3Frame[] = [];
   let pos = 0;
+  let usesSyncsafeFrameSizes = version === 4;
+
   while (pos + 10 <= body.length) {
     const id = body.toString('ascii', pos, pos + 4);
     if (!id || /^\0{4}$/.test(id) || id.trim() === '') break;
 
     const sizeBytes = body.subarray(pos + 4, pos + 8);
-    const size = version === 4 ? decodeSyncSafeInt(sizeBytes) : sizeBytes.readUInt32BE(0);
-    const end = pos + 10 + size;
+    let size = version === 4 ? decodeSyncSafeInt(sizeBytes) : sizeBytes.readUInt32BE(0);
+    let end = pos + 10 + size;
+
+    // Some files lie (v2.3 header but v2.4-style syncsafe frame sizes). If the v2.3 size is impossible,
+    // fall back to syncsafe to avoid producing mixed/invalid tags on rewrite.
+    if (version === 3 && (size < 0 || end > body.length)) {
+      const alt = decodeSyncSafeInt(sizeBytes);
+      const altEnd = pos + 10 + alt;
+      if (alt >= 0 && altEnd <= body.length) {
+        usesSyncsafeFrameSizes = true;
+        size = alt;
+        end = altEnd;
+      } else {
+        break;
+      }
+    }
+
     if (size < 0 || end > body.length) break;
 
-    const raw = body.subarray(pos, end);
-    const data = body.subarray(pos + 10, end);
-    const f: Id3Frame = { id, raw };
+    const flagsBuf = Buffer.from(body.subarray(pos + 8, pos + 10));
+    const data = Buffer.from(body.subarray(pos + 10, end));
+    const f: Id3Frame = { id, data, flags: flagsBuf };
     if (id === 'TXXX') f.txxxDescription = parseTxxxDescription(data);
     frames.push(f);
     pos = end;
   }
 
-  return { frames, audioOffset: tagEnd };
-}
-
-function buildTextFrame(id: string, value: string) {
-  const text = encodeUtf16WithBom(value);
-  const body = Buffer.concat([Buffer.from([0x01]), text]);
-  const header = Buffer.alloc(10);
-  header.write(id, 0, 4, 'ascii');
-  header.writeUInt32BE(body.length, 4);
-  header.writeUInt16BE(0, 8);
-  return Buffer.concat([header, body]);
-}
-
-function buildTxxxFrame(description: string, value: string) {
-  const desc = encodeUtf16WithBom(description);
-  const val = encodeUtf16WithBom(value);
-  const body = Buffer.concat([Buffer.from([0x01]), desc, Buffer.from([0x00, 0x00]), val]);
-  const header = Buffer.alloc(10);
-  header.write('TXXX', 0, 4, 'ascii');
-  header.writeUInt32BE(body.length, 4);
-  header.writeUInt16BE(0, 8);
-  return Buffer.concat([header, body]);
+  return { frames, audioOffset: tagEnd, version, usesSyncsafeFrameSizes, headerFlags: flags };
 }
 
 function updateId3Tag(absPath: string, opts: {
@@ -142,6 +179,9 @@ function updateId3Tag(absPath: string, opts: {
 }) {
   const file = readFileSync(absPath);
   const parsed = parseId3Frames(file);
+  // Always write ID3v2.4 so multi-value text frames use NUL separators (MP3Tag-compatible, avoids v2.3 '/').
+  const targetVersion: 4 = 4;
+  const needsUnsync = (parsed.headerFlags & 0x80) !== 0;
 
   const removeIds = new Set<string>();
   const removeTxxx = new Set<string>();
@@ -176,35 +216,49 @@ function updateId3Tag(absPath: string, opts: {
   });
 
   const added: Buffer[] = [];
-  const addManyText = (id: string, parts: string[] | null | undefined) => {
+  const addTextList = (id: string, parts: string[] | null | undefined) => {
     if (parts === undefined) return;
-    for (const p of parts ?? []) added.push(buildTextFrame(id, p));
+    const v = (parts ?? []).map((x) => String(x ?? '').trim()).filter(Boolean);
+    const f = buildTextFrame(id, v, targetVersion);
+    if (f) added.push(f);
   };
-  const addOneText = (id: string, v: string | null | undefined) => {
+  const addTextOne = (id: string, v: string | null | undefined) => {
     if (v === undefined || v === null) return;
-    added.push(buildTextFrame(id, v));
+    const f = buildTextFrame(id, [String(v)], targetVersion);
+    if (f) added.push(f);
+  };
+  const addTxxx = (desc: string, parts: string[] | null | undefined) => {
+    if (parts === undefined) return;
+    const v = (parts ?? []).map((x) => String(x ?? '').trim()).filter(Boolean);
+    const f = buildTxxxFrame(desc, v, targetVersion);
+    if (f) added.push(f);
   };
 
-  if (opts.title !== undefined) addOneText('TIT2', opts.title);
-  if (opts.album !== undefined) addOneText('TALB', opts.album);
-  if (opts.genre !== undefined) addManyText('TCON', opts.genre);
+  if (opts.title !== undefined) addTextOne('TIT2', opts.title);
+  if (opts.album !== undefined) addTextOne('TALB', opts.album);
+  if (opts.genre !== undefined) addTextList('TCON', opts.genre);
   if (opts.artists !== undefined) {
-    addManyText('TPE1', opts.artists);
-    for (const a of opts.artists ?? []) added.push(buildTxxxFrame('ARTISTS', a));
+    addTextList('TPE1', opts.artists);
   }
-  if (opts.albumArtist !== undefined) addManyText('TPE2', opts.albumArtist);
-  if (opts.year !== undefined && opts.year !== null) addOneText('TYER', String(opts.year));
-  if (opts.trackNumber !== undefined && opts.trackNumber !== null) addOneText('TRCK', String(opts.trackNumber));
-  if (opts.discNumber !== undefined && opts.discNumber !== null) addOneText('TPOS', String(opts.discNumber));
-  if (opts.country !== undefined) {
-    for (const c of opts.country ?? []) added.push(buildTxxxFrame('Country', c));
+  if (opts.albumArtist !== undefined) addTextList('TPE2', opts.albumArtist);
+  if (opts.year !== undefined && opts.year !== null) {
+    if (targetVersion === 4) addTextOne('TDRC', String(opts.year));
+    else addTextOne('TYER', String(opts.year));
   }
+  if (opts.trackNumber !== undefined && opts.trackNumber !== null) addTextOne('TRCK', String(opts.trackNumber));
+  if (opts.discNumber !== undefined && opts.discNumber !== null) addTextOne('TPOS', String(opts.discNumber));
+  if (opts.country !== undefined) addTxxx('Country', opts.country);
   if (opts.language !== undefined) {
-    addManyText('TLAN', opts.language);
-    for (const l of opts.language ?? []) added.push(buildTxxxFrame('Language', l));
+    addTextList('TLAN', opts.language);
   }
 
-  const framesBuf = Buffer.concat([...kept.map((f) => f.raw), ...added]);
+  // If we upgrade v2.3 -> v2.4 (syncsafe mismatch), drop per-frame flags to avoid writing invalid flags for the new version.
+  if (needsUnsync) {
+    for (let i = 0; i < added.length; i++) added[i] = applyUnsync(added[i]!);
+  }
+
+  const keptBuf = kept.map((f) => buildFrame(f.id, f.data, targetVersion, targetVersion === parsed.version ? f.flags : undefined));
+  const framesBuf = Buffer.concat([...keptBuf, ...added]);
   if (framesBuf.length === 0) {
     // Remove ID3 tag entirely.
     writeFileSync(absPath, file.subarray(parsed.audioOffset));
@@ -213,9 +267,10 @@ function updateId3Tag(absPath: string, opts: {
 
   const header = Buffer.alloc(10);
   header.write('ID3', 0, 3, 'ascii');
-  header[3] = 0x03;
+  header[3] = targetVersion;
   header[4] = 0x00;
-  header[5] = 0x00;
+  // Preserve original header flags when possible; we don't emit extended headers or footers.
+  header[5] = parsed.headerFlags & ~0x50;
   encodeSyncSafeInt(framesBuf.length).copy(header, 6);
 
   const out = Buffer.concat([header, framesBuf, file.subarray(parsed.audioOffset)]);
@@ -504,8 +559,8 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
 
     await audit('track_metadata_updated', { trackId: id, by: req.user.userId });
 
-    // Force rescan so DB reflects new tags
-    await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: req.user.userId, force: true }));
+    // Trigger quick scan so DB reflects new tags without forcing a full reprocess
+    await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: req.user.userId, force: false }));
 
     return { ok: true };
   });
@@ -519,7 +574,33 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/admin/libraries', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
     const r = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries order by mount_path asc');
-    return { ok: true, libraries: r.rows };
+
+    const libraries = await Promise.all(
+      r.rows.map(async (l) => {
+        let mounted = true;
+        try {
+          await access(l.mount_path);
+        } catch {
+          mounted = false;
+        }
+
+        let writable = false;
+        try {
+          await access(l.mount_path, constants.W_OK);
+          writable = true;
+        } catch {}
+
+        return {
+          id: l.id,
+          mount_path: l.mount_path,
+          mounted,
+          writable,
+          read_only: mounted && !writable,
+        };
+      })
+    );
+
+    return { ok: true, libraries };
   });
 
   app.get('/api/library/tracks', async (req, reply) => {

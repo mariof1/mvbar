@@ -81,7 +81,7 @@ export async function adminUpdateTrackMetadata(
 export async function listLibraries(token: string) {
   const r = (await apiFetch('/admin/libraries', { method: 'GET' }, token)) as {
     ok: boolean;
-    libraries: Array<{ id: number | string; mount_path: string }>;
+    libraries: Array<{ id: number | string; mount_path: string; mounted?: boolean; writable?: boolean; read_only?: boolean }>;
   };
   return { ok: r.ok, libraries: r.libraries.map((l) => ({ ...l, id: Number(l.id) })) };
 }
@@ -566,6 +566,9 @@ export async function prefetchLyrics(token: string, trackId: number) {
 export type ScanProgress = {
   ok: boolean;
   status: 'idle' | 'scanning' | 'indexing' | 'unknown';
+  mountPath?: string;
+  libraryIndex?: number;
+  libraryTotal?: number;
   filesFound: number;
   filesProcessed: number;
   currentFile?: string;

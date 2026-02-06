@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import {
   adminCreateUser,
   adminDeleteUser,
@@ -123,7 +123,10 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
     setScanProgress((prev) => ({
       ...prev,
       ok: true,
-      status: wsScanProgress.scanning ? 'scanning' : 'idle',
+      status: wsScanProgress.status === 'indexing' ? 'indexing' : (wsScanProgress.scanning ? 'scanning' : 'idle'),
+      mountPath: wsScanProgress.mountPath || prev?.mountPath,
+      libraryIndex: wsScanProgress.libraryIndex || prev?.libraryIndex,
+      libraryTotal: wsScanProgress.libraryTotal || prev?.libraryTotal,
       filesProcessed: wsScanProgress.filesProcessed,
       filesFound: wsScanProgress.filesFound,
       currentFile: wsScanProgress.currentFile,
@@ -135,9 +138,16 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
     }
   }, [wsScanProgress]);
 
-  // Live updates: Refresh stats and activity when library changes
+  // Live updates: Refresh stats and activity when library changes (throttled)
+  const lastLibraryRefreshRef = useRef<number>(0);
   useEffect(() => {
     if (!libraryLastUpdate || !token) return;
+    
+    // Throttle to once per 2 seconds during scans
+    const now = Date.now();
+    if (now - lastLibraryRefreshRef.current < 2000) return;
+    lastLibraryRefreshRef.current = now;
+    
     // Refresh stats
     getLibraryStats(token)
       .then((res) => setStats(res.stats))
@@ -269,13 +279,19 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                     ? 'Starting Scan...' 
                     : scanProgress?.status === 'scanning' 
                       ? 'Scanning Library...' 
-                      : 'Indexing Search...'}
+                      : 'Indexing...'}
                 </div>
                 <div className="text-sm text-slate-400">
                   {scanTriggered && (!scanProgress || scanProgress.status === 'idle')
                     ? 'Waiting for worker to start...'
                     : <>
-                        {scanProgress?.filesProcessed.toLocaleString()} / {scanProgress?.filesFound.toLocaleString()} files processed
+                        {scanProgress?.mountPath ? <span>Library: <span className="text-slate-200">{scanProgress.mountPath}</span></span> : null}
+                        {scanProgress?.libraryIndex && scanProgress?.libraryTotal ? (
+                          <span className="ml-2">({scanProgress.libraryIndex}/{scanProgress.libraryTotal})</span>
+                        ) : null}
+                        <span className="ml-2">
+                          {scanProgress?.filesProcessed.toLocaleString()} / {scanProgress?.filesFound.toLocaleString()} files processed
+                        </span>
                         {scanProgress?.queueSize && scanProgress.queueSize > 0 && (
                           <span className="ml-2 text-cyan-400">({scanProgress.queueSize} queued)</span>
                         )}
@@ -450,7 +466,19 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                 </svg>
               </div>
               <code className="flex-1 text-sm text-slate-300 font-mono">{lib.mount_path}</code>
-              <span className="text-xs text-slate-500">ID: {lib.id}</span>
+              <div className="flex items-center gap-2">
+                {lib.mounted === false ? (
+                  <span className="text-xs px-2 py-1 rounded-md bg-red-500/10 text-red-400 border border-red-500/20">unmounted</span>
+                ) : (
+                  <span className="text-xs px-2 py-1 rounded-md bg-green-500/10 text-green-400 border border-green-500/20">mounted</span>
+                )}
+                {lib.writable ? (
+                  <span className="text-xs px-2 py-1 rounded-md bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">writable</span>
+                ) : (
+                  <span className="text-xs px-2 py-1 rounded-md bg-slate-700/30 text-slate-300 border border-slate-700/40">read-only</span>
+                )}
+                <span className="text-xs text-slate-500">ID: {lib.id}</span>
+              </div>
             </div>
           ))}
           {libraries.length === 0 && (

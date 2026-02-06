@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   adminLibraryWritable,
   adminUpdateTrackMetadata,
@@ -166,6 +166,71 @@ function formatDuration(ms: number | null): string {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
+function useFlipAnimation(ref: React.RefObject<HTMLElement>, idsKey: string) {
+  const prevRectsRef = useRef<Map<string, DOMRect> | null>(null);
+  const hasMeasuredRef = useRef(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (typeof window !== 'undefined') {
+      try {
+        if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+          // Still keep rect tracking for correctness.
+          const m = new Map<string, DOMRect>();
+          el.querySelectorAll<HTMLElement>('[data-flip-id]').forEach((n) => {
+            const id = n.dataset.flipId;
+            if (id) m.set(id, n.getBoundingClientRect());
+          });
+          prevRectsRef.current = m;
+          hasMeasuredRef.current = true;
+          return;
+        }
+      } catch {}
+    }
+
+    const nextRects = new Map<string, DOMRect>();
+    const nodes = Array.from(el.querySelectorAll<HTMLElement>('[data-flip-id]'));
+    for (const n of nodes) {
+      const id = n.dataset.flipId;
+      if (!id) continue;
+      nextRects.set(id, n.getBoundingClientRect());
+    }
+
+    const prevRects = prevRectsRef.current;
+    if (prevRects && hasMeasuredRef.current) {
+      for (const n of nodes) {
+        const id = n.dataset.flipId;
+        if (!id) continue;
+        const prev = prevRects.get(id);
+        const next = nextRects.get(id);
+        if (!next) continue;
+
+        if (!prev) {
+          // New item: fade in subtly.
+          n.animate(
+            [{ opacity: 0, transform: 'scale(0.98)' }, { opacity: 1, transform: 'scale(1)' }],
+            { duration: 180, easing: 'ease-out' }
+          );
+          continue;
+        }
+
+        const dx = prev.left - next.left;
+        const dy = prev.top - next.top;
+        if (dx === 0 && dy === 0) continue;
+
+        n.animate(
+          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0px, 0px)' }],
+          { duration: 260, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }
+        );
+      }
+    }
+
+    prevRectsRef.current = nextRects;
+    hasMeasuredRef.current = true;
+  }, [idsKey, ref]);
+}
+
 export function BrowseNew(props: {
   onPlayTrack?: (t: { id: number; title: string | null; artist: string | null; album?: string | null }) => void;
   onPlayAll?: (tracks: Array<{ id: number; title: string | null; artist: string | null; album?: string | null }>) => void;
@@ -213,6 +278,7 @@ export function BrowseNew(props: {
   const selectedLanguage = route.type === 'browse-language' ? route.language : null;
 
   const [loading, setLoading] = useState(false);
+  const [wsRefreshing, setWsRefreshing] = useState(false);
   const [filter, setFilter] = useState('');
 
   const [debouncedFilter, setDebouncedFilter] = useState('');
@@ -302,9 +368,11 @@ export function BrowseNew(props: {
   const PAGE_SIZE = 48;
 
   // Load artists
-  const loadArtists = useCallback(async (reset = false) => {
+  const loadArtists = useCallback(async (reset = false, opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
     try {
       const offset = reset ? 0 : artistsOffset;
       const r = await browseArtists(token, PAGE_SIZE, offset, 'az', debouncedFilter || undefined);
@@ -318,14 +386,17 @@ export function BrowseNew(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
     } finally {
-      setLoading(false);
+      if (silent) setWsRefreshing(false);
+      else setLoading(false);
     }
   }, [token, artistsOffset, clear, debouncedFilter]);
 
   // Load albums
-  const loadAlbums = useCallback(async (reset = false) => {
+  const loadAlbums = useCallback(async (reset = false, opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
     try {
       const offset = reset ? 0 : albumsOffset;
       const r = await browseAlbums(token, PAGE_SIZE, offset, 'az', undefined, debouncedFilter || undefined);
@@ -339,14 +410,17 @@ export function BrowseNew(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
     } finally {
-      setLoading(false);
+      if (silent) setWsRefreshing(false);
+      else setLoading(false);
     }
   }, [token, albumsOffset, clear, debouncedFilter]);
 
   // Load genres
-  const loadGenres = useCallback(async (reset = false) => {
+  const loadGenres = useCallback(async (reset = false, opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
     try {
       const offset = reset ? 0 : genresOffset;
       const r = await browseGenres(token, PAGE_SIZE, offset, 'tracks_desc', debouncedFilter || undefined);
@@ -360,14 +434,17 @@ export function BrowseNew(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
     } finally {
-      setLoading(false);
+      if (silent) setWsRefreshing(false);
+      else setLoading(false);
     }
   }, [token, genresOffset, clear, debouncedFilter]);
 
   // Load countries
-  const loadCountries = useCallback(async () => {
+  const loadCountries = useCallback(async (opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
     try {
       const r = await browseCountries(token);
       const filtered = debouncedFilter
@@ -378,14 +455,17 @@ export function BrowseNew(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
     } finally {
-      setLoading(false);
+      if (silent) setWsRefreshing(false);
+      else setLoading(false);
     }
   }, [token, clear, debouncedFilter]);
 
   // Load languages
-  const loadLanguages = useCallback(async () => {
+  const loadLanguages = useCallback(async (opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
     try {
       const r = await browseLanguages(token);
       const filtered = debouncedFilter
@@ -396,7 +476,8 @@ export function BrowseNew(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
     } finally {
-      setLoading(false);
+      if (silent) setWsRefreshing(false);
+      else setLoading(false);
     }
   }, [token, clear, debouncedFilter]);
 
@@ -520,21 +601,38 @@ export function BrowseNew(props: {
     }
   }, [token, selectedLanguage, clear]);
 
-  // Refresh data when library updates arrive via WebSocket
+  // Refresh data when library updates arrive via WebSocket.
+  // We do this as a quiet, debounced background refresh to avoid visible spinners/flicker during scans.
+  const lastRefreshRef = useRef<number>(0);
+  const wsRefreshTimerRef = useRef<any>(null);
   useEffect(() => {
     if (!lastUpdate || !lastEvent) return;
-    // Refresh current tab when files are added/updated/removed
-    if (tab === 'artists') loadArtists(true);
-    else if (tab === 'albums') loadAlbums(true);
-    else if (tab === 'genres') loadGenres(true);
-    else if (tab === 'countries') loadCountries();
-    else if (tab === 'languages') loadLanguages();
-    // Also refresh detail views if open
-    if (selectedAlbum) refreshAlbumDetail();
-    if (selectedArtist) refreshArtistDetail();
-    if (selectedGenre) refreshGenreTracks();
-    if (selectedCountry) refreshCountryTracks();
-    if (selectedLanguage) refreshLanguageTracks();
+
+    // Throttle refreshes to once per ~4s to avoid spam during bulk scans
+    const now = Date.now();
+    if (now - lastRefreshRef.current < 4000) return;
+    if (loading || wsRefreshing) return;
+
+    if (wsRefreshTimerRef.current) clearTimeout(wsRefreshTimerRef.current);
+    wsRefreshTimerRef.current = setTimeout(() => {
+      lastRefreshRef.current = Date.now();
+      if (tab === 'artists') loadArtists(true, { silent: true });
+      else if (tab === 'albums') loadAlbums(true, { silent: true });
+      else if (tab === 'genres') loadGenres(true, { silent: true });
+      else if (tab === 'countries') loadCountries({ silent: true });
+      else if (tab === 'languages') loadLanguages({ silent: true });
+
+      // Also refresh detail views if open (these don't show spinners)
+      if (selectedAlbum) refreshAlbumDetail();
+      if (selectedArtist) refreshArtistDetail();
+      if (selectedGenre) refreshGenreTracks();
+      if (selectedCountry) refreshCountryTracks();
+      if (selectedLanguage) refreshLanguageTracks();
+    }, 400);
+
+    return () => {
+      if (wsRefreshTimerRef.current) clearTimeout(wsRefreshTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastUpdate]); // intentionally only lastUpdate to avoid loops
 
@@ -585,10 +683,28 @@ export function BrowseNew(props: {
     refreshLanguageTracks();
   }, [selectedLanguage, refreshLanguageTracks]);
 
+  const listIdsKey = useMemo(() => {
+    if (tab === 'artists') return `artists:${artists.map((a) => a.id).join(',')}`;
+    if (tab === 'albums') return `albums:${albums.map((a) => `${a.display_artist}||${a.album}`).join(',')}`;
+    if (tab === 'genres') return `genres:${genres.map((g) => g.genre).join(',')}`;
+    if (tab === 'countries') return `countries:${countries.map((c) => c.country).join(',')}`;
+    if (tab === 'languages') return `languages:${languages.map((l) => l.language).join(',')}`;
+    return '';
+  }, [tab, artists, albums, genres, countries, languages]);
+
   // Infinite scroll handler
   const scrollRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  // Smooth reordering animations for live updates.
+  useFlipAnimation(gridRef, listIdsKey);
+  const wsRefreshingRef = useRef(false);
+  useEffect(() => {
+    wsRefreshingRef.current = wsRefreshing;
+  }, [wsRefreshing]);
+
   const handleScroll = useCallback(() => {
-    if (loading) return;
+    if (loading || wsRefreshingRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
@@ -1505,10 +1621,11 @@ export function BrowseNew(props: {
       <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto no-scrollbar" style={{ maxHeight: 'calc(100vh - 280px)' }}>
         {/* Artists Grid */}
         {tab === 'artists' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+          <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
             {artists.map((a) => (
               <button
                 key={a.id}
+                data-flip-id={`artist:${a.id}`}
                 onClick={() => selectArtist({ id: a.id, name: a.name })}
                 className="group text-center p-4 rounded-xl hover:bg-slate-800/50 transition-colors"
               >
@@ -1533,10 +1650,11 @@ export function BrowseNew(props: {
 
         {/* Albums Grid */}
         {tab === 'albums' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-            {albums.map((a, idx) => (
+          <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            {albums.map((a) => (
               <button
-                key={`${a.display_artist}-${a.album}-${idx}`}
+                key={`${a.display_artist}||${a.album}`}
+                data-flip-id={`album:${a.display_artist}||${a.album}`}
                 onClick={() => selectAlbum({ artist: a.display_artist, album: a.album })}
                 className="group text-left"
               >
@@ -1565,10 +1683,11 @@ export function BrowseNew(props: {
 
         {/* Genres Grid */}
         {tab === 'genres' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {genres.map((g) => (
               <button
                 key={g.genre}
+                data-flip-id={`genre:${g.genre}`}
                 onClick={() => selectGenre(g.genre)}
                 className={`group relative aspect-[3/2] rounded-xl overflow-hidden bg-gradient-to-br ${getGenreColor(g.genre)} p-4 flex flex-col justify-end text-left shadow-lg hover:shadow-xl hover:scale-[1.02] transition-all`}
               >
@@ -1589,10 +1708,11 @@ export function BrowseNew(props: {
 
         {/* Countries Grid */}
         {tab === 'countries' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {countries.map((c) => (
               <button
                 key={c.country}
+                data-flip-id={`country:${c.country}`}
                 onClick={() => selectCountry(c.country)}
                 className={`group relative aspect-[3/2] rounded-xl overflow-hidden bg-gradient-to-br ${getGenreColor(c.country)} p-4 flex flex-col justify-end text-left shadow-lg hover:shadow-xl hover:scale-[1.02] transition-all`}
               >
@@ -1616,10 +1736,11 @@ export function BrowseNew(props: {
 
         {/* Languages Grid */}
         {tab === 'languages' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {languages.map((l) => (
               <button
                 key={l.language}
+                data-flip-id={`language:${l.language}`}
                 onClick={() => selectLanguage(l.language)}
                 className={`group relative aspect-[3/2] rounded-xl overflow-hidden bg-gradient-to-br ${getGenreColor(l.language)} p-4 flex flex-col justify-end text-left shadow-lg hover:shadow-xl hover:scale-[1.02] transition-all`}
               >

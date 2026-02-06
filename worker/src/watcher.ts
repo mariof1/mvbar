@@ -26,6 +26,7 @@ function publishUpdate(event: string, data: Record<string, unknown>) {
 // Scan progress tracking
 const scanProgress = {
   status: 'idle' as 'idle' | 'scanning' | 'indexing',
+  mountPath: '',
   filesFound: 0,
   filesProcessed: 0,
   currentFile: '',
@@ -132,6 +133,7 @@ export class LibraryWatcher {
       this.ready = true;
     } else {
       logger.info('scan', `Starting library scan: ${this.root}`);
+      scanProgress.mountPath = this.root;
       scanProgress.status = 'scanning';
       scanProgress.filesFound = 0;
       scanProgress.filesProcessed = 0;

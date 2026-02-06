@@ -35,7 +35,7 @@ for (const dir of musicDirs) {
   if (useFastScan) {
     // Run fast parallel scan on startup
     try {
-      await runFastScan(dir);
+      await runFastScan(dir, false, { libraryIndex: musicDirs.indexOf(dir) + 1, libraryTotal: musicDirs.length });
     } catch (e) {
       logger.error('scan', `Fast scan failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -52,7 +52,7 @@ async function periodicRescan(force: boolean = false) {
   scanInProgress = true;
   try {
     for (const dir of musicDirs) {
-      await runFastScan(dir, force);
+      await runFastScan(dir, force, { libraryIndex: musicDirs.indexOf(dir) + 1, libraryTotal: musicDirs.length });
     }
   } catch (e) {
     logger.error('scan', `Periodic scan failed: ${e instanceof Error ? e.message : String(e)}`);

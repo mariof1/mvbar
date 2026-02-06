@@ -57,6 +57,9 @@ type ScanProgressUpdate = {
     // Worker sends these fields
     event?: string;
     status?: string;
+    mountPath?: string;
+    libraryIndex?: number;
+    libraryTotal?: number;
     filesFound?: number;
     filesProcessed?: number;
     currentFile?: string;
@@ -127,6 +130,9 @@ export const useHistoryUpdates = create<HistoryUpdateStore>((set) => ({
 // Store for scan progress (admin)
 interface ScanProgressStore {
   status: string;
+  mountPath: string;
+  libraryIndex: number;
+  libraryTotal: number;
   filesFound: number;
   filesProcessed: number;
   currentFile: string;
@@ -136,12 +142,18 @@ interface ScanProgressStore {
 
 export const useScanProgress = create<ScanProgressStore>((set) => ({
   status: '',
+  mountPath: '',
+  libraryIndex: 0,
+  libraryTotal: 0,
   filesFound: 0,
   filesProcessed: 0,
   currentFile: '',
   scanning: false,
   setProgress: (data) => set({
     status: data.status ?? '',
+    mountPath: data.mountPath ?? '',
+    libraryIndex: data.libraryIndex ?? 0,
+    libraryTotal: data.libraryTotal ?? 0,
     filesFound: data.filesFound ?? 0,
     filesProcessed: data.filesProcessed ?? 0,
     currentFile: data.currentFile ?? '',
