@@ -33,6 +33,10 @@ services:
 
       # worker
       MUSIC_DIRS: /music,/music2
+      TEMPO_DETECT: ${TEMPO_DETECT:-0}
+      TEMPO_METHOD: ${TEMPO_METHOD:-energy}
+      TEMPO_MIN_CONF: ${TEMPO_MIN_CONF:-0.35}
+      TEMPO_CONCURRENCY: ${TEMPO_CONCURRENCY:-2}
 
       # web -> api internal calls
       API_INTERNAL_BASE: http://127.0.0.1:3001
