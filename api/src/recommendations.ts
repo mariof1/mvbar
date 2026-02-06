@@ -858,8 +858,8 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
                 s.last_played_at, false as is_favorite, null as updated_at
          from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
          where t.bpm between $2 and $3 ${allowed ? `and t.library_id = any($4::bigint[])` : ''}
-         order by abs(t.bpm - $5), coalesce(s.play_count, 0) desc limit 100`,
-        allowed 
+         order by abs(t.bpm - ${allowed ? '$5' : '$4'}), coalesce(s.play_count, 0) desc limit 100`,
+        allowed
           ? [userId, targetBpm - tolerance, targetBpm + tolerance, allowed, targetBpm]
           : [userId, targetBpm - tolerance, targetBpm + tolerance, targetBpm]
       );
