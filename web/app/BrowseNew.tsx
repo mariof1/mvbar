@@ -213,6 +213,7 @@ export function BrowseNew(props: {
   const selectedLanguage = route.type === 'browse-language' ? route.language : null;
 
   const [loading, setLoading] = useState(false);
+  const [wsRefreshing, setWsRefreshing] = useState(false);
   const [filter, setFilter] = useState('');
 
   const [debouncedFilter, setDebouncedFilter] = useState('');
@@ -302,9 +303,11 @@ export function BrowseNew(props: {
   const PAGE_SIZE = 48;
 
   // Load artists
-  const loadArtists = useCallback(async (reset = false) => {
+  const loadArtists = useCallback(async (reset = false, opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
     try {
       const offset = reset ? 0 : artistsOffset;
       const r = await browseArtists(token, PAGE_SIZE, offset, 'az', debouncedFilter || undefined);
@@ -318,14 +321,17 @@ export function BrowseNew(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
     } finally {
-      setLoading(false);
+      if (silent) setWsRefreshing(false);
+      else setLoading(false);
     }
   }, [token, artistsOffset, clear, debouncedFilter]);
 
   // Load albums
-  const loadAlbums = useCallback(async (reset = false) => {
+  const loadAlbums = useCallback(async (reset = false, opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
     try {
       const offset = reset ? 0 : albumsOffset;
       const r = await browseAlbums(token, PAGE_SIZE, offset, 'az', undefined, debouncedFilter || undefined);
@@ -339,14 +345,17 @@ export function BrowseNew(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
     } finally {
-      setLoading(false);
+      if (silent) setWsRefreshing(false);
+      else setLoading(false);
     }
   }, [token, albumsOffset, clear, debouncedFilter]);
 
   // Load genres
-  const loadGenres = useCallback(async (reset = false) => {
+  const loadGenres = useCallback(async (reset = false, opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
     try {
       const offset = reset ? 0 : genresOffset;
       const r = await browseGenres(token, PAGE_SIZE, offset, 'tracks_desc', debouncedFilter || undefined);
@@ -360,14 +369,17 @@ export function BrowseNew(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
     } finally {
-      setLoading(false);
+      if (silent) setWsRefreshing(false);
+      else setLoading(false);
     }
   }, [token, genresOffset, clear, debouncedFilter]);
 
   // Load countries
-  const loadCountries = useCallback(async () => {
+  const loadCountries = useCallback(async (opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
     try {
       const r = await browseCountries(token);
       const filtered = debouncedFilter
@@ -378,14 +390,17 @@ export function BrowseNew(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
     } finally {
-      setLoading(false);
+      if (silent) setWsRefreshing(false);
+      else setLoading(false);
     }
   }, [token, clear, debouncedFilter]);
 
   // Load languages
-  const loadLanguages = useCallback(async () => {
+  const loadLanguages = useCallback(async (opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
     try {
       const r = await browseLanguages(token);
       const filtered = debouncedFilter
@@ -396,7 +411,8 @@ export function BrowseNew(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
     } finally {
-      setLoading(false);
+      if (silent) setWsRefreshing(false);
+      else setLoading(false);
     }
   }, [token, clear, debouncedFilter]);
 
@@ -520,28 +536,38 @@ export function BrowseNew(props: {
     }
   }, [token, selectedLanguage, clear]);
 
-  // Refresh data when library updates arrive via WebSocket (throttled to avoid spam during scans)
+  // Refresh data when library updates arrive via WebSocket.
+  // We do this as a quiet, debounced background refresh to avoid visible spinners/flicker during scans.
   const lastRefreshRef = useRef<number>(0);
+  const wsRefreshTimerRef = useRef<any>(null);
   useEffect(() => {
     if (!lastUpdate || !lastEvent) return;
-    
-    // Throttle refreshes to once per 2 seconds to avoid spam during bulk scans
+
+    // Throttle refreshes to once per ~4s to avoid spam during bulk scans
     const now = Date.now();
-    if (now - lastRefreshRef.current < 2000) return;
-    lastRefreshRef.current = now;
-    
-    // Refresh current tab when files are added/updated/removed
-    if (tab === 'artists') loadArtists(true);
-    else if (tab === 'albums') loadAlbums(true);
-    else if (tab === 'genres') loadGenres(true);
-    else if (tab === 'countries') loadCountries();
-    else if (tab === 'languages') loadLanguages();
-    // Also refresh detail views if open
-    if (selectedAlbum) refreshAlbumDetail();
-    if (selectedArtist) refreshArtistDetail();
-    if (selectedGenre) refreshGenreTracks();
-    if (selectedCountry) refreshCountryTracks();
-    if (selectedLanguage) refreshLanguageTracks();
+    if (now - lastRefreshRef.current < 4000) return;
+    if (loading || wsRefreshing) return;
+
+    if (wsRefreshTimerRef.current) clearTimeout(wsRefreshTimerRef.current);
+    wsRefreshTimerRef.current = setTimeout(() => {
+      lastRefreshRef.current = Date.now();
+      if (tab === 'artists') loadArtists(true, { silent: true });
+      else if (tab === 'albums') loadAlbums(true, { silent: true });
+      else if (tab === 'genres') loadGenres(true, { silent: true });
+      else if (tab === 'countries') loadCountries({ silent: true });
+      else if (tab === 'languages') loadLanguages({ silent: true });
+
+      // Also refresh detail views if open (these don't show spinners)
+      if (selectedAlbum) refreshAlbumDetail();
+      if (selectedArtist) refreshArtistDetail();
+      if (selectedGenre) refreshGenreTracks();
+      if (selectedCountry) refreshCountryTracks();
+      if (selectedLanguage) refreshLanguageTracks();
+    }, 400);
+
+    return () => {
+      if (wsRefreshTimerRef.current) clearTimeout(wsRefreshTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastUpdate]); // intentionally only lastUpdate to avoid loops
 
@@ -594,8 +620,13 @@ export function BrowseNew(props: {
 
   // Infinite scroll handler
   const scrollRef = useRef<HTMLDivElement>(null);
+  const wsRefreshingRef = useRef(false);
+  useEffect(() => {
+    wsRefreshingRef.current = wsRefreshing;
+  }, [wsRefreshing]);
+
   const handleScroll = useCallback(() => {
-    if (loading) return;
+    if (loading || wsRefreshingRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
@@ -1541,9 +1572,9 @@ export function BrowseNew(props: {
         {/* Albums Grid */}
         {tab === 'albums' && (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-            {albums.map((a, idx) => (
+            {albums.map((a) => (
               <button
-                key={`${a.display_artist}-${a.album}-${idx}`}
+                key={`${a.display_artist}||${a.album}`}
                 onClick={() => selectAlbum({ artist: a.display_artist, album: a.album })}
                 className="group text-left"
               >
