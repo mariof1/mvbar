@@ -466,7 +466,19 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                 </svg>
               </div>
               <code className="flex-1 text-sm text-slate-300 font-mono">{lib.mount_path}</code>
-              <span className="text-xs text-slate-500">ID: {lib.id}</span>
+              <div className="flex items-center gap-2">
+                {lib.mounted === false ? (
+                  <span className="text-xs px-2 py-1 rounded-md bg-red-500/10 text-red-400 border border-red-500/20">unmounted</span>
+                ) : (
+                  <span className="text-xs px-2 py-1 rounded-md bg-green-500/10 text-green-400 border border-green-500/20">mounted</span>
+                )}
+                {lib.writable ? (
+                  <span className="text-xs px-2 py-1 rounded-md bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">writable</span>
+                ) : (
+                  <span className="text-xs px-2 py-1 rounded-md bg-slate-700/30 text-slate-300 border border-slate-700/40">read-only</span>
+                )}
+                <span className="text-xs text-slate-500">ID: {lib.id}</span>
+              </div>
             </div>
           ))}
           {libraries.length === 0 && (

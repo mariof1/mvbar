@@ -574,7 +574,33 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/admin/libraries', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
     const r = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries order by mount_path asc');
-    return { ok: true, libraries: r.rows };
+
+    const libraries = await Promise.all(
+      r.rows.map(async (l) => {
+        let mounted = true;
+        try {
+          await access(l.mount_path);
+        } catch {
+          mounted = false;
+        }
+
+        let writable = false;
+        try {
+          await access(l.mount_path, constants.W_OK);
+          writable = true;
+        } catch {}
+
+        return {
+          id: l.id,
+          mount_path: l.mount_path,
+          mounted,
+          writable,
+          read_only: mounted && !writable,
+        };
+      })
+    );
+
+    return { ok: true, libraries };
   });
 
   app.get('/api/library/tracks', async (req, reply) => {
