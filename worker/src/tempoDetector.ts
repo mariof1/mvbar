@@ -215,7 +215,7 @@ function computeOnsetEnvelopeEnergy(pcm: Float32Array, sampleRate: number, hopSe
 
 function computeOnsetEnvelopeSpectralFlux(pcm: Float32Array, sampleRate: number, hopSeconds: number): Float32Array {
   const hop = Math.max(1, Math.round(sampleRate * hopSeconds));
-  const frameSize = nextPow2(Math.max(256, hop * 4));
+  const frameSize = nextPow2(Math.max(512, hop * 4));
   const nFrames = Math.max(0, Math.floor((pcm.length - frameSize) / hop) + 1);
   const env = new Float32Array(nFrames);
   if (nFrames === 0) return env;
@@ -224,6 +224,11 @@ function computeOnsetEnvelopeSpectralFlux(pcm: Float32Array, sampleRate: number,
   const re = new Float64Array(frameSize);
   const im = new Float64Array(frameSize);
   const prev = new Float64Array(frameSize >> 1);
+
+  // Multi-band spectral flux weighting helps with genre-specific spectra and weak onsets.
+  // We downweight sub-bass (often sustained) and emphasize low-mid where percussive transients live.
+  const bandHz = [200, 2000];
+  const bandW = [0.5, 1.0, 0.8];
 
   for (let i = 0; i < nFrames; i++) {
     const base = i * hop;
@@ -237,12 +242,16 @@ function computeOnsetEnvelopeSpectralFlux(pcm: Float32Array, sampleRate: number,
 
     let flux = 0;
     const nBins = frameSize >> 1;
-    for (let b = 0; b < nBins; b++) {
+    for (let b = 1; b < nBins; b++) {
       const mag2 = re[b]! * re[b]! + im[b]! * im[b]!;
       const v = Math.log1p(mag2);
       const d = v - prev[b]!;
-      if (d > 0) flux += d;
       prev[b] = v;
+      if (d <= 0) continue;
+
+      const hz = (b * sampleRate) / frameSize;
+      const band = hz < bandHz[0]! ? 0 : hz < bandHz[1]! ? 1 : 2;
+      flux += bandW[band]! * d;
     }
 
     env[i] = flux;
@@ -285,8 +294,7 @@ function scoreBpmByAutocorr(env: Float32Array, hopSeconds: number, bpmMin: numbe
   for (let i = 0; i < env.length; i++) m += env[i]!;
   m /= env.length;
 
-  // For each lag, compute correlation
-  for (let lag = lagLo; lag <= lagHi; lag++) {
+  const corrAtLag = (lag: number): number => {
     let num = 0;
     let denA = 0;
     let denB = 0;
@@ -298,7 +306,22 @@ function scoreBpmByAutocorr(env: Float32Array, hopSeconds: number, bpmMin: numbe
       denB += b * b;
     }
     const denom = Math.sqrt(denA * denB);
-    const corr = denom > 0 ? num / denom : 0;
+    return denom > 0 ? num / denom : 0;
+  };
+
+  // Comb-filter style scoring (period + harmonics) helps swing/subdivision ambiguity.
+  // Weighted harmonic sum: corr(lag) + 1/2 corr(2lag) + 1/3 corr(3lag) + 1/4 corr(4lag)
+  for (let lag = lagLo; lag <= lagHi; lag++) {
+    let score = 0;
+    let wSum = 0;
+    for (let k = 1; k <= 4; k++) {
+      const lk = lag * k;
+      if (lk > lagHi) break;
+      const w = 1 / k;
+      score += w * corrAtLag(lk);
+      wSum += w;
+    }
+    const corr = wSum > 0 ? score / wSum : 0;
     const bpm = 60 / (lag * hopSeconds);
     candidates.push({ bpm, score: corr });
   }
