@@ -12,6 +12,8 @@ export type TempoDetectionResult = {
   };
 };
 
+export type OnsetMethod = "energy" | "spectral" | "hybrid";
+
 export type TempoDetectionOptions = {
   ffmpegPath?: string;
   sampleRate?: number; // Hz
@@ -24,6 +26,8 @@ export type TempoDetectionOptions = {
   /** Candidate tempo range to search in. */
   searchBpmMin?: number;
   searchBpmMax?: number;
+  /** Onset envelope method: spectral flux is usually more robust than energy. */
+  onsetMethod?: OnsetMethod;
   /** Hop size for onset envelope. */
   hopSeconds?: number;
 };
@@ -36,6 +40,7 @@ const DEFAULT_OPTS: Required<Pick<
   | "targetBpmMax"
   | "searchBpmMin"
   | "searchBpmMax"
+  | "onsetMethod"
   | "hopSeconds"
 >> & { windows: Array<{ startFrac: number; endFrac: number }> } = {
   sampleRate: 11025,
@@ -46,6 +51,7 @@ const DEFAULT_OPTS: Required<Pick<
   // search range (before folding)
   searchBpmMin: 50,
   searchBpmMax: 220,
+  onsetMethod: "hybrid",
   hopSeconds: 0.01,
   // multi-window consensus (middle 80% + thirds)
   windows: [
@@ -85,22 +91,79 @@ function autocorr(scores: Float32Array): Float32Array {
   return scores;
 }
 
-function computeOnsetEnvelope(pcm: Float32Array, sampleRate: number, hopSeconds: number): Float32Array {
-  const hop = Math.max(1, Math.round(sampleRate * hopSeconds));
-  const nHops = Math.floor(pcm.length / hop);
-  const env = new Float32Array(nHops);
+function nextPow2(n: number): number {
+  let p = 1;
+  while (p < n) p <<= 1;
+  return p;
+}
 
-  // Simple energy-based novelty: positive flux of absolute amplitude.
-  let prev = 0;
-  for (let i = 0; i < nHops; i++) {
-    const start = i * hop;
-    const end = Math.min(pcm.length, start + hop);
-    let acc = 0;
-    for (let j = start; j < end; j++) acc += Math.abs(pcm[j]!);
-    const cur = acc / (end - start);
-    const diff = cur - prev;
-    env[i] = diff > 0 ? diff : 0;
-    prev = cur;
+function fftRadix2(re: Float64Array, im: Float64Array): void {
+  const n = re.length;
+  if (n <= 1) return;
+
+  // Bit-reversal permutation
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      const tr = re[i]!;
+      re[i] = re[j]!;
+      re[j] = tr;
+      const ti = im[i]!;
+      im[i] = im[j]!;
+      im[j] = ti;
+    }
+  }
+
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (-2 * Math.PI) / len;
+    const wlenCos = Math.cos(ang);
+    const wlenSin = Math.sin(ang);
+
+    for (let i = 0; i < n; i += len) {
+      let wCos = 1;
+      let wSin = 0;
+      const half = len >> 1;
+
+      for (let j = 0; j < half; j++) {
+        const u = i + j;
+        const v = u + half;
+
+        const vr = re[v]! * wCos - im[v]! * wSin;
+        const vi = re[v]! * wSin + im[v]! * wCos;
+
+        re[v] = re[u]! - vr;
+        im[v] = im[u]! - vi;
+        re[u] = re[u]! + vr;
+        im[u] = im[u]! + vi;
+
+        const nextCos = wCos * wlenCos - wSin * wlenSin;
+        wSin = wCos * wlenSin + wSin * wlenCos;
+        wCos = nextCos;
+      }
+    }
+  }
+}
+
+function hannWindow(n: number): Float32Array {
+  const w = new Float32Array(n);
+  if (n <= 1) return w;
+  for (let i = 0; i < n; i++) {
+    w[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1));
+  }
+  return w;
+}
+
+function postProcessEnvelope(env: Float32Array, hopSeconds: number): void {
+  // Adaptive high-pass on the envelope (IIR local mean removal)
+  let envMean = 0;
+  const tauSeconds = 0.5;
+  const alpha = hopSeconds / (tauSeconds + hopSeconds);
+  for (let i = 0; i < env.length; i++) {
+    envMean += alpha * (env[i]! - envMean);
+    const v = env[i]! - envMean;
+    env[i] = v > 0 ? v : 0;
   }
 
   // Light smoothing (moving average 3)
@@ -114,7 +177,99 @@ function computeOnsetEnvelope(pcm: Float32Array, sampleRate: number, hopSeconds:
   if (max > 0) {
     for (let i = 0; i < env.length; i++) env[i] /= max;
   }
+}
+
+function computeOnsetEnvelopeEnergy(pcm: Float32Array, sampleRate: number, hopSeconds: number): Float32Array {
+  const hop = Math.max(1, Math.round(sampleRate * hopSeconds));
+  const nHops = Math.floor(pcm.length / hop);
+  const env = new Float32Array(nHops);
+
+  // Energy novelty (robustified): pre-emphasis + log-energy + positive flux
+  let prevFrame = 0;
+  let prevSample = 0;
+  const preEmph = 0.97;
+  const logGain = 100; // heuristic scaling for log1p
+
+  for (let i = 0; i < nHops; i++) {
+    const start = i * hop;
+    const end = Math.min(pcm.length, start + hop);
+
+    let sumSq = 0;
+    for (let j = start; j < end; j++) {
+      const x = pcm[j]!;
+      const y = x - preEmph * prevSample;
+      prevSample = x;
+      sumSq += y * y;
+    }
+
+    const energy = sumSq / Math.max(1, end - start);
+    const curFrame = Math.log1p(logGain * energy);
+    const diff = curFrame - prevFrame;
+    env[i] = diff > 0 ? diff : 0;
+    prevFrame = curFrame;
+  }
+
+  postProcessEnvelope(env, hopSeconds);
   return env;
+}
+
+function computeOnsetEnvelopeSpectralFlux(pcm: Float32Array, sampleRate: number, hopSeconds: number): Float32Array {
+  const hop = Math.max(1, Math.round(sampleRate * hopSeconds));
+  const frameSize = nextPow2(Math.max(256, hop * 4));
+  const nFrames = Math.max(0, Math.floor((pcm.length - frameSize) / hop) + 1);
+  const env = new Float32Array(nFrames);
+  if (nFrames === 0) return env;
+
+  const win = hannWindow(frameSize);
+  const re = new Float64Array(frameSize);
+  const im = new Float64Array(frameSize);
+  const prev = new Float64Array(frameSize >> 1);
+
+  for (let i = 0; i < nFrames; i++) {
+    const base = i * hop;
+
+    for (let k = 0; k < frameSize; k++) {
+      re[k] = (pcm[base + k] ?? 0) * win[k]!;
+      im[k] = 0;
+    }
+
+    fftRadix2(re, im);
+
+    let flux = 0;
+    const nBins = frameSize >> 1;
+    for (let b = 0; b < nBins; b++) {
+      const mag2 = re[b]! * re[b]! + im[b]! * im[b]!;
+      const v = Math.log1p(mag2);
+      const d = v - prev[b]!;
+      if (d > 0) flux += d;
+      prev[b] = v;
+    }
+
+    env[i] = flux;
+  }
+
+  postProcessEnvelope(env, hopSeconds);
+  return env;
+}
+
+function computeOnsetEnvelope(pcm: Float32Array, sampleRate: number, hopSeconds: number, onsetMethod: OnsetMethod): Float32Array {
+  if (onsetMethod === "energy") return computeOnsetEnvelopeEnergy(pcm, sampleRate, hopSeconds);
+
+  const spectral = computeOnsetEnvelopeSpectralFlux(pcm, sampleRate, hopSeconds);
+  let spectralMax = 0;
+  for (let i = 0; i < spectral.length; i++) spectralMax = Math.max(spectralMax, spectral[i]!);
+  if (onsetMethod === "spectral") {
+    return spectralMax > 0 ? spectral : computeOnsetEnvelopeEnergy(pcm, sampleRate, hopSeconds);
+  }
+
+  // hybrid
+  const energy = computeOnsetEnvelopeEnergy(pcm, sampleRate, hopSeconds);
+  if (spectralMax <= 0 || spectral.length === 0) return energy;
+
+  const n = Math.min(energy.length, spectral.length);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = Math.max(energy[i]!, spectral[i]!);
+  return out;
 }
 
 function scoreBpmByAutocorr(env: Float32Array, hopSeconds: number, bpmMin: number, bpmMax: number) {
@@ -296,6 +451,7 @@ export async function detectTempoBpm(filename: string, opts: TempoDetectionOptio
   const targetBpmMax = opts.targetBpmMax ?? DEFAULT_OPTS.targetBpmMax;
   const searchBpmMin = opts.searchBpmMin ?? DEFAULT_OPTS.searchBpmMin;
   const searchBpmMax = opts.searchBpmMax ?? DEFAULT_OPTS.searchBpmMax;
+  const onsetMethod = opts.onsetMethod ?? DEFAULT_OPTS.onsetMethod;
   const hopSeconds = opts.hopSeconds ?? DEFAULT_OPTS.hopSeconds;
   const ffmpegPath = opts.ffmpegPath ?? "ffmpeg";
 
@@ -311,7 +467,7 @@ export async function detectTempoBpm(filename: string, opts: TempoDetectionOptio
     const winDur = Math.max(10, end - start);
 
     const pcm = await decodeWindowToPCM(filename, start, winDur, sampleRate, channels, ffmpegPath);
-    const env = computeOnsetEnvelope(pcm, sampleRate, hopSeconds);
+    const env = computeOnsetEnvelope(pcm, sampleRate, hopSeconds, onsetMethod);
     const cands = scoreBpmByAutocorr(env, hopSeconds, searchBpmMin, searchBpmMax);
 
     if (!cands[0]) continue;
