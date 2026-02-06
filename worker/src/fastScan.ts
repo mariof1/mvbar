@@ -612,6 +612,13 @@ export async function runFastScan(
   const libraryTotal = ctx?.libraryTotal;
 
   logger.info('scan', `Fast scan starting: ${musicDir}${forceFullScan ? ' (FORCE FULL)' : ''}`);
+  if (TEMPO_DETECT) {
+    logger.info('tempo', 'Tempo detection enabled (missing-tag backfill)', {
+      method: TEMPO_METHOD,
+      minConfidence: TEMPO_MIN_CONF,
+      concurrency: TEMPO_CONCURRENCY,
+    });
+  }
   
   // Set initial scanning status
   const initialProgress = {
@@ -754,6 +761,11 @@ export async function runFastScan(
   let updatedFiles = 0;
   let lastProgressTime = Date.now();
   const batch: TrackData[] = [];
+
+  let tempoTried = 0;
+  let tempoApplied = 0;
+  let tempoLowConfidence = 0;
+  let tempoFailed = 0;
   
   // Process in chunks
   for (let i = 0; i < filesToProcess.length; i += CONCURRENCY) {
@@ -767,13 +779,18 @@ export async function runFastScan(
         // Optional: detect tempo and store in DB when missing from tags.
         let detectedBpm: number | null = null;
         if (TEMPO_DETECT && (tags.bpm == null || !Number.isFinite(tags.bpm) || tags.bpm <= 0)) {
+          tempoTried++;
           try {
             const res = await withTempoSlot(() => detectTempoBpm(file.fullPath, { onsetMethod: TEMPO_METHOD }));
             if (res.confidence >= TEMPO_MIN_CONF && Number.isFinite(res.bpm) && res.bpm > 0) {
               detectedBpm = res.bpm;
+              tempoApplied++;
+            } else {
+              tempoLowConfidence++;
             }
           } catch (e) {
-            logger.debug?.('tempo', `Tempo detect failed: ${e instanceof Error ? e.message : String(e)}`);
+            tempoFailed++;
+            logger.debug('tempo', `Tempo detect failed: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
         
@@ -973,6 +990,15 @@ export async function runFastScan(
   const durationSec = Math.round(durationMs / 1000);
   const rate = Math.round(allFiles.length / (durationMs / 1000));
   
+  if (TEMPO_DETECT) {
+    logger.info('tempo', 'Tempo detection stats', {
+      tried: tempoTried,
+      applied: tempoApplied,
+      lowConfidence: tempoLowConfidence,
+      failed: tempoFailed,
+    });
+  }
+
   logger.success('scan', `Scan complete in ${durationSec}s - ${allFiles.length} files (${rate} files/sec)`);
   
   // Final progress update
