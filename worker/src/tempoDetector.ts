@@ -9,6 +9,8 @@ export type TempoDetectionResult = {
     windowSeconds: number;
     hopSeconds: number;
     candidates: Array<{ bpm: number; score: number }>;
+    windowBpms?: number[];
+    bpmStd?: number;
   };
 };
 
@@ -304,6 +306,14 @@ function pickPeaks(env: Float32Array, minDistance: number, threshold: number, ma
   const peaks: number[] = [];
   let last = -1e9;
 
+  // Adaptive threshold: for weak-onset material, a fixed cutoff can miss everything.
+  if (!(threshold > 0)) {
+    let m = 0;
+    for (let i = 0; i < env.length; i++) m += env[i]!;
+    m /= Math.max(1, env.length);
+    threshold = Math.max(0.05, Math.min(0.25, m * 1.5));
+  }
+
   for (let i = 1; i < env.length - 1; i++) {
     const v = env[i]!;
     if (v < threshold) continue;
@@ -328,7 +338,7 @@ function scoreBpmByIOI(env: Float32Array, hopSeconds: number, bpmMin: number, bp
   const maxLag = Math.ceil((60 / bpmMin) / hopSeconds);
 
   // Peak-pick on the onset envelope (after normalization/smoothing), then build an IOI histogram.
-  const peaks = pickPeaks(env, Math.max(2, Math.round(0.08 / hopSeconds)), 0.15, 200);
+  const peaks = pickPeaks(env, Math.max(2, Math.round(0.08 / hopSeconds)), 0, 200);
   const scores = new Map<number, number>();
 
   for (let pi = 0; pi < peaks.length; pi++) {
@@ -572,8 +582,34 @@ export async function detectTempoBpm(filename: string, opts: TempoDetectionOptio
     const winDur = Math.max(10, end - start);
 
     const pcm = await decodeWindowToPCM(filename, start, winDur, sampleRate, channels, ffmpegPath);
-    const rawEnv = computeOnsetEnvelope(pcm, sampleRate, hopSeconds, onsetMethod);
-    const { env, hopSeconds: effHopSeconds } = maybeDownsampleEnvelope(rawEnv, hopSeconds);
+    // Adaptive spectral hop for performance on long windows (spectral flux FFT is the expensive bit).
+    const spectralHopSeconds = winDur >= 600 ? Math.max(hopSeconds, 0.03) : winDur >= 240 ? Math.max(hopSeconds, 0.02) : hopSeconds;
+
+    let rawEnv: Float32Array;
+    let baseHopSeconds = hopSeconds;
+
+    if (onsetMethod === "energy") {
+      rawEnv = computeOnsetEnvelopeEnergy(pcm, sampleRate, hopSeconds);
+    } else if (onsetMethod === "spectral") {
+      rawEnv = computeOnsetEnvelopeSpectralFlux(pcm, sampleRate, spectralHopSeconds);
+      baseHopSeconds = spectralHopSeconds;
+    } else {
+      const energy = computeOnsetEnvelopeEnergy(pcm, sampleRate, hopSeconds);
+      const spectral = computeOnsetEnvelopeSpectralFlux(pcm, sampleRate, spectralHopSeconds);
+
+      // Time-align spectral frames to energy frames and combine via max (percussive emphasis).
+      const out = new Float32Array(energy);
+      if (spectral.length) {
+        for (let i = 0; i < spectral.length; i++) {
+          const t = i * spectralHopSeconds;
+          const idx = Math.round(t / hopSeconds);
+          if (idx >= 0 && idx < out.length) out[idx] = Math.max(out[idx]!, spectral[i]!);
+        }
+      }
+      rawEnv = out;
+    }
+
+    const { env, hopSeconds: effHopSeconds } = maybeDownsampleEnvelope(rawEnv, baseHopSeconds);
     const cands = scoreBpmByAutocorr(env, effHopSeconds, searchBpmMin, searchBpmMax);
     const ioiRaw = scoreBpmByIOI(env, effHopSeconds, searchBpmMin, searchBpmMax);
 
@@ -603,7 +639,33 @@ export async function detectTempoBpm(filename: string, opts: TempoDetectionOptio
   if (windowBpms.length === 0) throw new Error("tempo detection produced no windows");
 
   const bpmMed = median(windowBpms);
-  const bpmStd = stdev(windowBpms);
+
+  // Treat half/double disagreements between windows as consistent if they align to the final median.
+  const alignedBpms = windowBpms.map((b) => {
+    let best = b;
+    let bestDiff = Math.abs(b - bpmMed);
+
+    const dbl = b * 2;
+    if (dbl >= targetBpmMin && dbl <= targetBpmMax) {
+      const d = Math.abs(dbl - bpmMed);
+      if (d < bestDiff) {
+        best = dbl;
+        bestDiff = d;
+      }
+    }
+
+    const half = b / 2;
+    if (half >= targetBpmMin && half <= targetBpmMax) {
+      const d = Math.abs(half - bpmMed);
+      if (d < bestDiff) {
+        best = half;
+      }
+    }
+
+    return best;
+  });
+
+  const bpmStd = stdev(alignedBpms);
   const strength = windowChoiceStrength.length ? mean(windowChoiceStrength) : 0;
 
   // Candidate list
@@ -627,6 +689,8 @@ export async function detectTempoBpm(filename: string, opts: TempoDetectionOptio
       windowSeconds: duration,
       hopSeconds,
       candidates,
+      windowBpms,
+      bpmStd,
     },
   };
 }
