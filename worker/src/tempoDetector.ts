@@ -300,6 +300,64 @@ function computeOnsetEnvelope(pcm: Float32Array, sampleRate: number, hopSeconds:
   return out;
 }
 
+function pickPeaks(env: Float32Array, minDistance: number, threshold: number, maxPeaks: number): number[] {
+  const peaks: number[] = [];
+  let last = -1e9;
+
+  for (let i = 1; i < env.length - 1; i++) {
+    const v = env[i]!;
+    if (v < threshold) continue;
+    if (v <= env[i - 1]! || v < env[i + 1]!) continue;
+    if (i - last < minDistance) continue;
+
+    peaks.push(i);
+    last = i;
+  }
+
+  if (peaks.length <= maxPeaks) return peaks;
+
+  // Keep top maxPeaks by peak height (stable-ish)
+  peaks.sort((a, b) => (env[b]! - env[a]!));
+  peaks.length = maxPeaks;
+  peaks.sort((a, b) => a - b);
+  return peaks;
+}
+
+function scoreBpmByIOI(env: Float32Array, hopSeconds: number, bpmMin: number, bpmMax: number): Map<number, number> {
+  const minLag = Math.floor((60 / bpmMax) / hopSeconds);
+  const maxLag = Math.ceil((60 / bpmMin) / hopSeconds);
+
+  // Peak-pick on the onset envelope (after normalization/smoothing), then build an IOI histogram.
+  const peaks = pickPeaks(env, Math.max(2, Math.round(0.08 / hopSeconds)), 0.15, 200);
+  const scores = new Map<number, number>();
+
+  for (let pi = 0; pi < peaks.length; pi++) {
+    const i = peaks[pi]!;
+    const vi = env[i]!;
+
+    for (let pj = pi + 1; pj < peaks.length; pj++) {
+      const j = peaks[pj]!;
+      const lag = j - i;
+      if (lag < minLag) continue;
+      if (lag > maxLag) break;
+
+      const bpm = 60 / (lag * hopSeconds);
+      const b = Math.round(bpm);
+      const w = vi * env[j]!; // emphasize strong-onset pairs
+      scores.set(b, (scores.get(b) ?? 0) + w);
+    }
+  }
+
+  // Normalize to ~0..1
+  let max = 0;
+  for (const v of scores.values()) max = Math.max(max, v);
+  if (max > 0) {
+    for (const [k, v] of scores.entries()) scores.set(k, v / max);
+  }
+
+  return scores;
+}
+
 function scoreBpmByAutocorr(env: Float32Array, hopSeconds: number, bpmMin: number, bpmMax: number) {
   const lagMin = Math.floor((60 / bpmMax) / hopSeconds);
   const lagMax = Math.ceil((60 / bpmMin) / hopSeconds);
@@ -355,14 +413,17 @@ function pickTempoFromCandidates(
   cands: Array<{ bpm: number; score: number }>,
   targetBpmMin: number,
   targetBpmMax: number,
+  boostByBpm?: Map<number, number>,
 ): { bpm: number; score: number; runnerUpScore: number } {
   // Normalize into target range and bucket by rounded BPM.
   // Use MAX score per BPM (not sum) to avoid broad plateaus winning over sharp peaks.
   const scoreByBpm = new Map<number, number>();
+  const boostWeight = boostByBpm ? 0.25 : 0;
   for (const c of cands.slice(0, 200)) {
     const b = Math.round(normalizeBpm(c.bpm, targetBpmMin, targetBpmMax));
     const s = Math.max(0, c.score);
-    scoreByBpm.set(b, Math.max(scoreByBpm.get(b) ?? 0, s));
+    const boost = boostByBpm ? (boostByBpm.get(b) ?? 0) : 0;
+    scoreByBpm.set(b, Math.max(scoreByBpm.get(b) ?? 0, s + boostWeight * boost));
   }
 
   const getScoreNear = (bpm: number) => {
@@ -514,10 +575,18 @@ export async function detectTempoBpm(filename: string, opts: TempoDetectionOptio
     const rawEnv = computeOnsetEnvelope(pcm, sampleRate, hopSeconds, onsetMethod);
     const { env, hopSeconds: effHopSeconds } = maybeDownsampleEnvelope(rawEnv, hopSeconds);
     const cands = scoreBpmByAutocorr(env, effHopSeconds, searchBpmMin, searchBpmMax);
+    const ioiRaw = scoreBpmByIOI(env, effHopSeconds, searchBpmMin, searchBpmMax);
+
+    // Fold IOI scores into target range for boosting.
+    const ioi = new Map<number, number>();
+    for (const [bpm, s] of ioiRaw.entries()) {
+      const b = Math.round(normalizeBpm(bpm, targetBpmMin, targetBpmMax));
+      ioi.set(b, Math.max(ioi.get(b) ?? 0, s));
+    }
 
     if (!cands[0]) continue;
 
-    const pick = pickTempoFromCandidates(cands, targetBpmMin, targetBpmMax);
+    const pick = pickTempoFromCandidates(cands, targetBpmMin, targetBpmMax, ioi);
     windowBpms.push(pick.bpm);
 
     // Strength is separation vs runner-up (bounded 0..1-ish)
