@@ -10,8 +10,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function nativeValues(m: IAudioMetadata, names: string[]) {
   const want = new Set(names.map((n) => n.toLowerCase()));
   const out: string[] = [];
-  for (const tagType of Object.keys(m.native ?? {})) {
-    for (const t of m.native[tagType] ?? []) {
+
+  // If ID3v2 is present, ignore ID3v1 native values to avoid inserting legacy "????" placeholders
+  // (ID3v1 cannot represent many non-Latin scripts and is often lossy).
+  const nativeKeys = Object.keys(m.native ?? {});
+  const hasId3v2 = nativeKeys.some((k) => k.toLowerCase().startsWith('id3v2'));
+
+  for (const tagType of nativeKeys) {
+    if (hasId3v2 && tagType.toLowerCase() === 'id3v1') continue;
+    for (const t of m.native?.[tagType] ?? []) {
       const id = String((t as any).id ?? '').toLowerCase();
       const id2 = id.startsWith('txxx:') ? id.slice('txxx:'.length) : id;
       if (!want.has(id) && !want.has(id2)) continue;

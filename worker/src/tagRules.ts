@@ -1,7 +1,15 @@
+/**
+ * Sanitize and normalize text for database storage.
+ * Normalizes to NFC for consistent storage and comparison.
+ */
 export function sanitize(str: string | undefined | null): string | null {
   if (!str) return null;
-  // Normalize to avoid duplicate DB rows from NFC/NFD differences.
-  return str.replace(/\0/g, '').normalize('NFC');
+  
+  // Remove null bytes and replacement characters
+  let s = str.replace(/\0/g, '').replace(/\uFFFD/g, '');
+  
+  // Normalize to NFC for consistent DB storage
+  return s.normalize('NFC');
 }
 
 /**

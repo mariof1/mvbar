@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   listSmartPlaylists,
   getSmartPlaylist,
@@ -151,6 +151,7 @@ export function SmartPlaylists(props: {
   const clear = useAuth((s) => s.clear);
   const { setQueueAndPlay } = usePlayer();
   const lastLibraryUpdate = useLibraryUpdates((s) => s.lastUpdate);
+  const lastRefreshRef = useRef<number>(0);
 
   const [playlists, setPlaylists] = useState<SmartPlaylist[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -246,6 +247,11 @@ export function SmartPlaylists(props: {
   // Refresh selected smart playlist when library updates (tracks may have changed)
   useEffect(() => {
     if (selectedId != null && lastLibraryUpdate) {
+      // Throttle to once per 2 seconds during scans
+      const now = Date.now();
+      if (now - lastRefreshRef.current < 2000) return;
+      lastRefreshRef.current = now;
+      
       loadPlaylist(selectedId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

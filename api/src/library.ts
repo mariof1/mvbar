@@ -504,8 +504,8 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
 
     await audit('track_metadata_updated', { trackId: id, by: req.user.userId });
 
-    // Force rescan so DB reflects new tags
-    await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: req.user.userId, force: true }));
+    // Trigger quick scan so DB reflects new tags without forcing a full reprocess
+    await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: req.user.userId, force: false }));
 
     return { ok: true };
   });

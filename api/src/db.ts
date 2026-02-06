@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import Redis from 'ioredis';
+import { asciiFold } from './asciiFold.js';
 
 let pool: Pool | null = null;
 let redisClient: Redis | null = null;
@@ -565,6 +566,38 @@ export async function initDb() {
       updated_at timestamptz not null default now()
     );
   `);
+
+  // ========================================================================
+  // POPULATE ASCII NAMES FOR ARTISTS (one-time migration - runs in background)
+  // ========================================================================
+  // Run asynchronously to not block server startup
+  const dbPool = pool;  // Capture reference for closure
+  setImmediate(async () => {
+    try {
+      let totalUpdated = 0;
+      while (true) {
+        const artistsToUpdate = await dbPool.query<{ id: number; name: string }>(
+          `SELECT id, name FROM artists WHERE ascii_name IS NULL AND name IS NOT NULL LIMIT 500`
+        );
+        if (artistsToUpdate.rows.length === 0) break;
+        if (totalUpdated === 0) {
+          console.log(`[db] Populating ascii_name for artists (background)...`);
+        }
+        for (const artist of artistsToUpdate.rows) {
+          const ascii = asciiFold(artist.name);
+          if (ascii) {
+            await dbPool.query('UPDATE artists SET ascii_name = $1 WHERE id = $2', [ascii, artist.id]);
+          }
+        }
+        totalUpdated += artistsToUpdate.rows.length;
+      }
+      if (totalUpdated > 0) {
+        console.log(`[db] Updated ascii_name for ${totalUpdated} artists`);
+      }
+    } catch (e) {
+      console.error('[db] Error populating ascii_name:', e);
+    }
+  });
 }
 
 export async function audit(event: string, meta?: Record<string, unknown>) {

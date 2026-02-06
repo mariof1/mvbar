@@ -57,8 +57,11 @@ export function ScanPanel(props: { onScanFinished?: () => void }) {
     
     setJob((prev: any) => ({
       ...prev,
-      state: scanProgress.scanning ? 'running' : 'done',
+      state: scanProgress.scanning || scanProgress.status === 'indexing' ? 'running' : 'done',
       status: scanProgress.status,
+      mountPath: scanProgress.mountPath,
+      libraryIndex: scanProgress.libraryIndex,
+      libraryTotal: scanProgress.libraryTotal,
       filesFound: scanProgress.filesFound,
       filesProcessed: scanProgress.filesProcessed,
       currentFile: scanProgress.currentFile,
@@ -78,13 +81,16 @@ export function ScanPanel(props: { onScanFinished?: () => void }) {
       <button onClick={handleScanNow} disabled={loading} style={{ padding: 10 }}>
         {loading ? 'Starting…' : 'Run scan now'}
       </button>
-      <button onClick={refresh} disabled={loading} style={{ padding: 10, opacity: 0.8 }}>
-        Refresh status
-      </button>
+      {/* Status updates live via websocket */}
       {error ? <p style={{ color: 'crimson' }}>{error}</p> : null}
       {job ? (
         <pre style={{ margin: 0, padding: 10, background: '#0b0b0b', border: '1px solid #333', borderRadius: 8, overflow: 'auto' }}>
-          {JSON.stringify(job, null, 2)}
+          {JSON.stringify({
+            ...job,
+            mountPath: scanProgress.mountPath || job?.mountPath,
+            libraryIndex: scanProgress.libraryIndex || job?.libraryIndex,
+            libraryTotal: scanProgress.libraryTotal || job?.libraryTotal,
+          }, null, 2)}
         </pre>
       ) : (
         <p style={{ opacity: 0.8 }}>No scan job yet.</p>

@@ -566,6 +566,9 @@ export async function prefetchLyrics(token: string, trackId: number) {
 export type ScanProgress = {
   ok: boolean;
   status: 'idle' | 'scanning' | 'indexing' | 'unknown';
+  mountPath?: string;
+  libraryIndex?: number;
+  libraryTotal?: number;
   filesFound: number;
   filesProcessed: number;
   currentFile?: string;

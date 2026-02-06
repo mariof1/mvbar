@@ -7,6 +7,7 @@ import { readTags } from './metadata.js';
 import { writeArt } from './art.js';
 import { indexAllTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
+import { asciiFold } from './tagRules.js';
 
 const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
@@ -349,34 +350,17 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       const trackId = pathToTrackId.get(track.path);
       if (!trackId) continue;
 
-      // Collect all artists to insert (sanitize + preserve order)
+      // Collect all artists to insert (names are already sanitized/normalized by readTags)
       const artistsToInsert: { name: string; role: string; position: number }[] = [];
-      const sanitize = (s: string) => s.replace(/\0/g, '');
-      const norm = (s: string) => sanitize(s).trim();
-      const isAllQuestionMarks = (s: string) => /^[?\s]+$/.test(s);
-      const folderArtistGuess = (() => {
-        // Try to guess artist from folder name for files like "Мэвл/..." when tags decode to "????".
-        const first = (track.path.split(/[\\/]/).filter(Boolean)[0] ?? '').trim();
-        return first || null;
-      })();
-
-      const fixName = (v: string) => {
-        const n = norm(v);
-        if (!n) return null;
-        if (isAllQuestionMarks(n)) return folderArtistGuess ? sanitize(folderArtistGuess) : null;
-        return sanitize(n);
-      };
       
       let i = 0;
       for (const name of track.albumartists) {
-        const fixed = name ? fixName(name) : null;
-        if (fixed) artistsToInsert.push({ name: fixed, role: 'albumartist', position: i++ });
+        if (name?.trim()) artistsToInsert.push({ name: name.trim(), role: 'albumartist', position: i++ });
       }
       
       i = 0;
       for (const name of track.artists) {
-        const fixed = name ? fixName(name) : null;
-        if (fixed) artistsToInsert.push({ name: fixed, role: 'artist', position: i++ });
+        if (name?.trim()) artistsToInsert.push({ name: name.trim(), role: 'artist', position: i++ });
       }
       
       if (artistsToInsert.length === 0) continue;
@@ -386,9 +370,10 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       
       // Insert new artist relations
       for (const { name, role, position } of artistsToInsert) {
+        const asciiName = asciiFold(name);
         const artistRes = await client.query<{ id: number }>(
-          'INSERT INTO artists(name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id',
-          [name]
+          'INSERT INTO artists(name, ascii_name) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET ascii_name = COALESCE(artists.ascii_name, EXCLUDED.ascii_name) RETURNING id',
+          [name, asciiName || null]
         );
         await client.query(
           'INSERT INTO track_artists(track_id, artist_id, role, position) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
@@ -412,21 +397,20 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       const creditsToInsert: { name: string; role: string; position: number }[] = [];
       let cpos = 0;
       for (const name of track.composers) {
-        const fixed = name ? fixName(name) : null;
-        if (fixed) creditsToInsert.push({ name: fixed, role: 'composer', position: cpos++ });
+        if (name?.trim()) creditsToInsert.push({ name: name.trim(), role: 'composer', position: cpos++ });
       }
       cpos = 0;
       for (const name of track.conductors) {
-        const fixed = name ? fixName(name) : null;
-        if (fixed) creditsToInsert.push({ name: fixed, role: 'conductor', position: cpos++ });
+        if (name?.trim()) creditsToInsert.push({ name: name.trim(), role: 'conductor', position: cpos++ });
       }
       
       if (creditsToInsert.length > 0) {
         await client.query('DELETE FROM track_credits WHERE track_id = $1', [trackId]);
         for (const { name, role, position } of creditsToInsert) {
+          const asciiName = asciiFold(name);
           const artistRes = await client.query<{ id: number }>(
-            'INSERT INTO artists(name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id',
-            [name]
+            'INSERT INTO artists(name, ascii_name) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET ascii_name = COALESCE(artists.ascii_name, EXCLUDED.ascii_name) RETURNING id',
+            [name, asciiName || null]
           );
           await client.query(
             'INSERT INTO track_credits(track_id, artist_id, role, position) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
@@ -590,7 +574,11 @@ async function scanArtistArtwork(musicDir: string): Promise<number> {
 }
 
 // Main fast scan function
-export async function runFastScan(musicDir: string, forceFullScan: boolean = false): Promise<{ 
+export async function runFastScan(
+  musicDir: string,
+  forceFullScan: boolean = false,
+  ctx?: { libraryIndex?: number; libraryTotal?: number }
+): Promise<{ 
   totalFiles: number; 
   newFiles: number; 
   updatedFiles: number; 
@@ -598,11 +586,17 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
   durationMs: number;
 }> {
   const startTime = Date.now();
+  const libraryIndex = ctx?.libraryIndex;
+  const libraryTotal = ctx?.libraryTotal;
+
   logger.info('scan', `Fast scan starting: ${musicDir}${forceFullScan ? ' (FORCE FULL)' : ''}`);
   
   // Set initial scanning status
   const initialProgress = {
     status: 'scanning',
+    mountPath: musicDir,
+    libraryIndex,
+    libraryTotal,
     filesFound: 0,
     filesProcessed: 0,
     currentFile: 'Initializing...',
@@ -626,7 +620,7 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
        from tracks t
        join track_artists ta on ta.track_id = t.id
        join artists a on a.id = ta.artist_id
-       where t.library_id = $1 and t.deleted_at is null and a.name ~ '^[?[:space:]]+$'`,
+       where t.library_id = $1 and t.deleted_at is null and a.name ~ '\\?{2,}'`,
       [libraryId]
     );
     for (const r of bad.rows) badArtistPaths.add(r.path);
@@ -660,6 +654,9 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
       // Update progress during discovery
       const discoveryProgress = {
         status: 'scanning',
+        mountPath: musicDir,
+        libraryIndex,
+        libraryTotal,
         filesFound: allFiles.length,
         filesProcessed: 0,
         currentFile: `Discovering files... (${allFiles.length.toLocaleString()} found)`,
@@ -717,6 +714,9 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
   const updateProgress = (processed: number) => {
     const progress = {
       status: 'scanning',
+      mountPath: musicDir,
+      libraryIndex,
+      libraryTotal,
       filesFound: allFiles.length,
       filesProcessed: skippedFiles + processed,
       newFiles: filesToProcess.length,
@@ -766,15 +766,6 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
         } catch {}
         
         const isNew = !existingTracks.has(file.relPath);
-        const folderArtistGuess = (file.relPath.split(/[\\/]/).filter(Boolean)[0] ?? '').trim() || null;
-        const isAllQuestionMarks = (s: string | null) => !!s && /^\?+$/.test(s.trim());
-
-        const fix = (v: string | null) => {
-          if (!v) return v;
-          if (isAllQuestionMarks(v) && folderArtistGuess) return folderArtistGuess;
-          return v;
-        };
-
         return {
           libraryId,
           path: file.relPath,
@@ -783,9 +774,9 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
           sizeBytes: file.sizeBytes,
           ext: file.ext,
           title: tags.title,
-          artist: fix(tags.artist),
+          artist: tags.artist,
           album: tags.album,
-          albumartist: fix(tags.albumartist),
+          albumartist: tags.albumartist,
           genre: tags.genre,
           country: tags.country,
           language: tags.language,
@@ -795,8 +786,8 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
           artMime,
           artHash,
           lyricsPath,
-          artists: tags.artists.map(a => (isAllQuestionMarks(a) && folderArtistGuess ? folderArtistGuess : a)),
-          albumartists: tags.albumartists.map(a => (isAllQuestionMarks(a) && folderArtistGuess ? folderArtistGuess : a)),
+          artists: tags.artists,
+          albumartists: tags.albumartists,
           composers: tags.composers || [],
           conductors: tags.conductors || [],
           trackNumber: tags.trackNumber,
@@ -909,12 +900,38 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
   }
   
   // Phase 6: Update search index
+  {
+    const progress = {
+      status: 'indexing',
+      mountPath: musicDir,
+      libraryIndex,
+      libraryTotal,
+      filesFound: allFiles.length,
+      filesProcessed: allFiles.length,
+      currentFile: 'Indexing search…',
+    };
+    getPublisher().set('scan:progress', JSON.stringify(progress));
+    publishUpdate('scan:progress', progress);
+  }
   logger.info('search', 'Updating search index...');
   await ensureTracksIndex();
   await indexAllTracks();
   logger.success('search', 'Search index updated');
   
   // Phase 7: Scan for artist artwork
+  {
+    const progress = {
+      status: 'indexing',
+      mountPath: musicDir,
+      libraryIndex,
+      libraryTotal,
+      filesFound: allFiles.length,
+      filesProcessed: allFiles.length,
+      currentFile: 'Scanning artist artwork…',
+    };
+    getPublisher().set('scan:progress', JSON.stringify(progress));
+    publishUpdate('scan:progress', progress);
+  }
   await scanArtistArtwork(musicDir);
   
   const durationMs = Date.now() - startTime;
@@ -926,6 +943,9 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
   // Final progress update
   const progress = {
     status: 'idle',
+    mountPath: musicDir,
+    libraryIndex,
+    libraryTotal,
     filesFound: allFiles.length,
     filesProcessed: allFiles.length,
     durationMs,

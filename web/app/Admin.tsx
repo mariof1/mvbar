@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import {
   adminCreateUser,
   adminDeleteUser,
@@ -123,7 +123,10 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
     setScanProgress((prev) => ({
       ...prev,
       ok: true,
-      status: wsScanProgress.scanning ? 'scanning' : 'idle',
+      status: wsScanProgress.status === 'indexing' ? 'indexing' : (wsScanProgress.scanning ? 'scanning' : 'idle'),
+      mountPath: wsScanProgress.mountPath || prev?.mountPath,
+      libraryIndex: wsScanProgress.libraryIndex || prev?.libraryIndex,
+      libraryTotal: wsScanProgress.libraryTotal || prev?.libraryTotal,
       filesProcessed: wsScanProgress.filesProcessed,
       filesFound: wsScanProgress.filesFound,
       currentFile: wsScanProgress.currentFile,
@@ -135,9 +138,16 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
     }
   }, [wsScanProgress]);
 
-  // Live updates: Refresh stats and activity when library changes
+  // Live updates: Refresh stats and activity when library changes (throttled)
+  const lastLibraryRefreshRef = useRef<number>(0);
   useEffect(() => {
     if (!libraryLastUpdate || !token) return;
+    
+    // Throttle to once per 2 seconds during scans
+    const now = Date.now();
+    if (now - lastLibraryRefreshRef.current < 2000) return;
+    lastLibraryRefreshRef.current = now;
+    
     // Refresh stats
     getLibraryStats(token)
       .then((res) => setStats(res.stats))
@@ -269,13 +279,19 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                     ? 'Starting Scan...' 
                     : scanProgress?.status === 'scanning' 
                       ? 'Scanning Library...' 
-                      : 'Indexing Search...'}
+                      : 'Indexing...'}
                 </div>
                 <div className="text-sm text-slate-400">
                   {scanTriggered && (!scanProgress || scanProgress.status === 'idle')
                     ? 'Waiting for worker to start...'
                     : <>
-                        {scanProgress?.filesProcessed.toLocaleString()} / {scanProgress?.filesFound.toLocaleString()} files processed
+                        {scanProgress?.mountPath ? <span>Library: <span className="text-slate-200">{scanProgress.mountPath}</span></span> : null}
+                        {scanProgress?.libraryIndex && scanProgress?.libraryTotal ? (
+                          <span className="ml-2">({scanProgress.libraryIndex}/{scanProgress.libraryTotal})</span>
+                        ) : null}
+                        <span className="ml-2">
+                          {scanProgress?.filesProcessed.toLocaleString()} / {scanProgress?.filesFound.toLocaleString()} files processed
+                        </span>
                         {scanProgress?.queueSize && scanProgress.queueSize > 0 && (
                           <span className="ml-2 text-cyan-400">({scanProgress.queueSize} queued)</span>
                         )}

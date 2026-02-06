@@ -520,9 +520,16 @@ export function BrowseNew(props: {
     }
   }, [token, selectedLanguage, clear]);
 
-  // Refresh data when library updates arrive via WebSocket
+  // Refresh data when library updates arrive via WebSocket (throttled to avoid spam during scans)
+  const lastRefreshRef = useRef<number>(0);
   useEffect(() => {
     if (!lastUpdate || !lastEvent) return;
+    
+    // Throttle refreshes to once per 2 seconds to avoid spam during bulk scans
+    const now = Date.now();
+    if (now - lastRefreshRef.current < 2000) return;
+    lastRefreshRef.current = now;
+    
     // Refresh current tab when files are added/updated/removed
     if (tab === 'artists') loadArtists(true);
     else if (tab === 'albums') loadAlbums(true);
