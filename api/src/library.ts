@@ -179,7 +179,8 @@ function updateId3Tag(absPath: string, opts: {
 }) {
   const file = readFileSync(absPath);
   const parsed = parseId3Frames(file);
-  const targetVersion: 3 | 4 = parsed.usesSyncsafeFrameSizes ? 4 : parsed.version;
+  // Always write ID3v2.4 so multi-value text frames use NUL separators (MP3Tag-compatible, avoids v2.3 '/').
+  const targetVersion: 4 = 4;
   const needsUnsync = (parsed.headerFlags & 0x80) !== 0;
 
   const removeIds = new Set<string>();
@@ -238,8 +239,6 @@ function updateId3Tag(absPath: string, opts: {
   if (opts.genre !== undefined) addTextList('TCON', opts.genre);
   if (opts.artists !== undefined) {
     addTextList('TPE1', opts.artists);
-    // Keep a human-friendly mirror for older tooling
-    addTxxx('ARTISTS', opts.artists);
   }
   if (opts.albumArtist !== undefined) addTextList('TPE2', opts.albumArtist);
   if (opts.year !== undefined && opts.year !== null) {
@@ -251,7 +250,6 @@ function updateId3Tag(absPath: string, opts: {
   if (opts.country !== undefined) addTxxx('Country', opts.country);
   if (opts.language !== undefined) {
     addTextList('TLAN', opts.language);
-    addTxxx('Language', opts.language);
   }
 
   // If we upgrade v2.3 -> v2.4 (syncsafe mismatch), drop per-frame flags to avoid writing invalid flags for the new version.
