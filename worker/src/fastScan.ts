@@ -8,6 +8,7 @@ import { writeArt } from './art.js';
 import { indexAllTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
 import { asciiFold } from './tagRules.js';
+import { detectTempoBpm, type OnsetMethod } from './tempoDetector.js';
 
 const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
@@ -19,6 +20,27 @@ const ARTIST_IMAGE_NAMES = ['artist.jpg', 'artist.jpeg', 'artist.png', 'band.jpg
 const BATCH_SIZE = 100;  // DB batch insert size
 const CONCURRENCY = 100;  // Parallel file reads (increased for network FS)
 const PROGRESS_INTERVAL = 3000;  // Progress log interval in ms
+
+// Optional tempo detection (expensive: uses ffmpeg decode + DSP)
+const TEMPO_DETECT = process.env.TEMPO_DETECT === '1';
+const TEMPO_METHOD = (process.env.TEMPO_METHOD as OnsetMethod | undefined) ?? 'energy';
+const TEMPO_MIN_CONF = Number(process.env.TEMPO_MIN_CONF ?? '0.35');
+const TEMPO_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.TEMPO_CONCURRENCY ?? '2')));
+
+let tempoInFlight = 0;
+const tempoWaiters: Array<() => void> = [];
+async function withTempoSlot<T>(fn: () => Promise<T>): Promise<T> {
+  while (tempoInFlight >= TEMPO_CONCURRENCY) {
+    await new Promise<void>((resolve) => tempoWaiters.push(resolve));
+  }
+  tempoInFlight++;
+  try {
+    return await fn();
+  } finally {
+    tempoInFlight--;
+    tempoWaiters.shift()?.();
+  }
+}
 
 // Redis publisher for live updates
 let publisher: Redis | null = null;
@@ -741,6 +763,19 @@ export async function runFastScan(
       try {
         // Read metadata
         const tags = await readTags(file.fullPath);
+
+        // Optional: detect tempo and store in DB when missing from tags.
+        let detectedBpm: number | null = null;
+        if (TEMPO_DETECT && (tags.bpm == null || !Number.isFinite(tags.bpm) || tags.bpm <= 0)) {
+          try {
+            const res = await withTempoSlot(() => detectTempoBpm(file.fullPath, { onsetMethod: TEMPO_METHOD }));
+            if (res.confidence >= TEMPO_MIN_CONF && Number.isFinite(res.bpm) && res.bpm > 0) {
+              detectedBpm = res.bpm;
+            }
+          } catch (e) {
+            logger.debug?.('tempo', `Tempo detect failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
         
         // Handle art
         let artPath: string | null = null;
@@ -795,7 +830,7 @@ export async function runFastScan(
           discNumber: tags.discNumber,
           discTotal: tags.discTotal,
           // Extended metadata
-          bpm: tags.bpm ?? null,
+          bpm: tags.bpm ?? detectedBpm ?? null,
           initialKey: tags.initialKey ?? null,
           composer: tags.composer ?? null,
           conductor: tags.conductor ?? null,
