@@ -6,7 +6,7 @@ export function sanitize(str: string | undefined | null): string | null {
   if (!str) return null;
   
   // Remove null bytes and replacement characters
-  let s = str.replace(/\0/g, '').replace(/\uFFFD/g, '');
+  const s = str.replace(/\0/g, '').replace(/\uFFFD/g, '');
   
   // Normalize to NFC for consistent DB storage
   return s.normalize('NFC');
