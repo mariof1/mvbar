@@ -146,13 +146,32 @@ function fftRadix2(re: Float64Array, im: Float64Array): void {
   }
 }
 
+const HANN_CACHE = new Map<number, Float32Array>();
 function hannWindow(n: number): Float32Array {
+  const cached = HANN_CACHE.get(n);
+  if (cached) return cached;
   const w = new Float32Array(n);
-  if (n <= 1) return w;
-  for (let i = 0; i < n; i++) {
-    w[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1));
+  if (n > 1) {
+    for (let i = 0; i < n; i++) {
+      w[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1));
+    }
   }
+  HANN_CACHE.set(n, w);
   return w;
+}
+
+function maybeDownsampleEnvelope(env: Float32Array, hopSeconds: number): { env: Float32Array; hopSeconds: number } {
+  // Spectral flux on long windows can get expensive; downsample the envelope if it gets too long.
+  // We use max-pooling to keep sharp onsets.
+  if (env.length <= 8000) return { env, hopSeconds };
+
+  const out = new Float32Array(Math.floor(env.length / 2));
+  for (let i = 0; i < out.length; i++) {
+    const a = env[i * 2]!;
+    const b = env[i * 2 + 1]!;
+    out[i] = a > b ? a : b;
+  }
+  return { env: out, hopSeconds: hopSeconds * 2 };
 }
 
 function postProcessEnvelope(env: Float32Array, hopSeconds: number): void {
@@ -294,7 +313,9 @@ function scoreBpmByAutocorr(env: Float32Array, hopSeconds: number, bpmMin: numbe
   for (let i = 0; i < env.length; i++) m += env[i]!;
   m /= env.length;
 
-  const corrAtLag = (lag: number): number => {
+  // Precompute correlation for all lags once (avoid re-scanning env for harmonics).
+  const corrByLag = new Float32Array(lagHi + 1);
+  for (let lag = lagLo; lag <= lagHi; lag++) {
     let num = 0;
     let denA = 0;
     let denB = 0;
@@ -306,8 +327,8 @@ function scoreBpmByAutocorr(env: Float32Array, hopSeconds: number, bpmMin: numbe
       denB += b * b;
     }
     const denom = Math.sqrt(denA * denB);
-    return denom > 0 ? num / denom : 0;
-  };
+    corrByLag[lag] = denom > 0 ? (num / denom) : 0;
+  }
 
   // Comb-filter style scoring (period + harmonics) helps swing/subdivision ambiguity.
   // Weighted harmonic sum: corr(lag) + 1/2 corr(2lag) + 1/3 corr(3lag) + 1/4 corr(4lag)
@@ -318,7 +339,7 @@ function scoreBpmByAutocorr(env: Float32Array, hopSeconds: number, bpmMin: numbe
       const lk = lag * k;
       if (lk > lagHi) break;
       const w = 1 / k;
-      score += w * corrAtLag(lk);
+      score += w * corrByLag[lk]!;
       wSum += w;
     }
     const corr = wSum > 0 ? score / wSum : 0;
@@ -490,8 +511,9 @@ export async function detectTempoBpm(filename: string, opts: TempoDetectionOptio
     const winDur = Math.max(10, end - start);
 
     const pcm = await decodeWindowToPCM(filename, start, winDur, sampleRate, channels, ffmpegPath);
-    const env = computeOnsetEnvelope(pcm, sampleRate, hopSeconds, onsetMethod);
-    const cands = scoreBpmByAutocorr(env, hopSeconds, searchBpmMin, searchBpmMax);
+    const rawEnv = computeOnsetEnvelope(pcm, sampleRate, hopSeconds, onsetMethod);
+    const { env, hopSeconds: effHopSeconds } = maybeDownsampleEnvelope(rawEnv, hopSeconds);
+    const cands = scoreBpmByAutocorr(env, effHopSeconds, searchBpmMin, searchBpmMax);
 
     if (!cands[0]) continue;
 
