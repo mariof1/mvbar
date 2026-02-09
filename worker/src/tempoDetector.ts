@@ -87,11 +87,6 @@ function stdev(nums: number[]): number {
   return Math.sqrt(v);
 }
 
-function autocorr(scores: Float32Array): Float32Array {
-  // naive O(n^2) is too slow; we compute limited lags only upstream.
-  // This helper is unused; kept for clarity.
-  return scores;
-}
 
 function nextPow2(n: number): number {
   let p = 1;
@@ -282,25 +277,6 @@ function computeOnsetEnvelopeSpectralFlux(pcm: Float32Array, sampleRate: number,
   return env;
 }
 
-function computeOnsetEnvelope(pcm: Float32Array, sampleRate: number, hopSeconds: number, onsetMethod: OnsetMethod): Float32Array {
-  if (onsetMethod === "energy") return computeOnsetEnvelopeEnergy(pcm, sampleRate, hopSeconds);
-
-  const spectral = computeOnsetEnvelopeSpectralFlux(pcm, sampleRate, hopSeconds);
-  let spectralMax = 0;
-  for (let i = 0; i < spectral.length; i++) spectralMax = Math.max(spectralMax, spectral[i]!);
-  if (onsetMethod === "spectral") {
-    return spectralMax > 0 ? spectral : computeOnsetEnvelopeEnergy(pcm, sampleRate, hopSeconds);
-  }
-
-  // hybrid
-  const energy = computeOnsetEnvelopeEnergy(pcm, sampleRate, hopSeconds);
-  if (spectralMax <= 0 || spectral.length === 0) return energy;
-
-  const n = Math.min(energy.length, spectral.length);
-  const out = new Float32Array(n);
-  for (let i = 0; i < n; i++) out[i] = Math.max(energy[i]!, spectral[i]!);
-  return out;
-}
 
 function pickPeaks(env: Float32Array, minDistance: number, threshold: number, maxPeaks: number): number[] {
   const peaks: number[] = [];
