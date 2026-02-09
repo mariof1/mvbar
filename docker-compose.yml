@@ -32,7 +32,7 @@ services:
       GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL:-}
 
       # worker
-      MUSIC_DIRS: /music,/music2
+      MUSIC_DIRS: /music
       TEMPO_DETECT: ${TEMPO_DETECT:-0}
       TEMPO_MODE: ${TEMPO_MODE:-batch}
       TEMPO_METHOD: ${TEMPO_METHOD:-energy}
@@ -47,7 +47,7 @@ services:
     volumes:
       # mount your music (edit these)
       - /path/to/music:/music:ro
-      - /path/to/music2:/music2:ro
+      #- /path/to/music2:/music2:ro
 
       # persistent data
       - pg:/var/lib/postgresql/data
