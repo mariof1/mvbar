@@ -86,6 +86,11 @@ export async function listLibraries(token: string) {
   return { ok: r.ok, libraries: r.libraries.map((l) => ({ ...l, id: Number(l.id) })) };
 }
 
+export async function adminDeleteLibrary(token: string, libraryId: number, opts?: { force?: boolean }) {
+  const qs = opts?.force ? '?force=true' : '';
+  return (await apiFetch(`/admin/libraries/${libraryId}${qs}`, { method: 'DELETE' }, token)) as { ok: boolean };
+}
+
 export async function listAdminUsers(token: string) {
   return (await apiFetch('/admin/users', { method: 'GET' }, token)) as { ok: boolean; users: Array<{ id: string; email: string; role: string }> };
 }

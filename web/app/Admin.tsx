@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useRef } from 'react';
 import {
   adminCreateUser,
   adminDeleteUser,
+  adminDeleteLibrary,
   adminForceLogout,
   adminResetPassword,
   adminSetUserRole,
@@ -476,6 +477,23 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                   <span className="text-xs px-2 py-1 rounded-md bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">writable</span>
                 ) : (
                   <span className="text-xs px-2 py-1 rounded-md bg-slate-700/30 text-slate-300 border border-slate-700/40">read-only</span>
+                )}
+                {lib.mounted === false && (
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`Delete library ${lib.mount_path}? This will hide its tracks (soft-delete) and remove it from the library list.`)) return;
+                      try {
+                        await adminDeleteLibrary(token, lib.id);
+                        await loadData();
+                      } catch (e: any) {
+                        if (e?.status === 401) clear();
+                      }
+                    }}
+                    className="text-xs px-2 py-1 rounded-md bg-red-600/10 text-red-400 border border-red-600/20 hover:bg-red-600/20"
+                    title="Delete unmounted library"
+                  >
+                    delete
+                  </button>
                 )}
                 <span className="text-xs text-slate-500">ID: {lib.id}</span>
               </div>
