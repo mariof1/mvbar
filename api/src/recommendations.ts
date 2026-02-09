@@ -515,11 +515,12 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       if (chosenSearches.length >= 5) break;
     }
 
-    for (const search of chosenSearches) {
+    const searchCombinedById = new Map<number, TrackData & { score: number }>();
+
+    for (const [idx, search] of chosenSearches.entries()) {
       const term = search.query.trim();
       const termFold = foldDiacritics(term);
       const termLower = term.toLowerCase();
-      let matchType = '';
       let matchedTracks: TrackData[] = [];
 
       // Try year match
@@ -534,10 +535,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
            order by coalesce(s.play_count, 0) desc limit 50`,
           allowed ? [userId, year, allowed] : [userId, year]
         );
-        if (yearR.rows.length > 0) {
-          matchType = `Matching year ${year}`;
-          matchedTracks = yearR.rows;
-        }
+        matchedTracks = yearR.rows;
       }
 
       // Try genre match (partial)
@@ -552,10 +550,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
            order by coalesce(s.play_count, 0) desc limit 50`,
           allowed ? [userId, `%${termLower}%`, allowed] : [userId, `%${termLower}%`]
         );
-        if (genreR.rows.length > 0) {
-          matchType = `Matching genre`;
-          matchedTracks = genreR.rows;
-        }
+        matchedTracks = genreR.rows;
       }
 
       // Try country match
@@ -569,10 +564,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
            order by coalesce(s.play_count, 0) desc limit 50`,
           allowed ? [userId, termLower, allowed] : [userId, termLower]
         );
-        if (countryR.rows.length > 0) {
-          matchType = `Matching country`;
-          matchedTracks = countryR.rows;
-        }
+        matchedTracks = countryR.rows;
       }
 
       // Try artist match (with diacritics folding)
@@ -587,10 +579,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
            order by coalesce(s.play_count, 0) desc limit 50`,
           allowed ? [userId, `%${termLower}%`, `%${termFold}%`, allowed] : [userId, `%${termLower}%`, `%${termFold}%`]
         );
-        if (artistR.rows.length > 0) {
-          matchType = `Matching artist`;
-          matchedTracks = artistR.rows;
-        }
+        matchedTracks = artistR.rows;
       }
 
       // Try album match
@@ -604,32 +593,30 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
            order by t.album, coalesce(s.play_count, 0) desc limit 50`,
           allowed ? [userId, `%${termLower}%`, allowed] : [userId, `%${termLower}%`]
         );
-        if (albumR.rows.length > 0) {
-          matchType = `Matching album`;
-          matchedTracks = albumR.rows;
-        }
+        matchedTracks = albumR.rows;
       }
 
       if (matchedTracks.length >= 5) {
-        // Prioritize unplayed then played
-        const unplayed = matchedTracks.filter(t => t.play_count === 0);
-        const played = matchedTracks.filter(t => t.play_count > 0).sort((a, b) => b.play_count - a.play_count);
-        const combined = [...unplayed, ...played];
-        
-        // For artist searches, don't limit per artist (the whole bucket IS that artist)
-        const isArtistMatch = matchType === 'Matching artist';
-        const diverse = diversify(
-          combined.map(t => ({ ...t, score: t.play_count === 0 ? 10 : t.play_count })),
-          { maxPerArtist: isArtistMatch ? 50 : 3, maxPerAlbum: isArtistMatch ? 10 : 3, limit: 50 }
-        );
-        
-        await addBucket(
-          `search_${search.normalized.replace(/\W/g, '_').slice(0, 30)}`,
-          `Tracks you might like`,
-          diverse,
-          matchType
-        );
+        const recencyBoost = (chosenSearches.length - idx) * 2;
+        for (const t of matchedTracks) {
+          const base = t.play_count === 0 ? 12 : Math.max(1, 6 - Math.min(t.play_count, 5));
+          const score = base + recencyBoost;
+          const existing = searchCombinedById.get(t.id);
+          if (!existing || score > existing.score) {
+            searchCombinedById.set(t.id, { ...t, score });
+          }
+        }
       }
+    }
+
+    if (searchCombinedById.size >= 10) {
+      const seed = dailySeed(userId, 'search_suggestions');
+      const scored = [...searchCombinedById.values()].map(t => ({
+        ...t,
+        score: t.score + seededNoise(seed, t.id) * 2
+      }));
+      const diverse = diversify(scored, { maxPerArtist: 3, maxPerAlbum: 3, limit: 50, seed });
+      await addBucket('search_suggestions', 'Tracks you might like', diverse, 'From your recent searches');
     }
 
     // ========================================================================
