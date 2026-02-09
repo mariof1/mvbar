@@ -5,6 +5,7 @@ import { db, initDb } from './db.js';
 import * as transcodeJobs from './transcodeRepo.js';
 import { transcodeTrackToHls } from './transcoder.js';
 import { runFastScan } from './fastScan.js';
+import { runTempoBackfillBatch } from './tempoBackfill.js';
 import { startPodcastRefresh } from './podcastRefresh.js';
 import logger from './logger.js';
 
@@ -17,6 +18,9 @@ const musicDirs = (process.env.MUSIC_DIRS ?? process.env.MUSIC_DIR ?? '/music')
 
 const useFastScan = process.env.FAST_SCAN !== '0';
 const rescanIntervalMs = parseInt(process.env.RESCAN_INTERVAL_MS ?? '300000', 10); // Default 5 minutes
+
+const tempoDetectEnabled = process.env.TEMPO_DETECT === '1' && (process.env.TEMPO_MODE ?? 'batch') === 'batch';
+const tempoBackfillIntervalMs = parseInt(process.env.TEMPO_BACKFILL_INTERVAL_MS ?? '1800000', 10); // Default 30 minutes
 
 logger.success('worker', 'Started', { musicDirs, useFastScan, rescanIntervalMs });
 
@@ -64,6 +68,25 @@ async function periodicRescan(force: boolean = false) {
 // Schedule periodic rescans
 logger.info('worker', `Scheduling periodic library scan every ${rescanIntervalMs / 1000}s`);
 setInterval(periodicRescan, rescanIntervalMs);
+
+// Schedule tempo backfill (independent batches throughout the day)
+if (tempoDetectEnabled) {
+  let tempoBackfillInProgress = false;
+  const runIfIdle = async () => {
+    if (tempoBackfillInProgress) return;
+    if (scanInProgress) return;
+    tempoBackfillInProgress = true;
+    try {
+      await runTempoBackfillBatch();
+    } finally {
+      tempoBackfillInProgress = false;
+    }
+  };
+
+  logger.info('worker', `Scheduling tempo backfill every ${Math.round(tempoBackfillIntervalMs / 1000)}s`);
+  setTimeout(runIfIdle, 60_000);
+  setInterval(runIfIdle, tempoBackfillIntervalMs);
+}
 
 // Start automatic podcast refresh (every hour by default)
 startPodcastRefresh();

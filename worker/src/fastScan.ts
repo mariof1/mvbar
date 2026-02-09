@@ -22,7 +22,11 @@ const CONCURRENCY = 100;  // Parallel file reads (increased for network FS)
 const PROGRESS_INTERVAL = 3000;  // Progress log interval in ms
 
 // Optional tempo detection (expensive: uses ffmpeg decode + DSP)
+// TEMPO_DETECT + TEMPO_MODE=scan => run during scans
+// TEMPO_DETECT + TEMPO_MODE=batch => handled by tempoBackfill job (not during scans)
 const TEMPO_DETECT = process.env.TEMPO_DETECT === '1';
+const TEMPO_MODE = process.env.TEMPO_MODE ?? 'batch';
+const TEMPO_IN_SCAN = TEMPO_DETECT && TEMPO_MODE === 'scan';
 const TEMPO_METHOD = (process.env.TEMPO_METHOD as OnsetMethod | undefined) ?? 'energy';
 const TEMPO_MIN_CONF = Number(process.env.TEMPO_MIN_CONF ?? '0.35');
 const TEMPO_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.TEMPO_CONCURRENCY ?? '2')));
@@ -613,8 +617,8 @@ export async function runFastScan(
   const libraryTotal = ctx?.libraryTotal;
 
   logger.info('scan', `Fast scan starting: ${musicDir}${forceFullScan ? ' (FORCE FULL)' : ''}`);
-  if (TEMPO_DETECT) {
-    logger.info('tempo', 'Tempo detection enabled (missing-tag backfill)', {
+  if (TEMPO_IN_SCAN) {
+    logger.info('tempo', 'Tempo detection enabled during scan (missing-tag backfill)', {
       method: TEMPO_METHOD,
       minConfidence: TEMPO_MIN_CONF,
       concurrency: TEMPO_CONCURRENCY,
@@ -784,7 +788,7 @@ export async function runFastScan(
         // since it would otherwise re-run ffmpeg/DSP for every file without a BPM tag.
         let detectedBpm: number | null = null;
         if (
-          TEMPO_DETECT &&
+          TEMPO_IN_SCAN &&
           existing?.bpm == null &&
           (tags.bpm == null || !Number.isFinite(tags.bpm) || tags.bpm <= 0)
         ) {
@@ -999,8 +1003,8 @@ export async function runFastScan(
   const durationSec = Math.round(durationMs / 1000);
   const rate = Math.round(allFiles.length / (durationMs / 1000));
   
-  if (TEMPO_DETECT) {
-    logger.info('tempo', 'Tempo detection stats', {
+  if (TEMPO_IN_SCAN) {
+    logger.info('tempo', 'Tempo detection stats (scan)', {
       tried: tempoTried,
       applied: tempoApplied,
       lowConfidence: tempoLowConfidence,
