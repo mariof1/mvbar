@@ -625,7 +625,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
         
         await addBucket(
           `search_${search.normalized.replace(/\W/g, '_').slice(0, 30)}`,
-          `Because you searched "${term}"`,
+          `Tracks you might like`,
           diverse,
           matchType
         );
@@ -662,7 +662,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
           const diverse = diversify(scored, { maxPerArtist: 3, limit: 50 });
           await addBucket(
             'similar_to_top',
-            `Because you listen to ${topArtist.artist}`,
+            `Similar to ${topArtist.artist}`,
             diverse,
             'Similar artists you might like'
           );
@@ -715,7 +715,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
           `genre_country_${familyKey}_${gc.country.toLowerCase().replace(/\W/g, '_')}`,
           `${gc.country} ${genreLabel}`,
           diverse,
-          `Because you listen to a lot of ${gc.country} ${genreLabel.toLowerCase()}`
+          `A ${gc.country} ${genreLabel.toLowerCase()} vibe`
         );
       }
     }
@@ -788,7 +788,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
           `language_${lang.language.toLowerCase().replace(/\W/g, '_')}`,
           `More ${lang.language} Music`,
           diverse,
-          `Because you love ${lang.language} music`
+          `A bit more ${lang.language}`
         );
       }
     }

@@ -415,7 +415,7 @@ export async function initDb() {
     alter table users add column if not exists subsonic_password text;
   `);
 
-  // Search logs for "Because you searched" recommendations
+  // Search logs for search-based recommendation buckets
   await pool.query(`
     create table if not exists search_logs (
       id bigserial primary key,
