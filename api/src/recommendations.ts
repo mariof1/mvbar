@@ -80,6 +80,15 @@ function seededShuffle<T>(arr: T[], seed: number): T[] {
   return result;
 }
 
+function seededNoise(seed: number, n: number): number {
+  // fast deterministic noise in [0, 1)
+  let x = (seed ^ (n * 2654435761)) >>> 0;
+  x = (x ^ (x >>> 16)) * 2246822507 >>> 0;
+  x = (x ^ (x >>> 13)) * 3266489909 >>> 0;
+  x = x ^ (x >>> 16);
+  return (x >>> 0) / 0xffffffff;
+}
+
 // Fold diacritics for matching (e.g., "Sokół" -> "Sokol")
 function foldDiacritics(str: string): string {
   return str
@@ -152,6 +161,9 @@ interface ScoringOptions {
 function scoreTrack(track: TrackData, opts: ScoringOptions): number {
   let score = 0;
   const { purpose, now } = opts;
+
+  // Extra recency guard (covers cases where last_played_at isn't present in the row)
+  if (opts.recentlyPlayedIds.has(track.id)) score -= 30;
   
   // Base signals
   if (track.is_favorite) score += 20;
@@ -296,7 +308,6 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     async function addBucket(key: string, name: string, tracks: TrackData[], subtitle?: string, reason?: string) {
       if (tracks.length < 4) return;
       const art = await getBucketArt(tracks.map(t => t.id));
-      if (art.art_paths.length === 0) return;
       
       buckets.push({
         key, name, subtitle, reason,
@@ -509,7 +520,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
         const year = parseInt(term);
         const yearR = await db().query<TrackData>(
           `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                  coalesce(s.play_count, 0)::int as play_count, 0 as skip_count,
+                  coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                   s.last_played_at, false as is_favorite, null as updated_at
            from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
            where t.year = $2 ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
@@ -526,7 +537,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       if (matchedTracks.length === 0) {
         const genreR = await db().query<TrackData>(
           `select distinct t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                  coalesce(s.play_count, 0)::int as play_count, 0 as skip_count,
+                  coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                   s.last_played_at, false as is_favorite, null as updated_at
            from active_tracks t join track_genres tg on tg.track_id = t.id
            left join user_track_stats s on s.track_id = t.id and s.user_id = $1
@@ -544,7 +555,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       if (matchedTracks.length === 0) {
         const countryR = await db().query<TrackData>(
           `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                  coalesce(s.play_count, 0)::int as play_count, 0 as skip_count,
+                  coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                   s.last_played_at, false as is_favorite, null as updated_at
            from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
            where lower(t.country) = $2 ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
@@ -561,7 +572,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       if (matchedTracks.length === 0) {
         const artistR = await db().query<TrackData>(
           `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                  coalesce(s.play_count, 0)::int as play_count, 0 as skip_count,
+                  coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                   s.last_played_at, false as is_favorite, null as updated_at
            from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
            where (lower(t.artist) like $2 or lower(t.artist) like $3)
@@ -579,7 +590,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       if (matchedTracks.length === 0) {
         const albumR = await db().query<TrackData>(
           `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                  coalesce(s.play_count, 0)::int as play_count, 0 as skip_count,
+                  coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                   s.last_played_at, false as is_favorite, null as updated_at
            from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
            where lower(t.album) like $2 ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
@@ -627,7 +638,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
         const similarNames = similarLocal.map(s => s.name.toLowerCase());
         const similarR = await db().query<TrackData>(
           `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                  coalesce(s.play_count, 0)::int as play_count, 0 as skip_count,
+                  coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                   s.last_played_at, false as is_favorite, null as updated_at
            from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
            where lower(t.artist) = any($2) ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
@@ -854,7 +865,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       
       const tempoR = await db().query<TrackData>(
         `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.bpm,
-                coalesce(s.play_count, 0)::int as play_count, 0 as skip_count,
+                coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                 s.last_played_at, false as is_favorite, null as updated_at
          from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
          where t.bpm between $2 and $3 ${allowed ? `and t.library_id = any($4::bigint[])` : ''}
@@ -882,7 +893,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       const artistNames = topArtistsR.rows.slice(0, 10).map(a => a.artist.toLowerCase());
       const newFromR = await db().query<TrackData>(
         `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at,
-                coalesce(s.play_count, 0)::int as play_count, 0 as skip_count,
+                coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                 s.last_played_at, false as is_favorite
          from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
          where lower(t.artist) = any($2) and (s.play_count is null or s.play_count < 2)
@@ -944,19 +955,21 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       const topNames = topArtistsR.rows.slice(0, 5).map(a => a.artist.toLowerCase());
       const deepR = await db().query<TrackData>(
         `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                coalesce(s.play_count, 0)::int as play_count, 0 as skip_count,
+                coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                 s.last_played_at, false as is_favorite, null as updated_at
          from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
          where lower(t.artist) = any($2) and coalesce(s.play_count, 0) < 2
            ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
-         order by random() limit 100`,
+         order by t.id limit 300`,
         allowed ? [userId, topNames, allowed] : [userId, topNames]
       );
 
       if (deepR.rows.length >= 8) {
+        const seed = dailySeed(userId, 'deep_cuts');
+        const shuffled = seededShuffle(deepR.rows, seed);
         const diverse = diversify(
-          deepR.rows.map(t => ({ ...t, score: 10 - t.play_count })),
-          { maxPerArtist: 4, limit: 50 }
+          shuffled.map(t => ({ ...t, score: 10 - t.play_count })),
+          { maxPerArtist: 4, limit: 50, seed }
         );
         await addBucket('deep_cuts', 'Deep Cuts', diverse, 'Hidden gems from artists you love');
       }
@@ -983,7 +996,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     if (moodGenres.length > 0) {
       const moodR = await db().query<TrackData>(
         `select distinct t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                coalesce(s.play_count, 0)::int as play_count, 0 as skip_count,
+                coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                 s.last_played_at, false as is_favorite, null as updated_at
          from active_tracks t join track_genres tg on tg.track_id = t.id
          left join user_track_stats s on s.track_id = t.id and s.user_id = $1
@@ -994,9 +1007,10 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       );
 
       if (moodR.rows.length >= 10) {
+        const seed = dailySeed(userId, 'mood', timeContext.period);
         const diverse = diversify(
-          moodR.rows.map(t => ({ ...t, score: t.play_count + Math.random() * 5 })),
-          { maxPerArtist: 2, limit: 50, seed: dailySeed(userId, 'mood', timeContext.period) }
+          moodR.rows.map((t) => ({ ...t, score: t.play_count + seededNoise(seed, t.id) * 5 })),
+          { maxPerArtist: 2, limit: 50, seed }
         );
         await addBucket(`mood_${timeContext.period}`, moodConfig.name, diverse, moodConfig.subtitle);
       }

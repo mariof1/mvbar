@@ -357,7 +357,10 @@ export async function getRecommendations(token: string) {
   return (await apiFetch('/recommendations', { method: 'GET' }, token)) as {
     ok: boolean;
     buckets: Array<{
+      key: string;
       name: string;
+      subtitle?: string;
+      reason?: string;
       count: number;
       tracks: Array<{ id: number; title: string; artist: string }>;
       art_paths: string[];
