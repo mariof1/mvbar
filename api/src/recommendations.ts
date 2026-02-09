@@ -332,6 +332,13 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     );
     const recentlyPlayedIds = new Set(recentR.rows.map(r => r.track_id));
 
+    // Cooldown window (3d): avoid repeating the same tracks in mood-style buckets
+    const recentCooldownR = await db().query<{ track_id: number }>(
+      `select distinct track_id from play_history where user_id = $1 and played_at > now() - interval '3 days'`,
+      [userId]
+    );
+    const cooldownIds = new Set(recentCooldownR.rows.map(r => r.track_id));
+
     const scoringOpts: ScoringOptions = { purpose: 'mixed', now, recentlyPlayedIds, favoriteIds };
 
     // Top artists
@@ -994,25 +1001,80 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     if (moodGenres.length > 0) {
+      // Target BPM from your recent listening, scoped to this time-of-day if we have enough data.
+      const period = timeContext.period;
+      const hourExpr = `extract(hour from ph.played_at)`;
+      const periodWhere =
+        period === 'morning'
+          ? `${hourExpr} >= 6 and ${hourExpr} < 12`
+          : period === 'afternoon'
+            ? `${hourExpr} >= 12 and ${hourExpr} < 17`
+            : period === 'evening'
+              ? `${hourExpr} >= 17 and ${hourExpr} < 22`
+              : `(${hourExpr} >= 22 or ${hourExpr} < 6)`;
+
+      const periodTempoR = await db().query<{ avg_bpm: number; count: number }>(
+        `select avg(t.bpm)::float as avg_bpm, count(*)::int as count
+         from play_history ph join active_tracks t on t.id = ph.track_id
+         where ph.user_id = $1
+           and ph.played_at > now() - interval '30 days'
+           and t.bpm is not null and t.bpm > 0
+           and ${periodWhere}`,
+        [userId]
+      );
+
+      const overallTempoR = await db().query<{ avg_bpm: number; count: number }>(
+        `select avg(t.bpm)::float as avg_bpm, count(*)::int as count
+         from user_track_stats s join active_tracks t on t.id = s.track_id
+         where s.user_id = $1 and t.bpm is not null and t.bpm > 0 and s.play_count > 0
+           and s.last_played_at > now() - interval '30 days'`,
+        [userId]
+      );
+
+      const targetBpm =
+        periodTempoR.rows[0]?.count >= 10
+          ? periodTempoR.rows[0].avg_bpm
+          : overallTempoR.rows[0]?.count >= 10
+            ? overallTempoR.rows[0].avg_bpm
+            : null;
+
       const moodR = await db().query<TrackData>(
-        `select distinct t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
+        `select distinct t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.bpm,
                 coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
-                s.last_played_at, false as is_favorite, null as updated_at
-         from active_tracks t join track_genres tg on tg.track_id = t.id
+                s.last_played_at,
+                case when f.track_id is not null then true else false end as is_favorite,
+                null as updated_at
+         from active_tracks t
+         join track_genres tg on tg.track_id = t.id
          left join user_track_stats s on s.track_id = t.id and s.user_id = $1
+         left join favorite_tracks f on f.track_id = t.id and f.user_id = $1
          where lower(tg.genre) = any($2) and coalesce(s.play_count, 0) > 0
            ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
-         limit 150`,
+         limit 250`,
         allowed ? [userId, moodGenres.slice(0, 30), allowed] : [userId, moodGenres.slice(0, 30)]
       );
 
-      if (moodR.rows.length >= 10) {
-        const seed = dailySeed(userId, 'mood', timeContext.period);
-        const diverse = diversify(
-          moodR.rows.map((t) => ({ ...t, score: t.play_count + seededNoise(seed, t.id) * 5 })),
-          { maxPerArtist: 2, limit: 50, seed }
-        );
-        await addBucket(`mood_${timeContext.period}`, moodConfig.name, diverse, moodConfig.subtitle);
+      const cooldownFiltered = moodR.rows.filter((t) => !cooldownIds.has(t.id));
+      if (cooldownFiltered.length >= 10) {
+        const rotationWindow = Math.floor(now / (2 * 60 * 60 * 1000));
+        const seed = dailySeed(userId, 'mood', timeContext.period, rotationWindow);
+        const tolerance = 15;
+
+        const scored = cooldownFiltered.map((t) => {
+          const base = scoreTrack(t, scoringOpts);
+          const tempoBoost =
+            targetBpm && t.bpm
+              ? Math.max(0, tolerance - Math.abs(t.bpm - targetBpm)) * 1.2
+              : 0;
+          return { ...t, score: base + tempoBoost + seededNoise(seed, t.id) * 3 };
+        });
+
+        const diverse = diversify(scored, { maxPerArtist: 2, limit: 50, seed });
+        const subtitle = targetBpm
+          ? `${moodConfig.subtitle} • ~${Math.round(targetBpm)} BPM • Rotates every 2 hours`
+          : `${moodConfig.subtitle} • Rotates every 2 hours`;
+
+        await addBucket(`mood_${timeContext.period}`, moodConfig.name, diverse, subtitle);
       }
     }
 
