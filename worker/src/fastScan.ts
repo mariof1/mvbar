@@ -8,6 +8,7 @@ import { writeArt } from './art.js';
 import { indexAllTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
 import { asciiFold } from './tagRules.js';
+import { detectTempoBpm, type OnsetMethod } from './tempoDetector.js';
 
 const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
@@ -19,6 +20,31 @@ const ARTIST_IMAGE_NAMES = ['artist.jpg', 'artist.jpeg', 'artist.png', 'band.jpg
 const BATCH_SIZE = 100;  // DB batch insert size
 const CONCURRENCY = 100;  // Parallel file reads (increased for network FS)
 const PROGRESS_INTERVAL = 3000;  // Progress log interval in ms
+
+// Optional tempo detection (expensive: uses ffmpeg decode + DSP)
+// TEMPO_DETECT + TEMPO_MODE=scan => run during scans
+// TEMPO_DETECT + TEMPO_MODE=batch => handled by tempoBackfill job (not during scans)
+const TEMPO_DETECT = process.env.TEMPO_DETECT === '1';
+const TEMPO_MODE = process.env.TEMPO_MODE ?? 'batch';
+const TEMPO_IN_SCAN = TEMPO_DETECT && TEMPO_MODE === 'scan';
+const TEMPO_METHOD = (process.env.TEMPO_METHOD as OnsetMethod | undefined) ?? 'energy';
+const TEMPO_MIN_CONF = Number(process.env.TEMPO_MIN_CONF ?? '0.35');
+const TEMPO_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.TEMPO_CONCURRENCY ?? '2')));
+
+let tempoInFlight = 0;
+const tempoWaiters: Array<() => void> = [];
+async function withTempoSlot<T>(fn: () => Promise<T>): Promise<T> {
+  while (tempoInFlight >= TEMPO_CONCURRENCY) {
+    await new Promise<void>((resolve) => tempoWaiters.push(resolve));
+  }
+  tempoInFlight++;
+  try {
+    return await fn();
+  } finally {
+    tempoInFlight--;
+    tempoWaiters.shift()?.();
+  }
+}
 
 // Redis publisher for live updates
 let publisher: Redis | null = null;
@@ -454,17 +480,18 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
 }
 
 // Load existing tracks for comparison (only non-deleted ones for change detection)
-async function loadExistingTracks(libraryId: number): Promise<Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null }>> {
-  const result = await db().query<{ path: string; mtime_ms: string; size_bytes: string; birthtime_ms: string | null }>(
-    'SELECT path, mtime_ms, size_bytes, birthtime_ms FROM tracks WHERE library_id = $1 AND deleted_at IS NULL',
+async function loadExistingTracks(libraryId: number): Promise<Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null; bpm: number | null }>> {
+  const result = await db().query<{ path: string; mtime_ms: string; size_bytes: string; birthtime_ms: string | null; bpm: number | null }>(
+    'SELECT path, mtime_ms, size_bytes, birthtime_ms, bpm FROM tracks WHERE library_id = $1 AND deleted_at IS NULL',
     [libraryId]
   );
-  const map = new Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null }>();
+  const map = new Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null; bpm: number | null }>();
   for (const row of result.rows) {
     map.set(row.path, {
       mtimeMs: Number(row.mtime_ms),
       sizeBytes: Number(row.size_bytes),
       birthtimeMs: row.birthtime_ms == null ? null : Number(row.birthtime_ms),
+      bpm: row.bpm == null ? null : Number(row.bpm),
     });
   }
   return map;
@@ -577,7 +604,7 @@ async function scanArtistArtwork(musicDir: string): Promise<number> {
 export async function runFastScan(
   musicDir: string,
   forceFullScan: boolean = false,
-  ctx?: { libraryIndex?: number; libraryTotal?: number }
+  ctx?: { libraryIndex?: number; libraryTotal?: number; shouldCancel?: () => boolean }
 ): Promise<{ 
   totalFiles: number; 
   newFiles: number; 
@@ -588,8 +615,42 @@ export async function runFastScan(
   const startTime = Date.now();
   const libraryIndex = ctx?.libraryIndex;
   const libraryTotal = ctx?.libraryTotal;
+  const shouldCancel = ctx?.shouldCancel ?? (() => false);
+
+  class ScanCancelledError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'ScanCancelledError';
+    }
+  }
+
+  const cancelNow = (where: string) => {
+    if (!shouldCancel()) return;
+    const durationMs = Date.now() - startTime;
+    const progress: any = {
+      status: 'idle',
+      mountPath: musicDir,
+      libraryIndex,
+      libraryTotal,
+      filesFound: 0,
+      filesProcessed: 0,
+      currentFile: `Cancelled (${where})`,
+      durationMs,
+      cancelled: true,
+    };
+    getPublisher().set('scan:progress', JSON.stringify(progress));
+    publishUpdate('scan:progress', progress);
+    throw new ScanCancelledError(`cancelled: ${where}`);
+  };
 
   logger.info('scan', `Fast scan starting: ${musicDir}${forceFullScan ? ' (FORCE FULL)' : ''}`);
+  if (TEMPO_IN_SCAN) {
+    logger.info('tempo', 'Tempo detection enabled during scan (missing-tag backfill)', {
+      method: TEMPO_METHOD,
+      minConfidence: TEMPO_MIN_CONF,
+      concurrency: TEMPO_CONCURRENCY,
+    });
+  }
   
   // Set initial scanning status
   const initialProgress = {
@@ -604,6 +665,8 @@ export async function runFastScan(
   getPublisher().set('scan:progress', JSON.stringify(initialProgress));
   publishUpdate('scan:progress', initialProgress);
   
+  cancelNow('before_init');
+
   const libraryId = await getOrCreateLibrary(musicDir);
   
   // Phase 1: Load existing tracks for comparison (fast DB query)
@@ -644,10 +707,13 @@ export async function runFastScan(
 
   logger.info('scan', `Loaded ${existingTracks.size} existing tracks (${deletedTracks.size} soft-deleted)`);
   
+  cancelNow('after_db_load');
+
   // Phase 2: Walk directory and collect files
   logger.info('scan', 'Scanning filesystem...');
   const allFiles: FileInfo[] = [];
   for await (const file of walkDirectory(musicDir, musicDir)) {
+    if (shouldCancel()) cancelNow('discovering_files');
     allFiles.push(file);
     if (allFiles.length % 1000 === 0) {
       logger.progress('scan', 'Discovering files', allFiles.length, allFiles.length);
@@ -673,6 +739,7 @@ export async function runFastScan(
   const filesToRestore: string[] = [];
   let skippedFiles = 0;
   for (const file of allFiles) {
+    if (shouldCancel()) cancelNow('filtering_files');
     const existing = existingTracks.get(file.relPath);
     if (forceFullScan) {
       // Force mode: process all files
@@ -732,15 +799,48 @@ export async function runFastScan(
   let updatedFiles = 0;
   let lastProgressTime = Date.now();
   const batch: TrackData[] = [];
+
+  let tempoTried = 0;
+  let tempoApplied = 0;
+  let tempoLowConfidence = 0;
+  let tempoFailed = 0;
   
   // Process in chunks
   for (let i = 0; i < filesToProcess.length; i += CONCURRENCY) {
+    if (shouldCancel()) cancelNow('processing_files');
     const chunk = filesToProcess.slice(i, i + CONCURRENCY);
     
     const results = await processFilesParallel(chunk, CONCURRENCY, async (file) => {
       try {
+        if (shouldCancel()) return null;
         // Read metadata
         const tags = await readTags(file.fullPath);
+
+        const existing = existingTracks.get(file.relPath);
+
+        // Optional: detect tempo and store in DB when missing from tags.
+        // IMPORTANT: if the DB already has bpm for this track, skip detection (especially for FORCE FULL scans)
+        // since it would otherwise re-run ffmpeg/DSP for every file without a BPM tag.
+        let detectedBpm: number | null = null;
+        if (
+          TEMPO_IN_SCAN &&
+          existing?.bpm == null &&
+          (tags.bpm == null || !Number.isFinite(tags.bpm) || tags.bpm <= 0)
+        ) {
+          tempoTried++;
+          try {
+            const res = await withTempoSlot(() => detectTempoBpm(file.fullPath, { onsetMethod: TEMPO_METHOD }));
+            if (res.confidence >= TEMPO_MIN_CONF && Number.isFinite(res.bpm) && res.bpm > 0) {
+              detectedBpm = res.bpm;
+              tempoApplied++;
+            } else {
+              tempoLowConfidence++;
+            }
+          } catch (e) {
+            tempoFailed++;
+            logger.debug('tempo', `Tempo detect failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
         
         // Handle art
         let artPath: string | null = null;
@@ -765,7 +865,7 @@ export async function runFastScan(
           if (lst.isFile()) lyricsPath = lyricsRel;
         } catch {}
         
-        const isNew = !existingTracks.has(file.relPath);
+        const isNew = !existing;
         return {
           libraryId,
           path: file.relPath,
@@ -795,7 +895,7 @@ export async function runFastScan(
           discNumber: tags.discNumber,
           discTotal: tags.discTotal,
           // Extended metadata
-          bpm: tags.bpm ?? null,
+          bpm: tags.bpm ?? detectedBpm ?? null,
           initialKey: tags.initialKey ?? null,
           composer: tags.composer ?? null,
           conductor: tags.conductor ?? null,
@@ -899,6 +999,8 @@ export async function runFastScan(
     logger.success('scan', `Soft-deleted ${orphanPaths.length} orphan tracks`);
   }
   
+  if (shouldCancel()) cancelNow('before_indexing');
+
   // Phase 6: Update search index
   {
     const progress = {
@@ -918,6 +1020,8 @@ export async function runFastScan(
   await indexAllTracks();
   logger.success('search', 'Search index updated');
   
+  if (shouldCancel()) cancelNow('before_artist_artwork');
+
   // Phase 7: Scan for artist artwork
   {
     const progress = {
@@ -938,6 +1042,15 @@ export async function runFastScan(
   const durationSec = Math.round(durationMs / 1000);
   const rate = Math.round(allFiles.length / (durationMs / 1000));
   
+  if (TEMPO_IN_SCAN) {
+    logger.info('tempo', 'Tempo detection stats (scan)', {
+      tried: tempoTried,
+      applied: tempoApplied,
+      lowConfidence: tempoLowConfidence,
+      failed: tempoFailed,
+    });
+  }
+
   logger.success('scan', `Scan complete in ${durationSec}s - ${allFiles.length} files (${rate} files/sec)`);
   
   // Final progress update

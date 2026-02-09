@@ -424,6 +424,14 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     return { ok: true, message: force ? 'Force full scan triggered' : 'Rescan triggered' };
   });
 
+  // Request cancellation of an in-progress scan (best-effort)
+  app.post('/api/admin/library/scan/cancel', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    await redis().publish('library:commands', JSON.stringify({ command: 'cancel_scan', by: req.user.userId }));
+    await audit('scan_cancel_requested', { by: req.user.userId });
+    return { ok: true };
+  });
+
   // Whether any mounted library is writable inside the container
   app.get('/api/admin/library/writable', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
@@ -601,6 +609,39 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     );
 
     return { ok: true, libraries };
+  });
+
+  // Delete a library (admin-only). Intended for removing stale/unmounted mount paths.
+  // Behavior: soft-delete all tracks for that library, then delete the library row.
+  app.delete('/api/admin/libraries/:id', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id)) return reply.code(400).send({ ok: false, error: 'Invalid library id' });
+
+    const libR = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries where id=$1', [id]);
+    const lib = libR.rows[0];
+    if (!lib) return reply.code(404).send({ ok: false, error: 'Library not found' });
+
+    const force = ((req.query as any)?.force ?? '') === 'true';
+    let mounted = true;
+    try {
+      await access(lib.mount_path);
+    } catch {
+      mounted = false;
+    }
+    if (mounted && !force) {
+      return reply.code(400).send({ ok: false, error: 'Library is mounted; pass ?force=true to delete anyway' });
+    }
+
+    const cntR = await db().query<{ count: number }>('select count(*)::int as count from tracks where library_id=$1 and deleted_at is null', [id]);
+    const activeTracks = cntR.rows[0]?.count ?? 0;
+
+    await db().query('update tracks set deleted_at = coalesce(deleted_at, now()) where library_id=$1', [id]);
+    await db().query('delete from libraries where id=$1', [id]);
+
+    await audit('library_deleted', { id, mount_path: lib.mount_path, activeTracks, by: req.user.userId, force });
+    return { ok: true, id, mount_path: lib.mount_path, activeTracks };
   });
 
   app.get('/api/library/tracks', async (req, reply) => {

@@ -5,6 +5,7 @@ import { db, initDb } from './db.js';
 import * as transcodeJobs from './transcodeRepo.js';
 import { transcodeTrackToHls } from './transcoder.js';
 import { runFastScan } from './fastScan.js';
+import { runTempoBackfillBatch } from './tempoBackfill.js';
 import { startPodcastRefresh } from './podcastRefresh.js';
 import logger from './logger.js';
 
@@ -18,57 +19,28 @@ const musicDirs = (process.env.MUSIC_DIRS ?? process.env.MUSIC_DIR ?? '/music')
 const useFastScan = process.env.FAST_SCAN !== '0';
 const rescanIntervalMs = parseInt(process.env.RESCAN_INTERVAL_MS ?? '300000', 10); // Default 5 minutes
 
+const tempoDetectEnabled = process.env.TEMPO_DETECT === '1' && (process.env.TEMPO_MODE ?? 'batch') === 'batch';
+const tempoBackfillIntervalMs = parseInt(process.env.TEMPO_BACKFILL_INTERVAL_MS ?? '1800000', 10); // Default 30 minutes
+
 logger.success('worker', 'Started', { musicDirs, useFastScan, rescanIntervalMs });
 
 await initDb();
 
-// Initialize libraries and run initial scan
+// Ensure libraries exist in DB so we can link tracks
 for (const dir of musicDirs) {
-  // Ensure library exists in DB so we can link tracks
   await db().query(
-    `INSERT INTO libraries (mount_path, created_at) 
-     VALUES ($1, NOW()) 
+    `INSERT INTO libraries (mount_path, created_at)
+     VALUES ($1, NOW())
      ON CONFLICT (mount_path) DO NOTHING`,
     [dir]
   );
-  
-  if (useFastScan) {
-    // Run fast parallel scan on startup
-    try {
-      await runFastScan(dir, false, { libraryIndex: musicDirs.indexOf(dir) + 1, libraryTotal: musicDirs.length });
-    } catch (e) {
-      logger.error('scan', `Fast scan failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
 }
 
 // Periodic rescan function - more reliable than real-time watching on NFS
 let scanInProgress = false;
-async function periodicRescan(force: boolean = false) {
-  if (scanInProgress) {
-    logger.info('scan', 'Scan already in progress, skipping');
-    return;
-  }
-  scanInProgress = true;
-  try {
-    for (const dir of musicDirs) {
-      await runFastScan(dir, force, { libraryIndex: musicDirs.indexOf(dir) + 1, libraryTotal: musicDirs.length });
-    }
-  } catch (e) {
-    logger.error('scan', `Periodic scan failed: ${e instanceof Error ? e.message : String(e)}`);
-  } finally {
-    scanInProgress = false;
-  }
-}
+let cancelRequested = false;
 
-// Schedule periodic rescans
-logger.info('worker', `Scheduling periodic library scan every ${rescanIntervalMs / 1000}s`);
-setInterval(periodicRescan, rescanIntervalMs);
-
-// Start automatic podcast refresh (every hour by default)
-startPodcastRefresh();
-
-// Listen for rescan commands from API
+// Listen for rescan/cancel commands from API (must be active during long scans)
 const subscriber = new Redis(REDIS_URL);
 subscriber.subscribe('library:commands', (err) => {
   if (err) logger.error('worker', `Failed to subscribe to commands: ${err.message}`);
@@ -81,11 +53,81 @@ subscriber.on('message', async (channel, message) => {
     if (cmd.command === 'rescan') {
       logger.info('scan', `Manual rescan triggered by ${cmd.by || 'unknown'}${cmd.force ? ' (FORCE FULL)' : ''}`);
       periodicRescan(cmd.force === true);
+    } else if (cmd.command === 'cancel_scan') {
+      cancelRequested = true;
+      logger.info('scan', `Scan cancel requested by ${cmd.by || 'unknown'}`);
     }
   } catch {
     logger.warn('worker', `Invalid command message: ${message}`);
   }
 });
+
+async function periodicRescan(force: boolean = false) {
+  if (!useFastScan) return;
+  if (scanInProgress) {
+    logger.info('scan', 'Scan already in progress, skipping');
+    return;
+  }
+  if (cancelRequested) {
+    logger.info('scan', 'Cancel already requested; not starting a new scan');
+    cancelRequested = false;
+    return;
+  }
+  scanInProgress = true;
+  try {
+    for (const dir of musicDirs) {
+      if (cancelRequested) break;
+      try {
+        await runFastScan(dir, force, {
+          libraryIndex: musicDirs.indexOf(dir) + 1,
+          libraryTotal: musicDirs.length,
+          shouldCancel: () => cancelRequested,
+        });
+      } catch (e) {
+        if (e instanceof Error && e.name === 'ScanCancelledError') {
+          logger.info('scan', 'Scan cancelled');
+          break;
+        }
+        throw e;
+      }
+    }
+  } catch (e) {
+    logger.error('scan', `Periodic scan failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    scanInProgress = false;
+    cancelRequested = false;
+  }
+}
+
+// Kick off an initial scan on startup
+setTimeout(() => periodicRescan(false), 0);
+
+// Schedule periodic rescans
+logger.info('worker', `Scheduling periodic library scan every ${rescanIntervalMs / 1000}s`);
+setInterval(periodicRescan, rescanIntervalMs);
+
+// Schedule tempo backfill (independent batches throughout the day)
+if (tempoDetectEnabled) {
+  let tempoBackfillInProgress = false;
+  const runIfIdle = async () => {
+    if (tempoBackfillInProgress) return;
+    if (scanInProgress) return;
+    tempoBackfillInProgress = true;
+    try {
+      await runTempoBackfillBatch();
+    } finally {
+      tempoBackfillInProgress = false;
+    }
+  };
+
+  logger.info('worker', `Scheduling tempo backfill every ${Math.round(tempoBackfillIntervalMs / 1000)}s`);
+  setTimeout(runIfIdle, 60_000);
+  setInterval(runIfIdle, tempoBackfillIntervalMs);
+}
+
+// Start automatic podcast refresh (every hour by default)
+startPodcastRefresh();
+
 
 // Graceful shutdown handler
 async function gracefulShutdown(signal: string) {

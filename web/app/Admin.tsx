@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useRef } from 'react';
 import {
   adminCreateUser,
   adminDeleteUser,
+  adminDeleteLibrary,
   adminForceLogout,
   adminResetPassword,
   adminSetUserRole,
@@ -89,7 +90,10 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [scanTriggered, setScanTriggered] = useState(false);
+  const [scanCanceling, setScanCanceling] = useState(false);
   const [showForceConfirm, setShowForceConfirm] = useState(false);
+  const [showDeleteLibraryConfirm, setShowDeleteLibraryConfirm] = useState(false);
+  const [libraryToDelete, setLibraryToDelete] = useState<any | null>(null);
 
   // Live updates from WebSocket
   const wsScanProgress = useScanProgress();
@@ -137,6 +141,10 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
       setScanTriggered(false);
     }
   }, [wsScanProgress]);
+
+  useEffect(() => {
+    if (scanProgress?.status === 'idle') setScanCanceling(false);
+  }, [scanProgress?.status]);
 
   // Live updates: Refresh stats and activity when library changes (throttled)
   const lastLibraryRefreshRef = useRef<number>(0);
@@ -256,6 +264,46 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
         </div>
       )}
 
+      {/* Delete Library Confirmation Modal */}
+      {showDeleteLibraryConfirm && libraryToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-md mx-4 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-3">Delete Library?</h3>
+            <p className="text-slate-400 mb-2">
+              This will hide its tracks (soft-delete) and remove it from the library list.
+            </p>
+            <p className="text-slate-300 font-mono text-sm mb-6">{libraryToDelete.mount_path}</p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setShowDeleteLibraryConfirm(false);
+                  setLibraryToDelete(null);
+                }}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const lib = libraryToDelete;
+                  setShowDeleteLibraryConfirm(false);
+                  setLibraryToDelete(null);
+                  try {
+                    await adminDeleteLibrary(token, lib.id);
+                    await loadData();
+                  } catch (e: any) {
+                    if (e?.status === 401) clear();
+                  }
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Scan Progress Banner */}
       {(scanTriggered || (scanProgress && scanProgress.status !== 'idle')) && (
         <div className="p-4 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 rounded-xl">
@@ -300,11 +348,30 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                 </div>
               </div>
             </div>
-            {scanProgress && scanProgress.filesFound > 0 && (
-              <div className="text-2xl font-bold text-cyan-400">
-                {Math.round((scanProgress.filesProcessed / scanProgress.filesFound) * 100)}%
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {scanProgress && scanProgress.filesFound > 0 && (
+                <div className="text-2xl font-bold text-cyan-400">
+                  {Math.round((scanProgress.filesProcessed / scanProgress.filesFound) * 100)}%
+                </div>
+              )}
+              {(scanTriggered || (scanProgress && scanProgress.status !== 'idle')) && (
+                <button
+                  onClick={async () => {
+                    try {
+                      setScanCanceling(true);
+                      await apiFetch('/admin/library/scan/cancel', { method: 'POST' }, token);
+                    } catch (e: any) {
+                      if (e?.status === 401) clear();
+                      setScanCanceling(false);
+                    }
+                  }}
+                  disabled={scanCanceling}
+                  className="px-3 py-1.5 bg-red-600/10 hover:bg-red-600/20 disabled:bg-slate-700/50 disabled:text-slate-500 text-red-400 border border-red-600/20 rounded-lg text-sm font-medium transition-colors"
+                >
+                  {scanCanceling ? 'Cancelling…' : 'Cancel'}
+                </button>
+              )}
+            </div>
           </div>
           {/* Progress Bar */}
           <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
@@ -476,6 +543,18 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                   <span className="text-xs px-2 py-1 rounded-md bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">writable</span>
                 ) : (
                   <span className="text-xs px-2 py-1 rounded-md bg-slate-700/30 text-slate-300 border border-slate-700/40">read-only</span>
+                )}
+                {lib.mounted === false && (
+                  <button
+                    onClick={() => {
+                      setLibraryToDelete(lib);
+                      setShowDeleteLibraryConfirm(true);
+                    }}
+                    className="text-xs px-2 py-1 rounded-md bg-red-600/10 text-red-400 border border-red-600/20 hover:bg-red-600/20"
+                    title="Delete unmounted library"
+                  >
+                    delete
+                  </button>
                 )}
                 <span className="text-xs text-slate-500">ID: {lib.id}</span>
               </div>

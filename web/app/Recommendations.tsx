@@ -13,7 +13,10 @@ type Track = {
 };
 
 type Bucket = {
+  key: string;
   name: string;
+  subtitle?: string;
+  reason?: string;
   count: number;
   tracks: Track[];
   art_paths: string[];
@@ -164,8 +167,9 @@ function BucketCard({ bucket, onClick, flipId }: { bucket: Bucket; onClick?: () 
       </div>
       <div className="px-1">
         <div className="font-semibold text-white text-sm">{bucket.name}</div>
+        {bucket.subtitle && <div className="text-xs text-slate-400 truncate">{bucket.subtitle}</div>}
         {bucket.count > 0 && (
-          <div className="text-xs text-slate-400">{bucket.count} songs</div>
+          <div className="text-xs text-slate-500">{bucket.count} songs</div>
         )}
       </div>
     </div>
@@ -292,10 +296,10 @@ export function Recommendations() {
           <div ref={bucketsRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {buckets.map((bucket) => (
               <BucketCard
-                key={bucket.name}
+                key={bucket.key}
                 bucket={bucket}
                 onClick={() => playBucket(bucket)}
-                flipId={`bucket:${bucket.name}`}
+                flipId={`bucket:${bucket.key}`}
               />
             ))}
           </div>
