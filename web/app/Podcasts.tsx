@@ -6,7 +6,7 @@ import { useUi, PodcastEpisode } from './uiStore';
 import { usePlayer } from './playerStore';
 import { useRouter } from './router';
 import { apiFetch } from './apiClient';
-import { sendWebSocketMessage, usePodcastProgress } from './useWebSocket';
+import { sendWebSocketMessage, usePodcastProgress, updateLocalPodcastProgress } from './useWebSocket';
 
 // ============================================================================
 // TYPES
@@ -534,17 +534,26 @@ export function PodcastPlayer({
     audioEl.play().then(() => setPlaying(true)).catch(() => {});
 
     // Save progress periodically and broadcast via WebSocket
+    let lastApiSave = 0;
     const interval = setInterval(() => {
       if (audioEl.currentTime > 0) {
         const positionMs = Math.floor(audioEl.currentTime * 1000);
-        apiFetch(
-          `/podcasts/episodes/${episode.id}/progress`,
-          { method: 'POST', body: JSON.stringify({ positionMs }) },
-          token!
-        ).catch(() => {});
-        
-        // Broadcast via WebSocket (throttle to every 15s)
         const now = Date.now();
+        
+        // Update local progress store for UI sync (Continue Listening, etc.) - every 5s
+        updateLocalPodcastProgress(episode.id, positionMs, false);
+        
+        // Save to API (throttle to every 15s)
+        if (now - lastApiSave >= 15000) {
+          lastApiSave = now;
+          apiFetch(
+            `/podcasts/episodes/${episode.id}/progress`,
+            { method: 'POST', body: JSON.stringify({ positionMs }) },
+            token!
+          ).catch(() => {});
+        }
+        
+        // Broadcast via WebSocket to other devices (throttle to every 15s)
         if (now - lastBroadcastRef.current >= 15000) {
           lastBroadcastRef.current = now;
           sendWebSocketMessage('podcast:progress', {
@@ -554,7 +563,7 @@ export function PodcastPlayer({
           });
         }
       }
-    }, 15000);
+    }, 5000);
 
     return () => {
       clearInterval(interval);
@@ -1012,10 +1021,28 @@ export function Podcasts() {
     setEpisodes((prev) => prev.map((e) => 
       e.id === episodeId ? { ...e, position_ms, played } : e
     ));
-    setNewEpisodes((prev) => prev.map((e) => 
-      e.id === episodeId ? { ...e, position_ms, played } : e
-    ));
-  }, [lastProgress]);
+    setNewEpisodes((prev) => {
+      const exists = prev.some((e) => e.id === episodeId);
+      if (exists) {
+        // Update existing episode
+        return prev.map((e) => 
+          e.id === episodeId ? { ...e, position_ms, played } : e
+        );
+      }
+      // If episode isn't in Continue Listening yet but has >30s progress,
+      // add it from current playing episode (if it matches)
+      if (position_ms > 30000 && !played && podcastEpisode && podcastEpisode.id === episodeId) {
+        const newEp: Episode = { 
+          ...podcastEpisode, 
+          position_ms, 
+          played: false,
+          downloaded: false // Default to false, will be updated on next full refresh
+        };
+        return [newEp, ...prev];
+      }
+      return prev;
+    });
+  }, [lastProgress, podcastEpisode]);
 
   // Load podcasts
   const loadPodcasts = useCallback(async () => {

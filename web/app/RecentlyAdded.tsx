@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { apiFetch } from './apiClient';
+import { useLibraryUpdates } from './useWebSocket';
 
 type Album = {
   album: string;
@@ -69,6 +70,11 @@ export function RecentlyAdded({
   const [tracksLoading, setTracksLoading] = useState(false);
   const { setQueueAndPlay, addToQueue: addToPlayerQueue } = usePlayer();
 
+  // Live updates
+  const libraryLastUpdate = useLibraryUpdates((s) => s.lastUpdate);
+  const libraryLastEvent = useLibraryUpdates((s) => s.lastEvent);
+  const lastRefreshRef = useRef<number>(0);
+
   const loadAlbums = useCallback(async () => {
     if (!token) return;
     try {
@@ -84,6 +90,22 @@ export function RecentlyAdded({
   useEffect(() => {
     loadAlbums();
   }, [loadAlbums]);
+
+  // Live updates: refresh when new tracks are added
+  useEffect(() => {
+    if (!libraryLastUpdate || !token) return;
+    
+    // Throttle to once per 2 seconds during scans
+    const now = Date.now();
+    if (now - lastRefreshRef.current < 2000) return;
+    lastRefreshRef.current = now;
+    
+    // Only refresh on track_added events to show new albums
+    if (libraryLastEvent?.event === 'track_added') {
+      loadAlbums();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [libraryLastUpdate]);
 
   const loadAlbumTracks = useCallback(async (album: Album) => {
     if (!token) return;

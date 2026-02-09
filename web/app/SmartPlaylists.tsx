@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   listSmartPlaylists,
   getSmartPlaylist,
@@ -13,6 +13,7 @@ import {
 } from './apiClient';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
+import { useLibraryUpdates } from './useWebSocket';
 
 const SORT_OPTIONS = [
   { value: 'random', label: 'Random' },
@@ -149,6 +150,8 @@ export function SmartPlaylists(props: {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
   const { setQueueAndPlay } = usePlayer();
+  const lastLibraryUpdate = useLibraryUpdates((s) => s.lastUpdate);
+  const lastRefreshRef = useRef<number>(0);
 
   const [playlists, setPlaylists] = useState<SmartPlaylist[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -240,6 +243,19 @@ export function SmartPlaylists(props: {
     if (selectedId != null) loadPlaylist(selectedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, token]);
+
+  // Refresh selected smart playlist when library updates (tracks may have changed)
+  useEffect(() => {
+    if (selectedId != null && lastLibraryUpdate) {
+      // Throttle to once per 2 seconds during scans
+      const now = Date.now();
+      if (now - lastRefreshRef.current < 2000) return;
+      lastRefreshRef.current = now;
+      
+      loadPlaylist(selectedId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastLibraryUpdate]);
 
   function buildFilters(): SmartFilters {
     return {

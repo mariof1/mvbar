@@ -10,8 +10,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function nativeValues(m: IAudioMetadata, names: string[]) {
   const want = new Set(names.map((n) => n.toLowerCase()));
   const out: string[] = [];
-  for (const tagType of Object.keys(m.native ?? {})) {
-    for (const t of m.native[tagType] ?? []) {
+
+  // If ID3v2 is present, ignore ID3v1 native values to avoid inserting legacy "????" placeholders
+  // (ID3v1 cannot represent many non-Latin scripts and is often lossy).
+  const nativeKeys = Object.keys(m.native ?? {});
+  const hasId3v2 = nativeKeys.some((k) => k.toLowerCase().startsWith('id3v2'));
+
+  for (const tagType of nativeKeys) {
+    if (hasId3v2 && tagType.toLowerCase() === 'id3v1') continue;
+    for (const t of m.native?.[tagType] ?? []) {
       const id = String((t as any).id ?? '').toLowerCase();
       const id2 = id.startsWith('txxx:') ? id.slice('txxx:'.length) : id;
       if (!want.has(id) && !want.has(id2)) continue;
@@ -28,6 +35,7 @@ function nativeValues(m: IAudioMetadata, names: string[]) {
 }
 
 export type TagResult = {
+  // Basic metadata
   title: string | null;
   artist: string | null;
   album: string | null;
@@ -37,14 +45,49 @@ export type TagResult = {
   language: string | null;
   year: number | null;
   durationMs: number | null;
+  
+  // Artwork
   artMime: string | null;
   artData: Uint8Array | null;
+  
+  // Multi-value artist fields
   artists: string[];
   albumartists: string[];
+  composers: string[];
+  conductors: string[];
+  
+  // Track/disc numbers
   trackNumber: number | null;
   trackTotal: number | null;
   discNumber: number | null;
   discTotal: number | null;
+  
+  // Extended metadata
+  bpm: number | null;
+  initialKey: string | null;
+  composer: string | null;
+  conductor: string | null;
+  publisher: string | null;
+  copyright: string | null;
+  comment: string | null;
+  mood: string | null;
+  grouping: string | null;
+  isrc: string | null;
+  releaseDate: string | null;
+  originalYear: number | null;
+  compilation: boolean;
+  
+  // Sort fields
+  titleSort: string | null;
+  artistSort: string | null;
+  albumSort: string | null;
+  albumArtistSort: string | null;
+  
+  // MusicBrainz IDs
+  musicbrainzTrackId: string | null;
+  musicbrainzReleaseId: string | null;
+  musicbrainzArtistId: string | null;
+  musicbrainzAlbumArtistId: string | null;
 };
 
 function ffprobeDurationMs(filePath: string, timeoutMs = 15000): Promise<number | null> {
@@ -70,6 +113,9 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const needDuration = ext === '.opus' || ext === '.ogg';
   const m = await parseFile(filePath, { duration: needDuration });
 
+  // Helper to get first element if array
+  const firstOf = <T>(v: T | T[] | undefined): T | undefined => Array.isArray(v) ? v[0] : v;
+
   const title = sanitize(m.common.title);
   const artist = sanitize(m.common.artist);
   const album = sanitize(m.common.album);
@@ -86,6 +132,105 @@ export async function readTags(filePath: string): Promise<TagResult> {
 
   const commonAny = m.common as any;
 
+  // === Extended metadata extraction ===
+  
+  // BPM
+  const bpmRaw = commonAny.bpm ?? nativeValues(m, ['tbpm', 'TBPM', 'bpm', 'BPM'])[0];
+  const bpm = bpmRaw ? Math.round(Number(bpmRaw)) : null;
+  
+  // Initial key (musical key)
+  const initialKey = sanitize(nativeValues(m, ['tkey', 'TKEY', 'key', 'initialkey', 'INITIALKEY'])[0] ?? commonAny.key);
+  
+  // Composer
+  const composerRaw = [
+    ...(commonAny.composer ? (Array.isArray(commonAny.composer) ? commonAny.composer : [commonAny.composer]) : []),
+    ...nativeValues(m, ['tcom', 'TCOM', 'composer', 'COMPOSER'])
+  ];
+  const composer = composerRaw.length ? sanitize(composerRaw.join('; ')) : null;
+  
+  // Conductor
+  const conductorRaw = [
+    ...(commonAny.conductor ? (Array.isArray(commonAny.conductor) ? commonAny.conductor : [commonAny.conductor]) : []),
+    ...nativeValues(m, ['tpe3', 'TPE3', 'conductor', 'CONDUCTOR'])
+  ];
+  const conductor = conductorRaw.length ? sanitize(conductorRaw.join('; ')) : null;
+  
+  // Publisher/Label (may be array in music-metadata)
+  const publisherRaw = firstOf(commonAny.label) ?? firstOf(commonAny.publisher) ?? 
+    nativeValues(m, ['tpub', 'TPUB', 'label', 'LABEL', 'publisher', 'PUBLISHER'])[0];
+  const publisher = sanitize(publisherRaw);
+  
+  // Copyright
+  const copyright = sanitize(
+    firstOf(commonAny.copyright) ?? nativeValues(m, ['tcop', 'TCOP', 'copyright', 'COPYRIGHT'])[0]
+  );
+  
+  // Comment
+  const commentRaw = firstOf(commonAny.comment) ?? nativeValues(m, ['comm', 'COMM', 'comment', 'COMMENT'])[0];
+  const comment = sanitize(typeof commentRaw === 'object' && commentRaw?.text ? commentRaw.text : commentRaw);
+  
+  // Mood
+  const mood = sanitize(
+    nativeValues(m, ['tmoo', 'TMOO', 'mood', 'MOOD', 'TXXX:MOOD', 'TXXX:mood'])[0]
+  );
+  
+  // Grouping
+  const grouping = sanitize(
+    firstOf(commonAny.grouping) ?? nativeValues(m, ['tit1', 'TIT1', 'grouping', 'GROUPING', 'contentgroup'])[0]
+  );
+  
+  // ISRC (may be array in music-metadata)
+  const isrc = sanitize(
+    firstOf(commonAny.isrc) ?? nativeValues(m, ['tsrc', 'TSRC', 'isrc', 'ISRC'])[0]
+  );
+  
+  // Release date (full date if available)
+  const releaseDateRaw = nativeValues(m, ['tdrl', 'TDRL', 'releasedate', 'RELEASEDATE', 'TXXX:RELEASEDATE'])[0] 
+    ?? commonAny.date;
+  const releaseDate = sanitize(releaseDateRaw);
+  
+  // Original year
+  const originalYearRaw = commonAny.originalyear ?? commonAny.originaldate 
+    ?? nativeValues(m, ['tory', 'TORY', 'tdor', 'TDOR', 'originalyear', 'ORIGINALYEAR'])[0];
+  const originalYear = originalYearRaw ? parseInt(String(originalYearRaw).slice(0, 4), 10) || null : null;
+  
+  // Compilation flag
+  const compilationRaw = commonAny.compilation ?? nativeValues(m, ['tcmp', 'TCMP', 'compilation', 'COMPILATION'])[0];
+  const compilation = compilationRaw === true || compilationRaw === 1 || compilationRaw === '1';
+  
+  // Sort fields
+  const titleSort = sanitize(
+    commonAny.titlesort ?? nativeValues(m, ['tsot', 'TSOT', 'titlesort', 'TITLESORT', 'TXXX:TITLESORT'])[0]
+  );
+  const artistSort = sanitize(
+    commonAny.artistsort ?? nativeValues(m, ['tsop', 'TSOP', 'artistsort', 'ARTISTSORT', 'TXXX:ARTISTSORT'])[0]
+  );
+  const albumSort = sanitize(
+    commonAny.albumsort ?? nativeValues(m, ['tsoa', 'TSOA', 'albumsort', 'ALBUMSORT', 'TXXX:ALBUMSORT'])[0]
+  );
+  const albumArtistSort = sanitize(
+    commonAny.albumartistsort ?? nativeValues(m, ['tso2', 'TSO2', 'albumartistsort', 'ALBUMARTISTSORT', 'TXXX:ALBUMARTISTSORT'])[0]
+  );
+  
+  // MusicBrainz IDs
+  const musicbrainzTrackId = sanitize(
+    commonAny.musicbrainz_trackid ?? commonAny.musicbrainz_recordingid 
+    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_TRACKID', 'TXXX:MusicBrainz Track Id', 'TXXX:MUSICBRAINZ_RECORDINGID'])[0]
+  );
+  const musicbrainzReleaseId = sanitize(
+    commonAny.musicbrainz_albumid 
+    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_ALBUMID', 'TXXX:MusicBrainz Album Id'])[0]
+  );
+  const musicbrainzArtistId = sanitize(
+    commonAny.musicbrainz_artistid?.[0] ?? commonAny.musicbrainz_artistid
+    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_ARTISTID', 'TXXX:MusicBrainz Artist Id'])[0]
+  );
+  const musicbrainzAlbumArtistId = sanitize(
+    commonAny.musicbrainz_albumartistid?.[0] ?? commonAny.musicbrainz_albumartistid
+    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_ALBUMARTISTID', 'TXXX:MusicBrainz Album Artist Id'])[0]
+  );
+
+  // === Genre/Country/Language classification ===
   const classified = splitAndClassifyTags({
     genres: m.common.genre ?? [],
     countries: [
@@ -147,6 +292,8 @@ export async function readTags(filePath: string): Promise<TagResult> {
     return [...best.values()];
   };
 
+  // === Artist handling with priority: ALBUMARTIST > ARTIST > ARTISTS ===
+  
   // Merge artists from *all* relevant sources (common + native), then split and dedupe.
   // This handles files with repeated artist frames (e.g. multiple TPE1 / TXXX:ARTISTS).
   const mainArtist = m.common.artist || '';
@@ -168,9 +315,7 @@ export async function readTags(filePath: string): Promise<TagResult> {
       'artist',
       'artists',
       'performer',
-      'performers',
-      'composer',
-      'composers'
+      'performers'
     ])
   );
 
@@ -199,9 +344,13 @@ export async function readTags(filePath: string): Promise<TagResult> {
     return out.filter((a, i) => !out.some((b, j) => j !== i && b.startsWith(a) && b.length > a.length));
   })();
 
+  // === Composer/Conductor arrays for track_credits ===
+  const composers = dedupeFold(composerRaw.flatMap((v) => splitArtistValue(String(v ?? ''))));
+  const conductors = dedupeFold(conductorRaw.flatMap((v) => splitArtistValue(String(v ?? ''))));
+
   // Canonicalize across artist+albumartist so accent-variants map to the same DB artist row.
   const canonByKey = new Map<string, string>();
-  for (const v of [...artists, ...albumartists]) {
+  for (const v of [...artists, ...albumartists, ...composers, ...conductors]) {
     const k = foldKey(v);
     if (!k) continue;
     const cur = canonByKey.get(k);
@@ -219,7 +368,15 @@ export async function readTags(filePath: string): Promise<TagResult> {
   // Standardize album artist string for display/filtering (e.g. handle "A\0\uFEFFB\0\uFEFFC")
   if (albumartists.length) albumartist = albumartists.join('; ');
 
-  return { title, artist, album, albumartist, genre, country, language, year, durationMs, artMime, artData, artists, albumartists, trackNumber, trackTotal, discNumber, discTotal };
+  return {
+    title, artist, album, albumartist, genre, country, language, year, durationMs, artMime, artData,
+    artists, albumartists, composers, conductors,
+    trackNumber, trackTotal, discNumber, discTotal,
+    bpm, initialKey, composer, conductor, publisher, copyright, comment, mood, grouping,
+    isrc, releaseDate, originalYear, compilation,
+    titleSort, artistSort, albumSort, albumArtistSort,
+    musicbrainzTrackId, musicbrainzReleaseId, musicbrainzArtistId, musicbrainzAlbumArtistId
+  };
 }
 
 /**

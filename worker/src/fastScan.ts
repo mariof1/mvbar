@@ -7,6 +7,8 @@ import { readTags } from './metadata.js';
 import { writeArt } from './art.js';
 import { indexAllTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
+import { asciiFold } from './tagRules.js';
+import { detectTempoBpm, type OnsetMethod } from './tempoDetector.js';
 
 const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
@@ -18,6 +20,31 @@ const ARTIST_IMAGE_NAMES = ['artist.jpg', 'artist.jpeg', 'artist.png', 'band.jpg
 const BATCH_SIZE = 100;  // DB batch insert size
 const CONCURRENCY = 100;  // Parallel file reads (increased for network FS)
 const PROGRESS_INTERVAL = 3000;  // Progress log interval in ms
+
+// Optional tempo detection (expensive: uses ffmpeg decode + DSP)
+// TEMPO_DETECT + TEMPO_MODE=scan => run during scans
+// TEMPO_DETECT + TEMPO_MODE=batch => handled by tempoBackfill job (not during scans)
+const TEMPO_DETECT = process.env.TEMPO_DETECT === '1';
+const TEMPO_MODE = process.env.TEMPO_MODE ?? 'batch';
+const TEMPO_IN_SCAN = TEMPO_DETECT && TEMPO_MODE === 'scan';
+const TEMPO_METHOD = (process.env.TEMPO_METHOD as OnsetMethod | undefined) ?? 'energy';
+const TEMPO_MIN_CONF = Number(process.env.TEMPO_MIN_CONF ?? '0.35');
+const TEMPO_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.TEMPO_CONCURRENCY ?? '2')));
+
+let tempoInFlight = 0;
+const tempoWaiters: Array<() => void> = [];
+async function withTempoSlot<T>(fn: () => Promise<T>): Promise<T> {
+  while (tempoInFlight >= TEMPO_CONCURRENCY) {
+    await new Promise<void>((resolve) => tempoWaiters.push(resolve));
+  }
+  tempoInFlight++;
+  try {
+    return await fn();
+  } finally {
+    tempoInFlight--;
+    tempoWaiters.shift()?.();
+  }
+}
 
 // Redis publisher for live updates
 let publisher: Redis | null = null;
@@ -55,10 +82,36 @@ interface TrackData {
   lyricsPath: string | null;
   artists: string[];       // Array of individual artist names
   albumartists: string[];  // Array of individual album artist names
+  composers: string[];     // Array of composer names
+  conductors: string[];    // Array of conductor names
   trackNumber: number | null;
   trackTotal: number | null;
   discNumber: number | null;
   discTotal: number | null;
+  // Extended metadata
+  bpm: number | null;
+  initialKey: string | null;
+  composer: string | null;
+  conductor: string | null;
+  publisher: string | null;
+  copyright: string | null;
+  comment: string | null;
+  mood: string | null;
+  grouping: string | null;
+  isrc: string | null;
+  releaseDate: string | null;
+  originalYear: number | null;
+  compilation: boolean;
+  // Sort fields
+  titleSort: string | null;
+  artistSort: string | null;
+  albumSort: string | null;
+  albumArtistSort: string | null;
+  // MusicBrainz IDs
+  musicbrainzTrackId: string | null;
+  musicbrainzReleaseId: string | null;
+  musicbrainzArtistId: string | null;
+  musicbrainzAlbumArtistId: string | null;
 }
 
 interface FileInfo {
@@ -181,10 +234,42 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
     const trackTotals = tracks.map(t => t.trackTotal);
     const discNumbers = tracks.map(t => t.discNumber);
     const discTotals = tracks.map(t => t.discTotal);
+    // Extended metadata arrays
+    const bpms = tracks.map(t => t.bpm);
+    const initialKeys = tracks.map(t => t.initialKey);
+    const composerStrs = tracks.map(t => t.composer);
+    const conductorStrs = tracks.map(t => t.conductor);
+    const publishers = tracks.map(t => t.publisher);
+    const copyrights = tracks.map(t => t.copyright);
+    const comments = tracks.map(t => t.comment);
+    const moods = tracks.map(t => t.mood);
+    const groupings = tracks.map(t => t.grouping);
+    const isrcs = tracks.map(t => t.isrc);
+    const releaseDates = tracks.map(t => t.releaseDate);
+    const originalYears = tracks.map(t => t.originalYear);
+    const compilations = tracks.map(t => t.compilation);
+    // Sort fields
+    const titleSorts = tracks.map(t => t.titleSort);
+    const artistSorts = tracks.map(t => t.artistSort);
+    const albumSorts = tracks.map(t => t.albumSort);
+    const albumArtistSorts = tracks.map(t => t.albumArtistSort);
+    // MusicBrainz IDs
+    const mbTrackIds = tracks.map(t => t.musicbrainzTrackId);
+    const mbReleaseIds = tracks.map(t => t.musicbrainzReleaseId);
+    const mbArtistIds = tracks.map(t => t.musicbrainzArtistId);
+    const mbAlbumArtistIds = tracks.map(t => t.musicbrainzAlbumArtistId);
     
     // Insert/update tracks and get their IDs
     const trackResult = await client.query<{ id: number; path: string }>(`
-      INSERT INTO tracks (library_id, path, mtime_ms, size_bytes, ext, title, artist, album, album_artist, genre, country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path, track_number, track_total, disc_number, disc_total, last_seen_job_id, updated_at, birthtime_ms, created_at)
+      INSERT INTO tracks (
+        library_id, path, mtime_ms, size_bytes, ext, title, artist, album, album_artist, 
+        genre, country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path, 
+        track_number, track_total, disc_number, disc_total, last_seen_job_id, updated_at, birthtime_ms, created_at,
+        bpm, initial_key, composer, conductor, publisher, copyright, comment, mood, grouping,
+        isrc, release_date, original_year, compilation,
+        title_sort, artist_sort, album_sort, album_artist_sort,
+        musicbrainz_track_id, musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id
+      )
       SELECT 
         u.library_id, u.path, u.mtime_ms, u.size_bytes, u.ext,
         u.title, u.artist, u.album, u.album_artist, u.genre,
@@ -192,14 +277,31 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
         u.art_mime, u.art_hash, u.lyrics_path, u.track_number, u.track_total,
         u.disc_number, u.disc_total, u.last_seen_job_id, u.updated_at,
         u.birthtime_ms,
-        to_timestamp(u.birthtime_ms::double precision / 1000.0)
+        to_timestamp(u.birthtime_ms::double precision / 1000.0),
+        u.bpm, u.initial_key, u.composer, u.conductor, u.publisher, u.copyright, u.comment, u.mood, u.grouping,
+        u.isrc, u.release_date, u.original_year, u.compilation,
+        u.title_sort, u.artist_sort, u.album_sort, u.album_artist_sort,
+        u.mb_track_id, u.mb_release_id, u.mb_artist_id, u.mb_album_artist_id
       FROM unnest(
         $1::bigint[], $2::text[], $3::bigint[], $4::bigint[], $5::text[],
         $6::text[], $7::text[], $8::text[], $9::text[], $10::text[],
         $11::text[], $12::text[], $13::int[], $14::int[], $15::text[],
         $16::text[], $17::text[], $18::text[], $19::int[], $20::int[],
-        $21::int[], $22::int[], $23::int[], $24::timestamptz[], $25::bigint[]
-      ) AS u(library_id, path, mtime_ms, size_bytes, ext, title, artist, album, album_artist, genre, country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path, track_number, track_total, disc_number, disc_total, last_seen_job_id, updated_at, birthtime_ms)
+        $21::int[], $22::int[], $23::int[], $24::timestamptz[], $25::bigint[],
+        $26::int[], $27::text[], $28::text[], $29::text[], $30::text[],
+        $31::text[], $32::text[], $33::text[], $34::text[],
+        $35::text[], $36::text[], $37::int[], $38::boolean[],
+        $39::text[], $40::text[], $41::text[], $42::text[],
+        $43::text[], $44::text[], $45::text[], $46::text[]
+      ) AS u(
+        library_id, path, mtime_ms, size_bytes, ext, title, artist, album, album_artist, genre,
+        country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path, track_number, track_total,
+        disc_number, disc_total, last_seen_job_id, updated_at, birthtime_ms,
+        bpm, initial_key, composer, conductor, publisher, copyright, comment, mood, grouping,
+        isrc, release_date, original_year, compilation,
+        title_sort, artist_sort, album_sort, album_artist_sort,
+        mb_track_id, mb_release_id, mb_artist_id, mb_album_artist_id
+      )
       ON CONFLICT (library_id, path) DO UPDATE SET
         mtime_ms = EXCLUDED.mtime_ms,
         size_bytes = EXCLUDED.size_bytes,
@@ -224,6 +326,27 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
         last_seen_job_id = EXCLUDED.last_seen_job_id,
         birthtime_ms = EXCLUDED.birthtime_ms,
         created_at = EXCLUDED.created_at,
+        bpm = COALESCE(EXCLUDED.bpm, tracks.bpm),
+        initial_key = COALESCE(EXCLUDED.initial_key, tracks.initial_key),
+        composer = COALESCE(EXCLUDED.composer, tracks.composer),
+        conductor = COALESCE(EXCLUDED.conductor, tracks.conductor),
+        publisher = COALESCE(EXCLUDED.publisher, tracks.publisher),
+        copyright = COALESCE(EXCLUDED.copyright, tracks.copyright),
+        comment = COALESCE(EXCLUDED.comment, tracks.comment),
+        mood = COALESCE(EXCLUDED.mood, tracks.mood),
+        grouping = COALESCE(EXCLUDED.grouping, tracks.grouping),
+        isrc = COALESCE(EXCLUDED.isrc, tracks.isrc),
+        release_date = COALESCE(EXCLUDED.release_date, tracks.release_date),
+        original_year = COALESCE(EXCLUDED.original_year, tracks.original_year),
+        compilation = COALESCE(EXCLUDED.compilation, tracks.compilation),
+        title_sort = COALESCE(EXCLUDED.title_sort, tracks.title_sort),
+        artist_sort = COALESCE(EXCLUDED.artist_sort, tracks.artist_sort),
+        album_sort = COALESCE(EXCLUDED.album_sort, tracks.album_sort),
+        album_artist_sort = COALESCE(EXCLUDED.album_artist_sort, tracks.album_artist_sort),
+        musicbrainz_track_id = COALESCE(EXCLUDED.musicbrainz_track_id, tracks.musicbrainz_track_id),
+        musicbrainz_release_id = COALESCE(EXCLUDED.musicbrainz_release_id, tracks.musicbrainz_release_id),
+        musicbrainz_artist_id = COALESCE(EXCLUDED.musicbrainz_artist_id, tracks.musicbrainz_artist_id),
+        musicbrainz_album_artist_id = COALESCE(EXCLUDED.musicbrainz_album_artist_id, tracks.musicbrainz_album_artist_id),
         updated_at = now()
       RETURNING id, path
     `, [
@@ -234,7 +357,12 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       discNumbers, discTotals,
       tracks.map(() => 0),  // last_seen_job_id = 0 for fast scan
       tracks.map(() => new Date()),
-      birthtimeMss
+      birthtimeMss,
+      bpms, initialKeys, composerStrs, conductorStrs, publishers,
+      copyrights, comments, moods, groupings,
+      isrcs, releaseDates, originalYears, compilations,
+      titleSorts, artistSorts, albumSorts, albumArtistSorts,
+      mbTrackIds, mbReleaseIds, mbArtistIds, mbAlbumArtistIds
     ]);
     
     // Build path -> track mapping for artist updates
@@ -248,34 +376,17 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       const trackId = pathToTrackId.get(track.path);
       if (!trackId) continue;
 
-      // Collect all artists to insert (sanitize + preserve order)
+      // Collect all artists to insert (names are already sanitized/normalized by readTags)
       const artistsToInsert: { name: string; role: string; position: number }[] = [];
-      const sanitize = (s: string) => s.replace(/\0/g, '');
-      const norm = (s: string) => sanitize(s).trim();
-      const isAllQuestionMarks = (s: string) => /^[?\s]+$/.test(s);
-      const folderArtistGuess = (() => {
-        // Try to guess artist from folder name for files like "Мэвл/..." when tags decode to "????".
-        const first = (track.path.split(/[\\/]/).filter(Boolean)[0] ?? '').trim();
-        return first || null;
-      })();
-
-      const fixName = (v: string) => {
-        const n = norm(v);
-        if (!n) return null;
-        if (isAllQuestionMarks(n)) return folderArtistGuess ? sanitize(folderArtistGuess) : null;
-        return sanitize(n);
-      };
       
       let i = 0;
       for (const name of track.albumartists) {
-        const fixed = name ? fixName(name) : null;
-        if (fixed) artistsToInsert.push({ name: fixed, role: 'albumartist', position: i++ });
+        if (name?.trim()) artistsToInsert.push({ name: name.trim(), role: 'albumartist', position: i++ });
       }
       
       i = 0;
       for (const name of track.artists) {
-        const fixed = name ? fixName(name) : null;
-        if (fixed) artistsToInsert.push({ name: fixed, role: 'artist', position: i++ });
+        if (name?.trim()) artistsToInsert.push({ name: name.trim(), role: 'artist', position: i++ });
       }
       
       if (artistsToInsert.length === 0) continue;
@@ -285,9 +396,10 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       
       // Insert new artist relations
       for (const { name, role, position } of artistsToInsert) {
+        const asciiName = asciiFold(name);
         const artistRes = await client.query<{ id: number }>(
-          'INSERT INTO artists(name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id',
-          [name]
+          'INSERT INTO artists(name, ascii_name) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET ascii_name = COALESCE(artists.ascii_name, EXCLUDED.ascii_name) RETURNING id',
+          [name, asciiName || null]
         );
         await client.query(
           'INSERT INTO track_artists(track_id, artist_id, role, position) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
@@ -303,6 +415,32 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
           await client.query(
             'INSERT INTO track_genres(track_id, genre) VALUES ($1, $2) ON CONFLICT DO NOTHING',
             [trackId, genre]
+          );
+        }
+      }
+      
+      // Update track_credits (composers, conductors, etc.)
+      const creditsToInsert: { name: string; role: string; position: number }[] = [];
+      let cpos = 0;
+      for (const name of track.composers) {
+        if (name?.trim()) creditsToInsert.push({ name: name.trim(), role: 'composer', position: cpos++ });
+      }
+      cpos = 0;
+      for (const name of track.conductors) {
+        if (name?.trim()) creditsToInsert.push({ name: name.trim(), role: 'conductor', position: cpos++ });
+      }
+      
+      if (creditsToInsert.length > 0) {
+        await client.query('DELETE FROM track_credits WHERE track_id = $1', [trackId]);
+        for (const { name, role, position } of creditsToInsert) {
+          const asciiName = asciiFold(name);
+          const artistRes = await client.query<{ id: number }>(
+            'INSERT INTO artists(name, ascii_name) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET ascii_name = COALESCE(artists.ascii_name, EXCLUDED.ascii_name) RETURNING id',
+            [name, asciiName || null]
+          );
+          await client.query(
+            'INSERT INTO track_credits(track_id, artist_id, role, position) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+            [trackId, artistRes.rows[0].id, role, position]
           );
         }
       }
@@ -342,17 +480,18 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
 }
 
 // Load existing tracks for comparison (only non-deleted ones for change detection)
-async function loadExistingTracks(libraryId: number): Promise<Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null }>> {
-  const result = await db().query<{ path: string; mtime_ms: string; size_bytes: string; birthtime_ms: string | null }>(
-    'SELECT path, mtime_ms, size_bytes, birthtime_ms FROM tracks WHERE library_id = $1 AND deleted_at IS NULL',
+async function loadExistingTracks(libraryId: number): Promise<Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null; bpm: number | null }>> {
+  const result = await db().query<{ path: string; mtime_ms: string; size_bytes: string; birthtime_ms: string | null; bpm: number | null }>(
+    'SELECT path, mtime_ms, size_bytes, birthtime_ms, bpm FROM tracks WHERE library_id = $1 AND deleted_at IS NULL',
     [libraryId]
   );
-  const map = new Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null }>();
+  const map = new Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null; bpm: number | null }>();
   for (const row of result.rows) {
     map.set(row.path, {
       mtimeMs: Number(row.mtime_ms),
       sizeBytes: Number(row.size_bytes),
       birthtimeMs: row.birthtime_ms == null ? null : Number(row.birthtime_ms),
+      bpm: row.bpm == null ? null : Number(row.bpm),
     });
   }
   return map;
@@ -462,7 +601,11 @@ async function scanArtistArtwork(musicDir: string): Promise<number> {
 }
 
 // Main fast scan function
-export async function runFastScan(musicDir: string, forceFullScan: boolean = false): Promise<{ 
+export async function runFastScan(
+  musicDir: string,
+  forceFullScan: boolean = false,
+  ctx?: { libraryIndex?: number; libraryTotal?: number; shouldCancel?: () => boolean }
+): Promise<{ 
   totalFiles: number; 
   newFiles: number; 
   updatedFiles: number; 
@@ -470,11 +613,51 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
   durationMs: number;
 }> {
   const startTime = Date.now();
+  const libraryIndex = ctx?.libraryIndex;
+  const libraryTotal = ctx?.libraryTotal;
+  const shouldCancel = ctx?.shouldCancel ?? (() => false);
+
+  class ScanCancelledError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'ScanCancelledError';
+    }
+  }
+
+  const cancelNow = (where: string) => {
+    if (!shouldCancel()) return;
+    const durationMs = Date.now() - startTime;
+    const progress: any = {
+      status: 'idle',
+      mountPath: musicDir,
+      libraryIndex,
+      libraryTotal,
+      filesFound: 0,
+      filesProcessed: 0,
+      currentFile: `Cancelled (${where})`,
+      durationMs,
+      cancelled: true,
+    };
+    getPublisher().set('scan:progress', JSON.stringify(progress));
+    publishUpdate('scan:progress', progress);
+    throw new ScanCancelledError(`cancelled: ${where}`);
+  };
+
   logger.info('scan', `Fast scan starting: ${musicDir}${forceFullScan ? ' (FORCE FULL)' : ''}`);
+  if (TEMPO_IN_SCAN) {
+    logger.info('tempo', 'Tempo detection enabled during scan (missing-tag backfill)', {
+      method: TEMPO_METHOD,
+      minConfidence: TEMPO_MIN_CONF,
+      concurrency: TEMPO_CONCURRENCY,
+    });
+  }
   
   // Set initial scanning status
   const initialProgress = {
     status: 'scanning',
+    mountPath: musicDir,
+    libraryIndex,
+    libraryTotal,
     filesFound: 0,
     filesProcessed: 0,
     currentFile: 'Initializing...',
@@ -482,6 +665,8 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
   getPublisher().set('scan:progress', JSON.stringify(initialProgress));
   publishUpdate('scan:progress', initialProgress);
   
+  cancelNow('before_init');
+
   const libraryId = await getOrCreateLibrary(musicDir);
   
   // Phase 1: Load existing tracks for comparison (fast DB query)
@@ -498,7 +683,7 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
        from tracks t
        join track_artists ta on ta.track_id = t.id
        join artists a on a.id = ta.artist_id
-       where t.library_id = $1 and t.deleted_at is null and a.name ~ '^[?[:space:]]+$'`,
+       where t.library_id = $1 and t.deleted_at is null and a.name ~ '\\?{2,}'`,
       [libraryId]
     );
     for (const r of bad.rows) badArtistPaths.add(r.path);
@@ -522,21 +707,28 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
 
   logger.info('scan', `Loaded ${existingTracks.size} existing tracks (${deletedTracks.size} soft-deleted)`);
   
+  cancelNow('after_db_load');
+
   // Phase 2: Walk directory and collect files
   logger.info('scan', 'Scanning filesystem...');
   const allFiles: FileInfo[] = [];
   for await (const file of walkDirectory(musicDir, musicDir)) {
+    if (shouldCancel()) cancelNow('discovering_files');
     allFiles.push(file);
     if (allFiles.length % 1000 === 0) {
       logger.progress('scan', 'Discovering files', allFiles.length, allFiles.length);
       // Update progress during discovery
       const discoveryProgress = {
         status: 'scanning',
+        mountPath: musicDir,
+        libraryIndex,
+        libraryTotal,
         filesFound: allFiles.length,
         filesProcessed: 0,
         currentFile: `Discovering files... (${allFiles.length.toLocaleString()} found)`,
       };
       getPublisher().set('scan:progress', JSON.stringify(discoveryProgress));
+      publishUpdate('scan:progress', discoveryProgress);
     }
   }
   logger.success('scan', `Found ${allFiles.length} audio files`);
@@ -547,6 +739,7 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
   const filesToRestore: string[] = [];
   let skippedFiles = 0;
   for (const file of allFiles) {
+    if (shouldCancel()) cancelNow('filtering_files');
     const existing = existingTracks.get(file.relPath);
     if (forceFullScan) {
       // Force mode: process all files
@@ -588,6 +781,9 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
   const updateProgress = (processed: number) => {
     const progress = {
       status: 'scanning',
+      mountPath: musicDir,
+      libraryIndex,
+      libraryTotal,
       filesFound: allFiles.length,
       filesProcessed: skippedFiles + processed,
       newFiles: filesToProcess.length,
@@ -603,15 +799,48 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
   let updatedFiles = 0;
   let lastProgressTime = Date.now();
   const batch: TrackData[] = [];
+
+  let tempoTried = 0;
+  let tempoApplied = 0;
+  let tempoLowConfidence = 0;
+  let tempoFailed = 0;
   
   // Process in chunks
   for (let i = 0; i < filesToProcess.length; i += CONCURRENCY) {
+    if (shouldCancel()) cancelNow('processing_files');
     const chunk = filesToProcess.slice(i, i + CONCURRENCY);
     
     const results = await processFilesParallel(chunk, CONCURRENCY, async (file) => {
       try {
+        if (shouldCancel()) return null;
         // Read metadata
         const tags = await readTags(file.fullPath);
+
+        const existing = existingTracks.get(file.relPath);
+
+        // Optional: detect tempo and store in DB when missing from tags.
+        // IMPORTANT: if the DB already has bpm for this track, skip detection (especially for FORCE FULL scans)
+        // since it would otherwise re-run ffmpeg/DSP for every file without a BPM tag.
+        let detectedBpm: number | null = null;
+        if (
+          TEMPO_IN_SCAN &&
+          existing?.bpm == null &&
+          (tags.bpm == null || !Number.isFinite(tags.bpm) || tags.bpm <= 0)
+        ) {
+          tempoTried++;
+          try {
+            const res = await withTempoSlot(() => detectTempoBpm(file.fullPath, { onsetMethod: TEMPO_METHOD }));
+            if (res.confidence >= TEMPO_MIN_CONF && Number.isFinite(res.bpm) && res.bpm > 0) {
+              detectedBpm = res.bpm;
+              tempoApplied++;
+            } else {
+              tempoLowConfidence++;
+            }
+          } catch (e) {
+            tempoFailed++;
+            logger.debug('tempo', `Tempo detect failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
         
         // Handle art
         let artPath: string | null = null;
@@ -636,16 +865,7 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
           if (lst.isFile()) lyricsPath = lyricsRel;
         } catch {}
         
-        const isNew = !existingTracks.has(file.relPath);
-        const folderArtistGuess = (file.relPath.split(/[\\/]/).filter(Boolean)[0] ?? '').trim() || null;
-        const isAllQuestionMarks = (s: string | null) => !!s && /^\?+$/.test(s.trim());
-
-        const fix = (v: string | null) => {
-          if (!v) return v;
-          if (isAllQuestionMarks(v) && folderArtistGuess) return folderArtistGuess;
-          return v;
-        };
-
+        const isNew = !existing;
         return {
           libraryId,
           path: file.relPath,
@@ -654,9 +874,9 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
           sizeBytes: file.sizeBytes,
           ext: file.ext,
           title: tags.title,
-          artist: fix(tags.artist),
+          artist: tags.artist,
           album: tags.album,
-          albumartist: fix(tags.albumartist),
+          albumartist: tags.albumartist,
           genre: tags.genre,
           country: tags.country,
           language: tags.language,
@@ -666,12 +886,38 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
           artMime,
           artHash,
           lyricsPath,
-          artists: tags.artists.map(a => (isAllQuestionMarks(a) && folderArtistGuess ? folderArtistGuess : a)),
-          albumartists: tags.albumartists.map(a => (isAllQuestionMarks(a) && folderArtistGuess ? folderArtistGuess : a)),
+          artists: tags.artists,
+          albumartists: tags.albumartists,
+          composers: tags.composers || [],
+          conductors: tags.conductors || [],
           trackNumber: tags.trackNumber,
           trackTotal: tags.trackTotal,
           discNumber: tags.discNumber,
           discTotal: tags.discTotal,
+          // Extended metadata
+          bpm: tags.bpm ?? detectedBpm ?? null,
+          initialKey: tags.initialKey ?? null,
+          composer: tags.composer ?? null,
+          conductor: tags.conductor ?? null,
+          publisher: tags.publisher ?? null,
+          copyright: tags.copyright ?? null,
+          comment: tags.comment ?? null,
+          mood: tags.mood ?? null,
+          grouping: tags.grouping ?? null,
+          isrc: tags.isrc ?? null,
+          releaseDate: tags.releaseDate ?? null,
+          originalYear: tags.originalYear ?? null,
+          compilation: tags.compilation ?? false,
+          // Sort fields
+          titleSort: tags.titleSort ?? null,
+          artistSort: tags.artistSort ?? null,
+          albumSort: tags.albumSort ?? null,
+          albumArtistSort: tags.albumArtistSort ?? null,
+          // MusicBrainz IDs
+          musicbrainzTrackId: tags.musicbrainzTrackId ?? null,
+          musicbrainzReleaseId: tags.musicbrainzReleaseId ?? null,
+          musicbrainzArtistId: tags.musicbrainzArtistId ?? null,
+          musicbrainzAlbumArtistId: tags.musicbrainzAlbumArtistId ?? null,
           isNew,
         };
       } catch {
@@ -687,10 +933,14 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
           newFiles++;
           // Emit audit event for new track
           await audit('track_added', { path: r.path, title: r.title, artist: r.artist });
+          // Publish live update
+          publishUpdate('track_added', { path: r.path, title: r.title, artist: r.artist, album: r.album });
         } else {
           updatedFiles++;
           // Emit audit event for updated track
           await audit('track_updated', { path: r.path, title: r.title, artist: r.artist });
+          // Publish live update
+          publishUpdate('track_updated', { path: r.path, title: r.title, artist: r.artist, album: r.album });
         }
         
         // Batch insert
@@ -739,33 +989,76 @@ export async function runFastScan(musicDir: string, forceFullScan: boolean = fal
         [libraryId, pathBatch]
       );
       
-      // Emit audit events for deletions
+      // Emit audit events and live updates for deletions
       for (const p of pathBatch) {
         audit('track_removed', { path: p, actor: 'worker' });
+        publishUpdate('track_removed', { path: p });
       }
     }
     
     logger.success('scan', `Soft-deleted ${orphanPaths.length} orphan tracks`);
   }
   
+  if (shouldCancel()) cancelNow('before_indexing');
+
   // Phase 6: Update search index
+  {
+    const progress = {
+      status: 'indexing',
+      mountPath: musicDir,
+      libraryIndex,
+      libraryTotal,
+      filesFound: allFiles.length,
+      filesProcessed: allFiles.length,
+      currentFile: 'Indexing search…',
+    };
+    getPublisher().set('scan:progress', JSON.stringify(progress));
+    publishUpdate('scan:progress', progress);
+  }
   logger.info('search', 'Updating search index...');
   await ensureTracksIndex();
   await indexAllTracks();
   logger.success('search', 'Search index updated');
   
+  if (shouldCancel()) cancelNow('before_artist_artwork');
+
   // Phase 7: Scan for artist artwork
+  {
+    const progress = {
+      status: 'indexing',
+      mountPath: musicDir,
+      libraryIndex,
+      libraryTotal,
+      filesFound: allFiles.length,
+      filesProcessed: allFiles.length,
+      currentFile: 'Scanning artist artwork…',
+    };
+    getPublisher().set('scan:progress', JSON.stringify(progress));
+    publishUpdate('scan:progress', progress);
+  }
   await scanArtistArtwork(musicDir);
   
   const durationMs = Date.now() - startTime;
   const durationSec = Math.round(durationMs / 1000);
   const rate = Math.round(allFiles.length / (durationMs / 1000));
   
+  if (TEMPO_IN_SCAN) {
+    logger.info('tempo', 'Tempo detection stats (scan)', {
+      tried: tempoTried,
+      applied: tempoApplied,
+      lowConfidence: tempoLowConfidence,
+      failed: tempoFailed,
+    });
+  }
+
   logger.success('scan', `Scan complete in ${durationSec}s - ${allFiles.length} files (${rate} files/sec)`);
   
   // Final progress update
   const progress = {
     status: 'idle',
+    mountPath: musicDir,
+    libraryIndex,
+    libraryTotal,
     filesFound: allFiles.length,
     filesProcessed: allFiles.length,
     durationMs,

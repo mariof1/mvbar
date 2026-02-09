@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import {
   adminCreateUser,
   adminDeleteUser,
+  adminDeleteLibrary,
   adminForceLogout,
   adminResetPassword,
   adminSetUserRole,
@@ -18,6 +19,7 @@ import {
   type ScanProgress,
 } from './apiClient';
 import { useAuth } from './store';
+import { useScanProgress, useLibraryUpdates } from './useWebSocket';
 
 type Tab = 'library' | 'users' | 'settings';
 
@@ -88,7 +90,14 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [scanTriggered, setScanTriggered] = useState(false);
+  const [scanCanceling, setScanCanceling] = useState(false);
   const [showForceConfirm, setShowForceConfirm] = useState(false);
+  const [showDeleteLibraryConfirm, setShowDeleteLibraryConfirm] = useState(false);
+  const [libraryToDelete, setLibraryToDelete] = useState<any | null>(null);
+
+  // Live updates from WebSocket
+  const wsScanProgress = useScanProgress();
+  const libraryLastUpdate = useLibraryUpdates((s) => s.lastUpdate);
 
   async function loadData() {
     setLoading(true);
@@ -112,27 +121,51 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
     }
   }
 
-  // Poll scan progress while scanning or just triggered
+  // Live updates: Update scan progress from WebSocket
   useEffect(() => {
-    if (!scanTriggered && (!scanProgress || scanProgress.status === 'idle')) return;
-    const interval = setInterval(async () => {
-      try {
-        const progress = await getScanProgress(token);
-        setScanProgress(progress);
-        // Stop polling once scan completes
-        if (progress.status === 'idle') {
-          setScanTriggered(false);
-        }
-        // Also refresh stats if still scanning
-        if (progress.status !== 'idle') {
-          const statsRes = await getLibraryStats(token);
-          setStats(statsRes.stats);
-        }
-      } catch {}
-    }, 1000); // Poll every 1s for better responsiveness
-    return () => clearInterval(interval);
+    if (!wsScanProgress.status) return;
+    setScanProgress((prev) => ({
+      ...prev,
+      ok: true,
+      status: wsScanProgress.status === 'indexing' ? 'indexing' : (wsScanProgress.scanning ? 'scanning' : 'idle'),
+      mountPath: wsScanProgress.mountPath || prev?.mountPath,
+      libraryIndex: wsScanProgress.libraryIndex || prev?.libraryIndex,
+      libraryTotal: wsScanProgress.libraryTotal || prev?.libraryTotal,
+      filesProcessed: wsScanProgress.filesProcessed,
+      filesFound: wsScanProgress.filesFound,
+      currentFile: wsScanProgress.currentFile,
+    }));
+
+    // Reset triggered flag when scan completes
+    if (!wsScanProgress.scanning) {
+      setScanTriggered(false);
+    }
+  }, [wsScanProgress]);
+
+  useEffect(() => {
+    if (scanProgress?.status === 'idle') setScanCanceling(false);
+  }, [scanProgress?.status]);
+
+  // Live updates: Refresh stats and activity when library changes (throttled)
+  const lastLibraryRefreshRef = useRef<number>(0);
+  useEffect(() => {
+    if (!libraryLastUpdate || !token) return;
+    
+    // Throttle to once per 2 seconds during scans
+    const now = Date.now();
+    if (now - lastLibraryRefreshRef.current < 2000) return;
+    lastLibraryRefreshRef.current = now;
+    
+    // Refresh stats
+    getLibraryStats(token)
+      .then((res) => setStats(res.stats))
+      .catch(() => {});
+    // Refresh activity
+    getLibraryActivity(token, 30)
+      .then((res) => setActivity(res.activity))
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanProgress?.status, scanTriggered, token]);
+  }, [libraryLastUpdate]);
 
   useEffect(() => {
     loadData();
@@ -231,6 +264,46 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
         </div>
       )}
 
+      {/* Delete Library Confirmation Modal */}
+      {showDeleteLibraryConfirm && libraryToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-md mx-4 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-3">Delete Library?</h3>
+            <p className="text-slate-400 mb-2">
+              This will hide its tracks (soft-delete) and remove it from the library list.
+            </p>
+            <p className="text-slate-300 font-mono text-sm mb-6">{libraryToDelete.mount_path}</p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setShowDeleteLibraryConfirm(false);
+                  setLibraryToDelete(null);
+                }}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const lib = libraryToDelete;
+                  setShowDeleteLibraryConfirm(false);
+                  setLibraryToDelete(null);
+                  try {
+                    await adminDeleteLibrary(token, lib.id);
+                    await loadData();
+                  } catch (e: any) {
+                    if (e?.status === 401) clear();
+                  }
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Scan Progress Banner */}
       {(scanTriggered || (scanProgress && scanProgress.status !== 'idle')) && (
         <div className="p-4 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 rounded-xl">
@@ -254,13 +327,19 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                     ? 'Starting Scan...' 
                     : scanProgress?.status === 'scanning' 
                       ? 'Scanning Library...' 
-                      : 'Indexing Search...'}
+                      : 'Indexing...'}
                 </div>
                 <div className="text-sm text-slate-400">
                   {scanTriggered && (!scanProgress || scanProgress.status === 'idle')
                     ? 'Waiting for worker to start...'
                     : <>
-                        {scanProgress?.filesProcessed.toLocaleString()} / {scanProgress?.filesFound.toLocaleString()} files processed
+                        {scanProgress?.mountPath ? <span>Library: <span className="text-slate-200">{scanProgress.mountPath}</span></span> : null}
+                        {scanProgress?.libraryIndex && scanProgress?.libraryTotal ? (
+                          <span className="ml-2">({scanProgress.libraryIndex}/{scanProgress.libraryTotal})</span>
+                        ) : null}
+                        <span className="ml-2">
+                          {scanProgress?.filesProcessed.toLocaleString()} / {scanProgress?.filesFound.toLocaleString()} files processed
+                        </span>
                         {scanProgress?.queueSize && scanProgress.queueSize > 0 && (
                           <span className="ml-2 text-cyan-400">({scanProgress.queueSize} queued)</span>
                         )}
@@ -269,11 +348,30 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                 </div>
               </div>
             </div>
-            {scanProgress && scanProgress.filesFound > 0 && (
-              <div className="text-2xl font-bold text-cyan-400">
-                {Math.round((scanProgress.filesProcessed / scanProgress.filesFound) * 100)}%
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {scanProgress && scanProgress.filesFound > 0 && (
+                <div className="text-2xl font-bold text-cyan-400">
+                  {Math.round((scanProgress.filesProcessed / scanProgress.filesFound) * 100)}%
+                </div>
+              )}
+              {(scanTriggered || (scanProgress && scanProgress.status !== 'idle')) && (
+                <button
+                  onClick={async () => {
+                    try {
+                      setScanCanceling(true);
+                      await apiFetch('/admin/library/scan/cancel', { method: 'POST' }, token);
+                    } catch (e: any) {
+                      if (e?.status === 401) clear();
+                      setScanCanceling(false);
+                    }
+                  }}
+                  disabled={scanCanceling}
+                  className="px-3 py-1.5 bg-red-600/10 hover:bg-red-600/20 disabled:bg-slate-700/50 disabled:text-slate-500 text-red-400 border border-red-600/20 rounded-lg text-sm font-medium transition-colors"
+                >
+                  {scanCanceling ? 'Cancelling…' : 'Cancel'}
+                </button>
+              )}
+            </div>
           </div>
           {/* Progress Bar */}
           <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
@@ -435,7 +533,31 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                 </svg>
               </div>
               <code className="flex-1 text-sm text-slate-300 font-mono">{lib.mount_path}</code>
-              <span className="text-xs text-slate-500">ID: {lib.id}</span>
+              <div className="flex items-center gap-2">
+                {lib.mounted === false ? (
+                  <span className="text-xs px-2 py-1 rounded-md bg-red-500/10 text-red-400 border border-red-500/20">unmounted</span>
+                ) : (
+                  <span className="text-xs px-2 py-1 rounded-md bg-green-500/10 text-green-400 border border-green-500/20">mounted</span>
+                )}
+                {lib.writable ? (
+                  <span className="text-xs px-2 py-1 rounded-md bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">writable</span>
+                ) : (
+                  <span className="text-xs px-2 py-1 rounded-md bg-slate-700/30 text-slate-300 border border-slate-700/40">read-only</span>
+                )}
+                {lib.mounted === false && (
+                  <button
+                    onClick={() => {
+                      setLibraryToDelete(lib);
+                      setShowDeleteLibraryConfirm(true);
+                    }}
+                    className="text-xs px-2 py-1 rounded-md bg-red-600/10 text-red-400 border border-red-600/20 hover:bg-red-600/20"
+                    title="Delete unmounted library"
+                  >
+                    delete
+                  </button>
+                )}
+                <span className="text-xs text-slate-500">ID: {lib.id}</span>
+              </div>
             </div>
           ))}
           {libraries.length === 0 && (
@@ -446,23 +568,12 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
 
       {/* Recent Activity */}
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-            <svg className="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Recent Activity
-          </h3>
-          <button
-            onClick={loadData}
-            className="p-2 hover:bg-slate-800/50 rounded-lg transition-colors text-slate-400 hover:text-white"
-            title="Refresh"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
-        </div>
+        <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+          <svg className="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          Recent Activity
+        </h3>
         <div className="space-y-1 max-h-96 overflow-y-auto">
           {activity.map((item) => (
             <div key={item.id} className="flex items-center gap-3 p-3 hover:bg-slate-800/30 rounded-lg transition-colors">

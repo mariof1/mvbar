@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { listFavorites } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useAuth } from './store';
+import { useLibraryUpdates } from './useWebSocket';
 
 export function Favorites(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
@@ -16,6 +17,8 @@ export function Favorites(props: {
 
   const toggleFav = useFavorites((s) => s.toggle);
   const lastChange = useFavorites((s) => s.lastChange);
+  const lastLibraryUpdate = useLibraryUpdates((s) => s.lastUpdate);
+  const lastRefreshRef = useRef<number>(0);
 
   async function refresh() {
     if (!token) return;
@@ -29,9 +32,16 @@ export function Favorites(props: {
   }
 
   useEffect(() => {
+    // Throttle library updates to once per 2 seconds during scans
+    if (lastLibraryUpdate) {
+      const now = Date.now();
+      if (now - lastRefreshRef.current < 2000) return;
+      lastRefreshRef.current = now;
+    }
+    
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, lastChange]);
+  }, [token, lastChange, lastLibraryUpdate]);
 
   if (!token) return null;
 

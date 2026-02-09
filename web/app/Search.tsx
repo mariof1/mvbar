@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useAuth } from './store';
 import { addTrackToPlaylist, apiFetch, listPlaylists } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useRouter } from './router';
+import { useLibraryUpdates } from './useWebSocket';
 
 type Hit = {
   id: number;
@@ -86,14 +87,25 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
   const [playlistHits, setPlaylistHits] = useState<PlaylistHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const lastUpdate = useLibraryUpdates((s) => s.lastUpdate);
 
   const [pls, setPls] = useState<Array<{ id: string; name: string }>>([]);
   const [playlistId, setPlaylistId] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('mvbar_playlist_id') ?? '' : ''));
 
   const canSearch = useMemo(() => Boolean(token), [token]);
+  
+  // Throttle library update refreshes to avoid spam during scans
+  const lastRefreshRef = useRef<number>(0);
 
   useEffect(() => {
-    if (!canSearch) return;
+    if (!canSearch || q.trim().length === 0) return;
+    
+    // If triggered by lastUpdate, throttle to once per 2 seconds
+    const now = Date.now();
+    const isThrottled = lastUpdate > 0 && (now - lastRefreshRef.current < 2000);
+    if (isThrottled) return;
+    if (lastUpdate > 0) lastRefreshRef.current = now;
+    
     const id = setTimeout(async () => {
       setLoading(true);
       setError(null);
@@ -112,7 +124,8 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
       }
     }, 250);
     return () => clearTimeout(id);
-  }, [q, canSearch, token, clear]);
+    // Re-run search when library updates arrive (throttled)
+  }, [q, canSearch, token, clear, lastUpdate]);
 
   useEffect(() => {
     if (q.trim().length === 0) {

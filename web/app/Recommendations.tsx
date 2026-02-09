@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { getRecommendations, getListenBrainzRecommendations } from './apiClient';
+import { useHistoryUpdates } from './useWebSocket';
 
 type Track = {
   id: number;
@@ -12,12 +13,79 @@ type Track = {
 };
 
 type Bucket = {
+  key: string;
   name: string;
+  subtitle?: string;
+  reason?: string;
   count: number;
   tracks: Track[];
   art_paths: string[];
   art_hashes: string[];
 };
+
+function useFlipAnimation(ref: React.RefObject<HTMLElement>, idsKey: string) {
+  const prevRectsRef = useRef<Map<string, DOMRect> | null>(null);
+  const hasMeasuredRef = useRef(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    if (typeof window !== 'undefined') {
+      try {
+        if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+          const m = new Map<string, DOMRect>();
+          el.querySelectorAll<HTMLElement>('[data-flip-id]').forEach((n) => {
+            const id = n.dataset.flipId;
+            if (id) m.set(id, n.getBoundingClientRect());
+          });
+          prevRectsRef.current = m;
+          hasMeasuredRef.current = true;
+          return;
+        }
+      } catch {}
+    }
+
+    const nextRects = new Map<string, DOMRect>();
+    const nodes = Array.from(el.querySelectorAll<HTMLElement>('[data-flip-id]'));
+    for (const n of nodes) {
+      const id = n.dataset.flipId;
+      if (!id) continue;
+      nextRects.set(id, n.getBoundingClientRect());
+    }
+
+    const prevRects = prevRectsRef.current;
+    if (prevRects && hasMeasuredRef.current) {
+      for (const n of nodes) {
+        const id = n.dataset.flipId;
+        if (!id) continue;
+        const prev = prevRects.get(id);
+        const next = nextRects.get(id);
+        if (!next) continue;
+
+        if (!prev) {
+          n.animate(
+            [{ opacity: 0, transform: 'scale(0.98)' }, { opacity: 1, transform: 'scale(1)' }],
+            { duration: 180, easing: 'ease-out' }
+          );
+          continue;
+        }
+
+        const dx = prev.left - next.left;
+        const dy = prev.top - next.top;
+        if (dx === 0 && dy === 0) continue;
+
+        n.animate(
+          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0px, 0px)' }],
+          { duration: 260, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }
+        );
+      }
+    }
+
+    prevRectsRef.current = nextRects;
+    hasMeasuredRef.current = true;
+  }, [idsKey, ref]);
+}
 
 function ArtImage({ path, hash, className }: { path: string | null; hash: string | null; className?: string }) {
   const [error, setError] = useState(false);
@@ -80,10 +148,11 @@ function ArtGrid({ paths, hashes }: { paths: string[]; hashes: string[] }) {
 }
 
 // Bucket card with 2x2 art grid
-function BucketCard({ bucket, onClick }: { bucket: Bucket; onClick?: () => void }) {
+function BucketCard({ bucket, onClick, flipId }: { bucket: Bucket; onClick?: () => void; flipId?: string }) {
   return (
     <div 
       className="group cursor-pointer"
+      data-flip-id={flipId}
       onClick={onClick}
     >
       <div className="relative mb-3">
@@ -98,8 +167,9 @@ function BucketCard({ bucket, onClick }: { bucket: Bucket; onClick?: () => void 
       </div>
       <div className="px-1">
         <div className="font-semibold text-white text-sm">{bucket.name}</div>
+        {bucket.subtitle && <div className="text-xs text-slate-400 truncate">{bucket.subtitle}</div>}
         {bucket.count > 0 && (
-          <div className="text-xs text-slate-400">{bucket.count} songs</div>
+          <div className="text-xs text-slate-500">{bucket.count} songs</div>
         )}
       </div>
     </div>
@@ -120,6 +190,7 @@ export function Recommendations() {
   const { setQueueAndPlay, playTrackNow } = usePlayer();
 
   const [loading, setLoading] = useState(false);
+  const [wsRefreshing, setWsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [buckets, setBuckets] = useState<Bucket[]>([]);
 
@@ -129,15 +200,31 @@ export function Recommendations() {
   const [lbRecs, setLbRecs] = useState<LBRecommendation[]>([]);
   const [lbLoading, setLbLoading] = useState(false);
 
+  // Live updates
+  const historyLastUpdate = useHistoryUpdates((s) => s.lastUpdate);
+
+  const bucketsRef = useRef<HTMLDivElement>(null);
+  const lbRef = useRef<HTMLDivElement>(null);
+
+  const bucketsIdsKey = useMemo(() => `buckets:${buckets.map((b) => b.name).join(',')}`, [buckets]);
+  const lbIdsKey = useMemo(() => `lbrecs:${lbRecs.map((r) => r.mbid).join(',')}`, [lbRecs]);
+
+  useFlipAnimation(bucketsRef, bucketsIdsKey);
+  useFlipAnimation(lbRef, lbIdsKey);
+
   const playBucket = (bucket: Bucket) => {
     if (bucket.tracks.length > 0) {
       setQueueAndPlay(bucket.tracks, 0);
     }
   };
 
-  useEffect(() => {
+  const loadRecommendations = (opts?: { silent?: boolean }) => {
     if (!token) return;
-    setLoading(true);
+    const silent = Boolean(opts?.silent);
+
+    if (silent) setWsRefreshing(true);
+    else setLoading(true);
+
     setError(null);
     getRecommendations(token)
       .then((r) => setBuckets(r.buckets ?? []))
@@ -145,10 +232,13 @@ export function Recommendations() {
         if (e?.status === 401) clear();
         setError(e?.message ?? 'error');
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (silent) setWsRefreshing(false);
+        else setLoading(false);
+      });
 
     // Also fetch ListenBrainz recommendations
-    setLbLoading(true);
+    if (!silent) setLbLoading(true);
     getListenBrainzRecommendations(token)
       .then((r) => {
         setLbConnected(r.connected);
@@ -156,8 +246,25 @@ export function Recommendations() {
         setLbRecs(r.recommendations ?? []);
       })
       .catch(() => {})
-      .finally(() => setLbLoading(false));
-  }, [token, clear]);
+      .finally(() => {
+        if (!silent) setLbLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    loadRecommendations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  // Live updates: refresh recommendations when history changes (debounced + silent)
+  useEffect(() => {
+    if (!historyLastUpdate || !token) return;
+    const timeout = setTimeout(() => {
+      loadRecommendations({ silent: true });
+    }, 2000);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyLastUpdate]);
 
   if (!token) return null;
 
@@ -182,10 +289,18 @@ export function Recommendations() {
       {/* Local Recommendations */}
       {buckets.length > 0 && (
         <div>
-          <h3 className="text-lg font-semibold text-white mb-4">Your Library</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-white">Your Library</h3>
+            {wsRefreshing && <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />}
+          </div>
+          <div ref={bucketsRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {buckets.map((bucket) => (
-              <BucketCard key={bucket.name} bucket={bucket} onClick={() => playBucket(bucket)} />
+              <BucketCard
+                key={bucket.key}
+                bucket={bucket}
+                onClick={() => playBucket(bucket)}
+                flipId={`bucket:${bucket.key}`}
+              />
             ))}
           </div>
         </div>
@@ -215,6 +330,7 @@ export function Recommendations() {
               {lbRecs.map((rec) => (
                 <div
                   key={rec.mbid}
+                  data-flip-id={`lbreco:${rec.mbid}`}
                   className={`flex items-center gap-3 p-3 rounded-lg transition-colors ${
                     rec.localTrack 
                       ? 'bg-slate-800/50 hover:bg-slate-700/50 cursor-pointer' 

@@ -32,7 +32,14 @@ services:
       GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL:-}
 
       # worker
-      MUSIC_DIRS: /music,/music2
+      MUSIC_DIRS: /music
+      TEMPO_DETECT: ${TEMPO_DETECT:-0}
+      TEMPO_MODE: ${TEMPO_MODE:-batch}
+      TEMPO_METHOD: ${TEMPO_METHOD:-energy}
+      TEMPO_MIN_CONF: ${TEMPO_MIN_CONF:-0.35}
+      TEMPO_CONCURRENCY: ${TEMPO_CONCURRENCY:-2}
+      TEMPO_BACKFILL_INTERVAL_MS: ${TEMPO_BACKFILL_INTERVAL_MS:-1800000}
+      TEMPO_BACKFILL_BATCH: ${TEMPO_BACKFILL_BATCH:-50}
 
       # web -> api internal calls
       API_INTERNAL_BASE: http://127.0.0.1:3001
@@ -40,7 +47,7 @@ services:
     volumes:
       # mount your music (edit these)
       - /path/to/music:/music:ro
-      - /path/to/music2:/music2:ro
+      #- /path/to/music2:/music2:ro
 
       # persistent data
       - pg:/var/lib/postgresql/data
