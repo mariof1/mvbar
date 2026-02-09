@@ -476,17 +476,18 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
 }
 
 // Load existing tracks for comparison (only non-deleted ones for change detection)
-async function loadExistingTracks(libraryId: number): Promise<Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null }>> {
-  const result = await db().query<{ path: string; mtime_ms: string; size_bytes: string; birthtime_ms: string | null }>(
-    'SELECT path, mtime_ms, size_bytes, birthtime_ms FROM tracks WHERE library_id = $1 AND deleted_at IS NULL',
+async function loadExistingTracks(libraryId: number): Promise<Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null; bpm: number | null }>> {
+  const result = await db().query<{ path: string; mtime_ms: string; size_bytes: string; birthtime_ms: string | null; bpm: number | null }>(
+    'SELECT path, mtime_ms, size_bytes, birthtime_ms, bpm FROM tracks WHERE library_id = $1 AND deleted_at IS NULL',
     [libraryId]
   );
-  const map = new Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null }>();
+  const map = new Map<string, { mtimeMs: number; sizeBytes: number; birthtimeMs: number | null; bpm: number | null }>();
   for (const row of result.rows) {
     map.set(row.path, {
       mtimeMs: Number(row.mtime_ms),
       sizeBytes: Number(row.size_bytes),
       birthtimeMs: row.birthtime_ms == null ? null : Number(row.birthtime_ms),
+      bpm: row.bpm == null ? null : Number(row.bpm),
     });
   }
   return map;
@@ -776,9 +777,17 @@ export async function runFastScan(
         // Read metadata
         const tags = await readTags(file.fullPath);
 
+        const existing = existingTracks.get(file.relPath);
+
         // Optional: detect tempo and store in DB when missing from tags.
+        // IMPORTANT: if the DB already has bpm for this track, skip detection (especially for FORCE FULL scans)
+        // since it would otherwise re-run ffmpeg/DSP for every file without a BPM tag.
         let detectedBpm: number | null = null;
-        if (TEMPO_DETECT && (tags.bpm == null || !Number.isFinite(tags.bpm) || tags.bpm <= 0)) {
+        if (
+          TEMPO_DETECT &&
+          existing?.bpm == null &&
+          (tags.bpm == null || !Number.isFinite(tags.bpm) || tags.bpm <= 0)
+        ) {
           tempoTried++;
           try {
             const res = await withTempoSlot(() => detectTempoBpm(file.fullPath, { onsetMethod: TEMPO_METHOD }));
@@ -817,7 +826,7 @@ export async function runFastScan(
           if (lst.isFile()) lyricsPath = lyricsRel;
         } catch {}
         
-        const isNew = !existingTracks.has(file.relPath);
+        const isNew = !existing;
         return {
           libraryId,
           path: file.relPath,
