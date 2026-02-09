@@ -91,6 +91,8 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [scanTriggered, setScanTriggered] = useState(false);
   const [showForceConfirm, setShowForceConfirm] = useState(false);
+  const [showDeleteLibraryConfirm, setShowDeleteLibraryConfirm] = useState(false);
+  const [libraryToDelete, setLibraryToDelete] = useState<any | null>(null);
 
   // Live updates from WebSocket
   const wsScanProgress = useScanProgress();
@@ -251,6 +253,46 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                 className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-medium transition-colors"
               >
                 Start Full Scan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Library Confirmation Modal */}
+      {showDeleteLibraryConfirm && libraryToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-md mx-4 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-3">Delete Library?</h3>
+            <p className="text-slate-400 mb-2">
+              This will hide its tracks (soft-delete) and remove it from the library list.
+            </p>
+            <p className="text-slate-300 font-mono text-sm mb-6">{libraryToDelete.mount_path}</p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setShowDeleteLibraryConfirm(false);
+                  setLibraryToDelete(null);
+                }}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const lib = libraryToDelete;
+                  setShowDeleteLibraryConfirm(false);
+                  setLibraryToDelete(null);
+                  try {
+                    await adminDeleteLibrary(token, lib.id);
+                    await loadData();
+                  } catch (e: any) {
+                    if (e?.status === 401) clear();
+                  }
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition-colors"
+              >
+                Delete
               </button>
             </div>
           </div>
@@ -480,14 +522,9 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                 )}
                 {lib.mounted === false && (
                   <button
-                    onClick={async () => {
-                      if (!confirm(`Delete library ${lib.mount_path}? This will hide its tracks (soft-delete) and remove it from the library list.`)) return;
-                      try {
-                        await adminDeleteLibrary(token, lib.id);
-                        await loadData();
-                      } catch (e: any) {
-                        if (e?.status === 401) clear();
-                      }
+                    onClick={() => {
+                      setLibraryToDelete(lib);
+                      setShowDeleteLibraryConfirm(true);
                     }}
                     className="text-xs px-2 py-1 rounded-md bg-red-600/10 text-red-400 border border-red-600/20 hover:bg-red-600/20"
                     title="Delete unmounted library"
