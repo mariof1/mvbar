@@ -7,19 +7,25 @@ ARG GIT_BRANCH=unknown
 ARG BUILD_DATE=unknown
 
 FROM node:22-alpine AS api_builder
+ARG TARGETARCH
 WORKDIR /src/api
 COPY api/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 COPY api/ .
-RUN npm run build && npm prune --omit=dev
+# Avoid QEMU SIGILL when building linux/arm64 in CI
+RUN if [ "$TARGETARCH" = "arm64" ]; then export NODE_OPTIONS="--jitless"; fi; \
+    npm run build && npm prune --omit=dev
 
 FROM node:22-alpine AS worker_builder
+ARG TARGETARCH
 WORKDIR /src/worker
 RUN apk add --no-cache ffmpeg
 COPY worker/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 COPY worker/ .
-RUN npm run build && npm prune --omit=dev
+# Avoid QEMU SIGILL when building linux/arm64 in CI
+RUN if [ "$TARGETARCH" = "arm64" ]; then export NODE_OPTIONS="--jitless"; fi; \
+    npm run build && npm prune --omit=dev
 
 FROM node:22-alpine AS web_builder
 WORKDIR /src/web
