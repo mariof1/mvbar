@@ -424,6 +424,14 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     return { ok: true, message: force ? 'Force full scan triggered' : 'Rescan triggered' };
   });
 
+  // Request cancellation of an in-progress scan (best-effort)
+  app.post('/api/admin/library/scan/cancel', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    await redis().publish('library:commands', JSON.stringify({ command: 'cancel_scan', by: req.user.userId }));
+    await audit('scan_cancel_requested', { by: req.user.userId });
+    return { ok: true };
+  });
+
   // Whether any mounted library is writable inside the container
   app.get('/api/admin/library/writable', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });

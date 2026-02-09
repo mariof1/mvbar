@@ -604,7 +604,7 @@ async function scanArtistArtwork(musicDir: string): Promise<number> {
 export async function runFastScan(
   musicDir: string,
   forceFullScan: boolean = false,
-  ctx?: { libraryIndex?: number; libraryTotal?: number }
+  ctx?: { libraryIndex?: number; libraryTotal?: number; shouldCancel?: () => boolean }
 ): Promise<{ 
   totalFiles: number; 
   newFiles: number; 
@@ -615,6 +615,33 @@ export async function runFastScan(
   const startTime = Date.now();
   const libraryIndex = ctx?.libraryIndex;
   const libraryTotal = ctx?.libraryTotal;
+  const shouldCancel = ctx?.shouldCancel ?? (() => false);
+
+  class ScanCancelledError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'ScanCancelledError';
+    }
+  }
+
+  const cancelNow = (where: string) => {
+    if (!shouldCancel()) return;
+    const durationMs = Date.now() - startTime;
+    const progress: any = {
+      status: 'idle',
+      mountPath: musicDir,
+      libraryIndex,
+      libraryTotal,
+      filesFound: 0,
+      filesProcessed: 0,
+      currentFile: `Cancelled (${where})`,
+      durationMs,
+      cancelled: true,
+    };
+    getPublisher().set('scan:progress', JSON.stringify(progress));
+    publishUpdate('scan:progress', progress);
+    throw new ScanCancelledError(`cancelled: ${where}`);
+  };
 
   logger.info('scan', `Fast scan starting: ${musicDir}${forceFullScan ? ' (FORCE FULL)' : ''}`);
   if (TEMPO_IN_SCAN) {
@@ -638,6 +665,8 @@ export async function runFastScan(
   getPublisher().set('scan:progress', JSON.stringify(initialProgress));
   publishUpdate('scan:progress', initialProgress);
   
+  cancelNow('before_init');
+
   const libraryId = await getOrCreateLibrary(musicDir);
   
   // Phase 1: Load existing tracks for comparison (fast DB query)
@@ -678,10 +707,13 @@ export async function runFastScan(
 
   logger.info('scan', `Loaded ${existingTracks.size} existing tracks (${deletedTracks.size} soft-deleted)`);
   
+  cancelNow('after_db_load');
+
   // Phase 2: Walk directory and collect files
   logger.info('scan', 'Scanning filesystem...');
   const allFiles: FileInfo[] = [];
   for await (const file of walkDirectory(musicDir, musicDir)) {
+    if (shouldCancel()) cancelNow('discovering_files');
     allFiles.push(file);
     if (allFiles.length % 1000 === 0) {
       logger.progress('scan', 'Discovering files', allFiles.length, allFiles.length);
@@ -707,6 +739,7 @@ export async function runFastScan(
   const filesToRestore: string[] = [];
   let skippedFiles = 0;
   for (const file of allFiles) {
+    if (shouldCancel()) cancelNow('filtering_files');
     const existing = existingTracks.get(file.relPath);
     if (forceFullScan) {
       // Force mode: process all files
@@ -774,10 +807,12 @@ export async function runFastScan(
   
   // Process in chunks
   for (let i = 0; i < filesToProcess.length; i += CONCURRENCY) {
+    if (shouldCancel()) cancelNow('processing_files');
     const chunk = filesToProcess.slice(i, i + CONCURRENCY);
     
     const results = await processFilesParallel(chunk, CONCURRENCY, async (file) => {
       try {
+        if (shouldCancel()) return null;
         // Read metadata
         const tags = await readTags(file.fullPath);
 
@@ -964,6 +999,8 @@ export async function runFastScan(
     logger.success('scan', `Soft-deleted ${orphanPaths.length} orphan tracks`);
   }
   
+  if (shouldCancel()) cancelNow('before_indexing');
+
   // Phase 6: Update search index
   {
     const progress = {
@@ -983,6 +1020,8 @@ export async function runFastScan(
   await indexAllTracks();
   logger.success('search', 'Search index updated');
   
+  if (shouldCancel()) cancelNow('before_artist_artwork');
+
   // Phase 7: Scan for artist artwork
   {
     const progress = {

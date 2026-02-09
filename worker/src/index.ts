@@ -26,44 +26,81 @@ logger.success('worker', 'Started', { musicDirs, useFastScan, rescanIntervalMs }
 
 await initDb();
 
-// Initialize libraries and run initial scan
+// Ensure libraries exist in DB so we can link tracks
 for (const dir of musicDirs) {
-  // Ensure library exists in DB so we can link tracks
   await db().query(
-    `INSERT INTO libraries (mount_path, created_at) 
-     VALUES ($1, NOW()) 
+    `INSERT INTO libraries (mount_path, created_at)
+     VALUES ($1, NOW())
      ON CONFLICT (mount_path) DO NOTHING`,
     [dir]
   );
-  
-  if (useFastScan) {
-    // Run fast parallel scan on startup
-    try {
-      await runFastScan(dir, false, { libraryIndex: musicDirs.indexOf(dir) + 1, libraryTotal: musicDirs.length });
-    } catch (e) {
-      logger.error('scan', `Fast scan failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
 }
 
 // Periodic rescan function - more reliable than real-time watching on NFS
 let scanInProgress = false;
+let cancelRequested = false;
+
+// Listen for rescan/cancel commands from API (must be active during long scans)
+const subscriber = new Redis(REDIS_URL);
+subscriber.subscribe('library:commands', (err) => {
+  if (err) logger.error('worker', `Failed to subscribe to commands: ${err.message}`);
+  else logger.info('worker', 'Listening for rescan commands');
+});
+
+subscriber.on('message', async (channel, message) => {
+  try {
+    const cmd = JSON.parse(message);
+    if (cmd.command === 'rescan') {
+      logger.info('scan', `Manual rescan triggered by ${cmd.by || 'unknown'}${cmd.force ? ' (FORCE FULL)' : ''}`);
+      periodicRescan(cmd.force === true);
+    } else if (cmd.command === 'cancel_scan') {
+      cancelRequested = true;
+      logger.info('scan', `Scan cancel requested by ${cmd.by || 'unknown'}`);
+    }
+  } catch {
+    logger.warn('worker', `Invalid command message: ${message}`);
+  }
+});
+
 async function periodicRescan(force: boolean = false) {
+  if (!useFastScan) return;
   if (scanInProgress) {
     logger.info('scan', 'Scan already in progress, skipping');
+    return;
+  }
+  if (cancelRequested) {
+    logger.info('scan', 'Cancel already requested; not starting a new scan');
+    cancelRequested = false;
     return;
   }
   scanInProgress = true;
   try {
     for (const dir of musicDirs) {
-      await runFastScan(dir, force, { libraryIndex: musicDirs.indexOf(dir) + 1, libraryTotal: musicDirs.length });
+      if (cancelRequested) break;
+      try {
+        await runFastScan(dir, force, {
+          libraryIndex: musicDirs.indexOf(dir) + 1,
+          libraryTotal: musicDirs.length,
+          shouldCancel: () => cancelRequested,
+        });
+      } catch (e) {
+        if (e instanceof Error && e.name === 'ScanCancelledError') {
+          logger.info('scan', 'Scan cancelled');
+          break;
+        }
+        throw e;
+      }
     }
   } catch (e) {
     logger.error('scan', `Periodic scan failed: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
     scanInProgress = false;
+    cancelRequested = false;
   }
 }
+
+// Kick off an initial scan on startup
+setTimeout(() => periodicRescan(false), 0);
 
 // Schedule periodic rescans
 logger.info('worker', `Scheduling periodic library scan every ${rescanIntervalMs / 1000}s`);
@@ -91,24 +128,6 @@ if (tempoDetectEnabled) {
 // Start automatic podcast refresh (every hour by default)
 startPodcastRefresh();
 
-// Listen for rescan commands from API
-const subscriber = new Redis(REDIS_URL);
-subscriber.subscribe('library:commands', (err) => {
-  if (err) logger.error('worker', `Failed to subscribe to commands: ${err.message}`);
-  else logger.info('worker', 'Listening for rescan commands');
-});
-
-subscriber.on('message', async (channel, message) => {
-  try {
-    const cmd = JSON.parse(message);
-    if (cmd.command === 'rescan') {
-      logger.info('scan', `Manual rescan triggered by ${cmd.by || 'unknown'}${cmd.force ? ' (FORCE FULL)' : ''}`);
-      periodicRescan(cmd.force === true);
-    }
-  } catch {
-    logger.warn('worker', `Invalid command message: ${message}`);
-  }
-});
 
 // Graceful shutdown handler
 async function gracefulShutdown(signal: string) {

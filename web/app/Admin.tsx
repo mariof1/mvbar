@@ -90,6 +90,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [scanTriggered, setScanTriggered] = useState(false);
+  const [scanCanceling, setScanCanceling] = useState(false);
   const [showForceConfirm, setShowForceConfirm] = useState(false);
   const [showDeleteLibraryConfirm, setShowDeleteLibraryConfirm] = useState(false);
   const [libraryToDelete, setLibraryToDelete] = useState<any | null>(null);
@@ -140,6 +141,10 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
       setScanTriggered(false);
     }
   }, [wsScanProgress]);
+
+  useEffect(() => {
+    if (scanProgress?.status === 'idle') setScanCanceling(false);
+  }, [scanProgress?.status]);
 
   // Live updates: Refresh stats and activity when library changes (throttled)
   const lastLibraryRefreshRef = useRef<number>(0);
@@ -343,11 +348,30 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                 </div>
               </div>
             </div>
-            {scanProgress && scanProgress.filesFound > 0 && (
-              <div className="text-2xl font-bold text-cyan-400">
-                {Math.round((scanProgress.filesProcessed / scanProgress.filesFound) * 100)}%
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {scanProgress && scanProgress.filesFound > 0 && (
+                <div className="text-2xl font-bold text-cyan-400">
+                  {Math.round((scanProgress.filesProcessed / scanProgress.filesFound) * 100)}%
+                </div>
+              )}
+              {(scanTriggered || (scanProgress && scanProgress.status !== 'idle')) && (
+                <button
+                  onClick={async () => {
+                    try {
+                      setScanCanceling(true);
+                      await apiFetch('/admin/library/scan/cancel', { method: 'POST' }, token);
+                    } catch (e: any) {
+                      if (e?.status === 401) clear();
+                      setScanCanceling(false);
+                    }
+                  }}
+                  disabled={scanCanceling}
+                  className="px-3 py-1.5 bg-red-600/10 hover:bg-red-600/20 disabled:bg-slate-700/50 disabled:text-slate-500 text-red-400 border border-red-600/20 rounded-lg text-sm font-medium transition-colors"
+                >
+                  {scanCanceling ? 'Cancelling…' : 'Cancel'}
+                </button>
+              )}
+            </div>
           </div>
           {/* Progress Bar */}
           <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
