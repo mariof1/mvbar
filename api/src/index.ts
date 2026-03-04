@@ -84,7 +84,7 @@ app.get('/api/version', async () => ({
   version: process.env.APP_VERSION || '0.0.0-dev',
   commit: process.env.GIT_COMMIT || 'unknown',
   branch: process.env.GIT_BRANCH || 'unknown',
-  buildDate: process.env.BUILD_DATE || new Date().toISOString(),
+  buildDate: process.env.BUILD_DATE || 'unknown',
 }));
 
 await app.register(authPlugin);
