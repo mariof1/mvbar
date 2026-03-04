@@ -195,7 +195,7 @@ jobs:
             APP_VERSION=0.0.0-dev
             GIT_COMMIT=${{ github.sha }}
             GIT_BRANCH=${{ github.ref_name }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            BUILD_DATE=${{ github.run_started_at }}
           no-cache: true
 
   # ===========================================
@@ -247,7 +247,7 @@ jobs:
             APP_VERSION=${{ needs.version.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
             GIT_BRANCH=${{ github.ref_name }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            BUILD_DATE=${{ github.run_started_at }}
           no-cache: true
 
       - name: Update Docker Hub description
