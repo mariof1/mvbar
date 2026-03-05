@@ -130,8 +130,11 @@ startPodcastRefresh();
 
 
 // Graceful shutdown handler
+let shouldShutdown = false;
+
 async function gracefulShutdown(signal: string) {
   logger.info('worker', `Received ${signal}, shutting down...`);
+  shouldShutdown = true;
   await subscriber.unsubscribe();
   await subscriber.quit();
   logger.info('worker', 'Worker stopped');
@@ -142,7 +145,7 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Main loop for Transcoding only (Scanning is now handled by periodic rescan)
-while (true) {
+while (!shouldShutdown) {
   const tj = await transcodeJobs.claimNextTranscodeJob();
   if (tj) {
     logger.info('transcode', `Processing track #${tj.track_id}`, { jobId: tj.id });

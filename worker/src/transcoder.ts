@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, rename } from 'node:fs/promises';
+import { mkdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from './db.js';
 
@@ -69,7 +69,8 @@ export async function transcodeTrackToHls(trackId: number, cacheKey: string) {
   try {
     await rename(tmpDir, outDir);
   } catch {
-    // fallback: if dir already exists, just keep latest tmp (rare)
+    // outDir already exists — remove it and retry
+    try { await rm(outDir, { recursive: true, force: true }); } catch {}
     await rename(tmpDir, outDir);
   }
 

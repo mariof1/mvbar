@@ -62,13 +62,17 @@ export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
 
   subscriber.on('message', (channel, message) => {
     if (channel === 'library:updates') {
-      const data = JSON.parse(message);
+      try {
+        const data = JSON.parse(message);
       // Route scan progress/complete events to admins only
       if (data.event === 'scan:progress' || data.event === 'scan:complete') {
         broadcastToAdmins('scan:progress', data);
       } else {
         // Broadcast regular library updates to all connected WebSocket clients
         broadcast('library:update', data);
+      }
+      } catch (e) {
+        logger.error('ws', `Failed to parse Redis message: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
   });

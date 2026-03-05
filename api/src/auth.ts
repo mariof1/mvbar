@@ -294,16 +294,19 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     const libraryIds = Array.isArray(body.libraryIds) ? body.libraryIds.map((x) => Number(x)).filter((x) => Number.isFinite(x)) : null;
     if (!libraryIds) return reply.code(400).send({ ok: false });
 
-    await db().query('begin');
+    const client = await db().connect();
     try {
-      await db().query('delete from user_libraries where user_id=$1', [id]);
+      await client.query('BEGIN');
+      await client.query('delete from user_libraries where user_id=$1', [id]);
       for (const lid of libraryIds) {
-        await db().query('insert into user_libraries(user_id, library_id) values ($1,$2) on conflict do nothing', [id, lid]);
+        await client.query('insert into user_libraries(user_id, library_id) values ($1,$2) on conflict do nothing', [id, lid]);
       }
-      await db().query('commit');
+      await client.query('COMMIT');
     } catch (e) {
-      await db().query('rollback');
+      await client.query('ROLLBACK');
       throw e;
+    } finally {
+      client.release();
     }
 
     const sv = await users.bumpSessionVersion(id);

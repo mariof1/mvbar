@@ -324,8 +324,6 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
         disc_number = EXCLUDED.disc_number,
         disc_total = EXCLUDED.disc_total,
         last_seen_job_id = EXCLUDED.last_seen_job_id,
-        birthtime_ms = EXCLUDED.birthtime_ms,
-        created_at = EXCLUDED.created_at,
         bpm = COALESCE(EXCLUDED.bpm, tracks.bpm),
         initial_key = COALESCE(EXCLUDED.initial_key, tracks.initial_key),
         composer = COALESCE(EXCLUDED.composer, tracks.composer),

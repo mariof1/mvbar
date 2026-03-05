@@ -144,7 +144,6 @@ export async function upsertTrack(params: {
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, to_timestamp($4::double precision / 1000.0))
          on conflict (library_id, path) do update set
            mtime_ms=excluded.mtime_ms,
-           birthtime_ms=excluded.birthtime_ms,
            size_bytes=excluded.size_bytes,
            ext=excluded.ext,
            title=excluded.title,
@@ -160,14 +159,12 @@ export async function upsertTrack(params: {
            art_mime=excluded.art_mime,
            art_hash=excluded.art_hash,
            lyrics_path=excluded.lyrics_path,
-           created_at=excluded.created_at,
            updated_at=now()
          returning id`
           : `insert into tracks(library_id, path, mtime_ms, birthtime_ms, size_bytes, ext, title, artist, album, genre, country, language, year, duration_ms, last_seen_job_id, art_path, art_mime, art_hash, lyrics_path, created_at)
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, to_timestamp($4::double precision / 1000.0))
          on conflict (library_id, path) do update set
            mtime_ms=excluded.mtime_ms,
-           birthtime_ms=excluded.birthtime_ms,
            size_bytes=excluded.size_bytes,
            ext=excluded.ext,
            title=excluded.title,
@@ -183,7 +180,6 @@ export async function upsertTrack(params: {
            art_mime=excluded.art_mime,
            art_hash=excluded.art_hash,
            lyrics_path=excluded.lyrics_path,
-           created_at=excluded.created_at,
            updated_at=now()
          returning id`,
         [
@@ -258,13 +254,23 @@ export async function upsertTrack(params: {
         );
         const nameToId = new Map(artistIdRes.rows.map(r => [r.name, r.id]));
         
-        // Batch insert all track_artists relations
-        const trackArtistValues = artistsToInsert.map(a => 
-          `(${trackId}, ${nameToId.get(a.name)}, '${a.role}', ${a.position})`
-        ).join(',');
-        await client.query(
-          `insert into track_artists(track_id, artist_id, role, position) values ${trackArtistValues} on conflict do nothing`
-        );
+        // Batch insert all track_artists relations using parameterized query
+        const taValues: any[] = [];
+        const taPlaceholders: string[] = [];
+        let pi = 1;
+        for (const a of artistsToInsert) {
+          const artistId = nameToId.get(a.name);
+          if (artistId == null) continue;
+          taPlaceholders.push(`($${pi}, $${pi+1}, $${pi+2}, $${pi+3})`);
+          taValues.push(trackId, artistId, a.role, a.position);
+          pi += 4;
+        }
+        if (taPlaceholders.length > 0) {
+          await client.query(
+            `insert into track_artists(track_id, artist_id, role, position) values ${taPlaceholders.join(',')} on conflict do nothing`,
+            taValues
+          );
+        }
       }
 
       // Batch insert genres
