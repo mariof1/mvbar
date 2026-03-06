@@ -82,6 +82,16 @@ export function asciiFold(str: string): string {
   return s.trim();
 }
 
+/**
+ * Strip all punctuation / special characters, keeping only letters, digits,
+ * and spaces.  Used to create searchable "clean" index fields so that
+ * "O.S.T.R" matches "OSTR", "I'm God" matches "Im God", etc.
+ */
+export function stripPunctuation(str: string): string {
+  if (!str) return '';
+  return str.replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+}
+
 function normalizeToken(s: string) {
   const v = sanitize(s) ?? '';
   return v

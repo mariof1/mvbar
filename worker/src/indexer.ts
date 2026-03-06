@@ -1,6 +1,6 @@
 import { meili } from './meili.js';
 import { db } from './db.js';
-import { asciiFold } from './tagRules.js';
+import { asciiFold, stripPunctuation } from './tagRules.js';
 
 export type TrackDoc = {
   id: number;
@@ -21,6 +21,11 @@ export type TrackDoc = {
   artist_ascii: string | null;
   album_artist_ascii: string | null;
   album_ascii: string | null;
+  // Punctuation-stripped versions for fuzzy matching (O.S.T.R → OSTR, I'm → Im)
+  title_clean: string | null;
+  artist_clean: string | null;
+  album_artist_clean: string | null;
+  album_clean: string | null;
   // Extended metadata
   composer: string | null;
   mood: string | null;
@@ -41,6 +46,7 @@ export async function ensureTracksIndex() {
     searchableAttributes: [
       'title', 'artist', 'album_artist', 'album', 'genre', 'country', 'path',
       'title_ascii', 'artist_ascii', 'album_artist_ascii', 'album_ascii',
+      'title_clean', 'artist_clean', 'album_artist_clean', 'album_clean',
       'composer', 'mood'
     ],
     displayedAttributes: [
@@ -51,7 +57,15 @@ export async function ensureTracksIndex() {
       'library_id', 'artist', 'album_artist', 'album', 'ext', 'genre', 'country', 'year', 'language',
       'composer', 'mood', 'bpm', 'initial_key'
     ],
-    sortableAttributes: ['artist', 'album_artist', 'album', 'title', 'year', 'bpm']
+    sortableAttributes: ['artist', 'album_artist', 'album', 'title', 'year', 'bpm'],
+    typoTolerance: {
+      minWordSizeForTypos: {
+        oneTypo: 3,
+        twoTypos: 6,
+      },
+    },
+    separatorTokens: ['.', "'", '\u2019', '-', '/', '\\', '_'],
+    pagination: { maxTotalHits: 5000 },
   });
 }
 
@@ -83,6 +97,10 @@ export async function indexAllTracks() {
     artist_ascii: row.artist ? asciiFold(row.artist) : null,
     album_artist_ascii: row.album_artist ? asciiFold(row.album_artist) : null,
     album_ascii: row.album ? asciiFold(row.album) : null,
+    title_clean: row.title ? stripPunctuation(asciiFold(row.title)) : null,
+    artist_clean: row.artist ? stripPunctuation(asciiFold(row.artist)) : null,
+    album_artist_clean: row.album_artist ? stripPunctuation(asciiFold(row.album_artist)) : null,
+    album_clean: row.album ? stripPunctuation(asciiFold(row.album)) : null,
   }));
   
   const client = meili();

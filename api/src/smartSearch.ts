@@ -406,8 +406,15 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
           const where: string[] = ["a.name is not null and a.name <> ''", "ta.role = 'artist'"];
 
           if (entityTextQuery.length > 0) {
+            const cleanQuery = entityTextQuery.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
             params.push(`%${entityTextQuery.toLowerCase()}%`);
-            where.push(`lower(a.name) like $${i++}`);
+            if (cleanQuery && cleanQuery !== entityTextQuery.toLowerCase()) {
+              params.push(`%${cleanQuery}%`);
+              where.push(`(lower(a.name) like $${i} or lower(regexp_replace(a.name, '[^a-zA-Z0-9 ]', '', 'g')) like $${i + 1})`);
+              i += 2;
+            } else {
+              where.push(`lower(a.name) like $${i++}`);
+            }
           }
           if (allowed !== null) {
             params.push(allowed);
@@ -469,9 +476,16 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
           const where: string[] = ["t.album is not null and t.album <> ''"];
 
           if (entityTextQuery.length > 0) {
+            const cleanQuery = entityTextQuery.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
             params.push(`%${entityTextQuery.toLowerCase()}%`);
-            where.push(`(lower(t.album) like $${i} or lower(coalesce(t.album_artist, t.artist)) like $${i})`);
-            i++;
+            if (cleanQuery && cleanQuery !== entityTextQuery.toLowerCase()) {
+              params.push(`%${cleanQuery}%`);
+              where.push(`(lower(t.album) like $${i} or lower(coalesce(t.album_artist, t.artist)) like $${i} or lower(regexp_replace(t.album, '[^a-zA-Z0-9 ]', '', 'g')) like $${i + 1} or lower(regexp_replace(coalesce(t.album_artist, t.artist), '[^a-zA-Z0-9 ]', '', 'g')) like $${i + 1})`);
+              i += 2;
+            } else {
+              where.push(`(lower(t.album) like $${i} or lower(coalesce(t.album_artist, t.artist)) like $${i})`);
+              i++;
+            }
           }
           if (allowed !== null) {
             params.push(allowed);
@@ -543,15 +557,23 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         // Playlists (name match only)
         if (entityTextQuery.length > 0) {
           const pat = `%${entityTextQuery.toLowerCase()}%`;
+          const cleanQuery = entityTextQuery.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+          const cleanPat = `%${cleanQuery}%`;
+          const useClean = cleanQuery && cleanQuery !== entityTextQuery.toLowerCase();
+
           const r = await db().query(
-            `select id::int, name, created_at from playlists where user_id = $1 and lower(name) like $2 order by id desc limit 12`,
-            [userId, pat]
+            useClean
+              ? `select id::int, name, created_at from playlists where user_id = $1 and (lower(name) like $2 or lower(regexp_replace(name, '[^a-zA-Z0-9 ]', '', 'g')) like $3) order by id desc limit 12`
+              : `select id::int, name, created_at from playlists where user_id = $1 and lower(name) like $2 order by id desc limit 12`,
+            useClean ? [userId, pat, cleanPat] : [userId, pat]
           );
           playlists.push(...r.rows.map((x: any) => ({ ...x, kind: 'playlist' })));
 
           const r2 = await db().query(
-            `select id::int, name, updated_at from smart_playlists where user_id = $1 and lower(name) like $2 order by updated_at desc limit 12`,
-            [userId, pat]
+            useClean
+              ? `select id::int, name, updated_at from smart_playlists where user_id = $1 and (lower(name) like $2 or lower(regexp_replace(name, '[^a-zA-Z0-9 ]', '', 'g')) like $3) order by updated_at desc limit 12`
+              : `select id::int, name, updated_at from smart_playlists where user_id = $1 and lower(name) like $2 order by updated_at desc limit 12`,
+            useClean ? [userId, pat, cleanPat] : [userId, pat]
           );
           playlists.push(...r2.rows.map((x: any) => ({ ...x, kind: 'smart' })));
         }
