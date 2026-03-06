@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { useAuth } from './store';
-import { addTrackToPlaylist, apiFetch, listPlaylists } from './apiClient';
+import { apiFetch } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useRouter } from './router';
 import { useLibraryUpdates } from './useWebSocket';
@@ -89,9 +89,6 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
   const [error, setError] = useState<string | null>(null);
   const lastUpdate = useLibraryUpdates((s) => s.lastUpdate);
 
-  const [pls, setPls] = useState<Array<{ id: string; name: string }>>([]);
-  const [playlistId, setPlaylistId] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('mvbar_playlist_id') ?? '' : ''));
-
   const canSearch = useMemo(() => Boolean(token), [token]);
   
   // Throttle library update refreshes to avoid spam during scans
@@ -137,27 +134,10 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
 
   useEffect(() => {
     if (!token) return;
-    (async () => {
-      try {
-        const r = await listPlaylists(token);
-        setPls((r.playlists ?? []).map((p) => ({ id: String(p.id), name: p.name })));
-      } catch (e: any) {
-        if (e?.status === 401) clear();
-      }
-    })();
-  }, [token, clear]);
-
-  useEffect(() => {
-    if (!token) return;
     refreshFavs(token).catch((e: any) => {
       if (e?.status === 401) clear();
     });
   }, [token, clear, refreshFavs]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem('mvbar_playlist_id', playlistId);
-  }, [playlistId]);
 
   if (!token) return null;
 
@@ -186,25 +166,6 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
       {error && (
         <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400">
           {error}
-        </div>
-      )}
-
-      {/* Quick Playlist Add */}
-      {pls.length > 0 && (
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-slate-400">Quick add to:</span>
-          <select
-            value={playlistId}
-            onChange={(e) => setPlaylistId(e.target.value)}
-            className="px-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
-          >
-            <option value="">Select playlist</option>
-            {pls.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
         </div>
       )}
 
@@ -371,28 +332,6 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
                       />
                     </svg>
                   </button>
-                  {playlistId && (
-                    <button
-                      onClick={async () => {
-                        try {
-                          await addTrackToPlaylist(token!, playlistId, t.id);
-                        } catch (e: any) {
-                          if (e?.status === 401) clear();
-                        }
-                      }}
-                      className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors text-slate-300"
-                      title="Add to playlist"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"
-                        />
-                      </svg>
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
