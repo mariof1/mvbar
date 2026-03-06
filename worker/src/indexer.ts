@@ -64,7 +64,8 @@ export async function ensureTracksIndex() {
         twoTypos: 6,
       },
     },
-    separatorTokens: ['.', "'", '\u2019', '-', '/', '\\', '_'],
+    // separatorTokens requires Meilisearch >= 1.6; skip for v1.x compat.
+    // The *_clean fields already strip punctuation, so queries still match.
     pagination: { maxTotalHits: 5000 },
   });
 }
@@ -110,25 +111,30 @@ export async function indexAllTracks() {
     return { indexed: 0 };
   }
 
-  // Upsert all current tracks first so the index stays searchable
-  await index.addDocuments(docs);
-
-  // Remove stale documents that no longer exist in the DB.
-  // Small delay to let Meilisearch process the addDocuments task first.
-  await new Promise(r => setTimeout(r, 2000));
-  const currentIds = new Set(docs.map(d => d.id));
-  const staleIds: number[] = [];
-  let offset = 0;
-  for (;;) {
-    const batch = await index.getDocuments({ limit: 1000, offset, fields: ['id'] });
-    for (const doc of batch.results) {
-      if (!currentIds.has(doc.id as number)) staleIds.push(doc.id as number);
-    }
-    if (batch.results.length < 1000) break;
-    offset += 1000;
+  // Upsert in batches so Meilisearch doesn't choke on huge payloads
+  const BATCH = 5000;
+  for (let i = 0; i < docs.length; i += BATCH) {
+    await index.addDocuments(docs.slice(i, i + BATCH));
   }
-  if (staleIds.length > 0) {
-    await index.deleteDocuments(staleIds);
+
+  // Prune stale documents only when the indexed count exceeds what the DB has.
+  // Avoids the expensive fetch-all-IDs loop on normal scans.
+  const stats = await index.getStats();
+  if (stats.numberOfDocuments > docs.length) {
+    const currentIds = new Set(docs.map(d => d.id));
+    const staleIds: number[] = [];
+    let offset = 0;
+    for (;;) {
+      const batch = await index.getDocuments({ limit: 1000, offset, fields: ['id'] });
+      for (const doc of batch.results) {
+        if (!currentIds.has(doc.id as number)) staleIds.push(doc.id as number);
+      }
+      if (batch.results.length < 1000) break;
+      offset += 1000;
+    }
+    if (staleIds.length > 0) {
+      await index.deleteDocuments(staleIds);
+    }
   }
 
   return { indexed: docs.length };
