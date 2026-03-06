@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { closePodcastPlayer } from './uiStore';
+import { useToastStore } from './Toast';
 
 export type QueueTrack = { id: number; title: string | null; artist: string | null; album?: string | null };
 
@@ -46,6 +47,10 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     const s = get();
     const nextQueue = [...s.queue, t];
     set({ queue: nextQueue, isOpen: true });
+    useToastStore.getState().show(
+      `Added "${t.title || 'Track'}" to queue`,
+      'queue'
+    );
   },
   removeFromQueue: (idx) => {
     const s = get();

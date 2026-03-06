@@ -9,6 +9,7 @@ import { UserManagementPanel } from './UserManagementPanel';
 import { LibraryManagementPanel } from './LibraryManagementPanel';
 import { Admin } from './Admin';
 import { SearchModal } from './SearchModal';
+import { ToastContainer } from './Toast';
 import { Tracks } from './Tracks';
 import { Playlists } from './Playlists';
 import { BrowseNew } from './BrowseNew';
@@ -1820,6 +1821,8 @@ export function AppShellNew() {
         onPlay={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
         onAddToQueue={(t) => addToQueue({ id: t.id, title: t.title, artist: t.artist })}
       />
+
+      <ToastContainer />
 
       {/* Lyrics Overlay */}
       {showLyrics && nowPlaying && (
