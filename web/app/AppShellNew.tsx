@@ -8,7 +8,7 @@ import { ScanPanel } from './ScanPanel';
 import { UserManagementPanel } from './UserManagementPanel';
 import { LibraryManagementPanel } from './LibraryManagementPanel';
 import { Admin } from './Admin';
-import { Search } from './Search';
+import { SearchModal } from './SearchModal';
 import { Tracks } from './Tracks';
 import { Playlists } from './Playlists';
 import { BrowseNew } from './BrowseNew';
@@ -1225,7 +1225,6 @@ function MobileSidebar(props: {
 
           <nav className="flex flex-col gap-0.5">
             <NavItem icon={<Icons.Home />} label="For You" active={props.tab === 'for-you'} onClick={() => handleNavClick('for-you')} />
-            <NavItem icon={<Icons.Search />} label="Search" active={props.tab === 'search'} onClick={() => handleNavClick('search')} />
             <NavItem icon={<Icons.Browse />} label="Browse" active={props.tab === 'browse'} onClick={() => handleNavClick('browse')} />
             {props.isAdmin && (
               <NavItem icon={<Icons.Admin />} label="Admin" active={props.tab === 'admin'} onClick={() => handleNavClick('admin')} />
@@ -1287,7 +1286,6 @@ function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boo
 
       <nav className="flex flex-col gap-1">
         <NavItem icon={<Icons.Home />} label="For You" active={props.tab === 'for-you'} onClick={() => props.setTab('for-you')} />
-        <NavItem icon={<Icons.Search />} label="Search" active={props.tab === 'search'} onClick={() => props.setTab('search')} />
         <NavItem icon={<Icons.Browse />} label="Browse" active={props.tab === 'browse'} onClick={() => props.setTab('browse')} />
         {props.isAdmin && (
           <NavItem icon={<Icons.Admin />} label="Admin" active={props.tab === 'admin'} onClick={() => props.setTab('admin')} />
@@ -1345,6 +1343,7 @@ function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boo
 export function AppShellNew() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
   const nowPlaying = isOpen ? queue[index] ?? null : null;
 
@@ -1387,7 +1386,7 @@ export function AppShellNew() {
   const setTab = useCallback((tabName: string) => {
     switch (tabName) {
       case 'for-you': navigate({ type: 'for-you' }); break;
-      case 'search': navigate({ type: 'search' }); break;
+      case 'search': setSearchOpen(true); break;
       case 'recently-added':
       case 'library': navigate({ type: 'recently-added' }); break;
       case 'browse': navigate({ type: 'browse' }); break;
@@ -1397,11 +1396,31 @@ export function AppShellNew() {
       case 'podcasts': navigate({ type: 'podcasts' }); break;
       case 'settings': navigate({ type: 'settings' }); break;
       case 'admin': navigate({ type: 'admin' }); break;
-      default: navigate({ type: 'search' });
+      default: navigate({ type: 'for-you' });
     }
   }, [navigate]);
 
   useEffect(() => { initRouter(); }, []);
+
+  // Global Ctrl+K / Cmd+K keyboard shortcut for search
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
+
+  // Handle legacy #/search route — open modal and redirect
+  useEffect(() => {
+    if (route.type === 'search') {
+      setSearchOpen(true);
+      navigate({ type: 'for-you' }, true);
+    }
+  }, [route.type, navigate]);
 
   const PLAYED_THRESHOLD_PCT = 0.8;
   const SKIP_THRESHOLD_PCT = 0.25;
@@ -1623,9 +1642,9 @@ export function AppShellNew() {
           </button>
           <h2 className="text-xl font-bold flex-1">
             {tab === 'for-you' && 'For You'}
-            {tab === 'search' && 'Search'}
             {tab === 'browse' && 'Browse'}
             {tab === 'library' && 'Recently Added'}
+            {(tab === 'recently-added') && 'Recently Added'}
             {tab === 'playlists' && 'Playlists'}
             {tab === 'favorites' && 'Favorites'}
             {tab === 'history' && 'Recently Played'}
@@ -1633,6 +1652,15 @@ export function AppShellNew() {
             {tab === 'settings' && 'Settings'}
             {tab === 'admin' && 'Admin'}
           </h2>
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="p-2 -mr-2 rounded-lg hover:bg-white/10 transition-colors"
+            aria-label="Search"
+          >
+            <svg className="w-5 h-5 text-white/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -1645,7 +1673,6 @@ export function AppShellNew() {
               <NavigationHeader />
               <h2 className="text-2xl font-bold">
                 {tab === 'for-you' && 'For You'}
-                {tab === 'search' && 'Search'}
                 {tab === 'browse' && 'Browse'}
                 {(tab === 'library' || tab === 'recently-added') && 'Recently Added'}
                 {tab === 'playlists' && 'Playlists'}
@@ -1656,17 +1683,20 @@ export function AppShellNew() {
                 {tab === 'admin' && 'Admin'}
               </h2>
             </div>
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="flex items-center gap-3 px-4 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-slate-400 hover:text-white transition-all w-72 group"
+            >
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <span className="flex-1 text-left text-sm">Search...</span>
+              <kbd className="text-[11px] bg-white/10 group-hover:bg-white/15 px-1.5 py-0.5 rounded font-mono border border-white/10">⌘K</kbd>
+            </button>
           </header>
 
           {/* Content Area */}
           <section className="animate-fade-in">
-            {tab === 'search' && (
-              <Search
-                onPlay={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
-                onAddToQueue={(t) => addToQueue({ id: t.id, title: t.title, artist: t.artist })}
-              />
-            )}
-
             {(tab === 'library' || tab === 'recently-added') && (
               <RecentlyAdded
                 onPlay={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
@@ -1782,6 +1812,14 @@ export function AppShellNew() {
           </div>
         </div>
       )}
+
+      {/* Search Modal */}
+      <SearchModal
+        isOpen={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onPlay={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
+        onAddToQueue={(t) => addToQueue({ id: t.id, title: t.title, artist: t.artist })}
+      />
 
       {/* Lyrics Overlay */}
       {showLyrics && nowPlaying && (
