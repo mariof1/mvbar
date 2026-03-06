@@ -31,6 +31,7 @@ export function Settings() {
   const clear = useAuth((s) => s.clear);
   const resetPlayer = usePlayer((s) => s.reset);
   const preferences = usePreferences((s) => s.preferences);
+  const lastfmEnabled = usePreferences((s) => s.lastfmEnabled);
   const loadPreferences = usePreferences((s) => s.load);
   const updatePreferences = usePreferences((s) => s.update);
 
@@ -509,9 +510,12 @@ export function Settings() {
               
               <ToggleSetting
                 label="Continue Playback After Queue Ends"
-                description="When the queue ends, automatically add similar tracks based on the last played song. Uses Last.fm to find related music from your library."
+                description={lastfmEnabled
+                  ? "When the queue ends, automatically add similar tracks based on the last played song. Uses Last.fm to find related music from your library."
+                  : "Requires Last.fm integration. Ask your server administrator to configure the LASTFM_API_KEY environment variable."}
                 enabled={preferences.auto_continue}
                 onChange={(v) => updatePreferences(token, { auto_continue: v })}
+                disabled={!lastfmEnabled}
               />
             </section>
           </>
@@ -647,28 +651,33 @@ function ToggleSetting({
   label, 
   description, 
   enabled, 
-  onChange 
+  onChange,
+  disabled,
 }: { 
   label: string; 
   description: string; 
   enabled: boolean; 
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4">
+    <div className={`flex items-start justify-between gap-4 ${disabled ? 'opacity-50' : ''}`}>
       <div className="flex-1">
         <div className="font-medium text-white">{label}</div>
         <p className="text-sm text-slate-400 mt-1">{description}</p>
       </div>
       <button
-        onClick={() => onChange(!enabled)}
+        onClick={() => !disabled && onChange(!enabled)}
+        disabled={disabled}
         className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
-          enabled ? 'bg-cyan-600' : 'bg-slate-600'
+          disabled ? 'cursor-not-allowed' : ''
+        } ${
+          enabled && !disabled ? 'bg-cyan-600' : 'bg-slate-600'
         }`}
       >
         <span
           className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-            enabled ? 'translate-x-5' : 'translate-x-0'
+            enabled && !disabled ? 'translate-x-5' : 'translate-x-0'
           }`}
         />
       </button>
