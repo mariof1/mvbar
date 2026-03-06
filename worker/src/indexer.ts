@@ -91,7 +91,27 @@ export async function indexAllTracks() {
     await index.deleteAllDocuments();
     return { indexed: 0 };
   }
-  await index.deleteAllDocuments();
+
+  // Upsert all current tracks first so the index stays searchable
   await index.addDocuments(docs);
+
+  // Remove stale documents that no longer exist in the DB.
+  // Small delay to let Meilisearch process the addDocuments task first.
+  await new Promise(r => setTimeout(r, 2000));
+  const currentIds = new Set(docs.map(d => d.id));
+  const staleIds: number[] = [];
+  let offset = 0;
+  for (;;) {
+    const batch = await index.getDocuments({ limit: 1000, offset, fields: ['id'] });
+    for (const doc of batch.results) {
+      if (!currentIds.has(doc.id as number)) staleIds.push(doc.id as number);
+    }
+    if (batch.results.length < 1000) break;
+    offset += 1000;
+  }
+  if (staleIds.length > 0) {
+    await index.deleteDocuments(staleIds);
+  }
+
   return { indexed: docs.length };
 }

@@ -75,6 +75,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lastRefreshRef = useRef<number>(0);
+  const prevLastUpdateRef = useRef(0);
 
   // Auto-focus input when opened
   useEffect(() => {
@@ -121,10 +122,14 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
       return;
     }
 
-    const now = Date.now();
-    const isThrottled = lastUpdate > 0 && (now - lastRefreshRef.current < 2000);
-    if (isThrottled) return;
-    if (lastUpdate > 0) lastRefreshRef.current = now;
+    // Only throttle searches triggered by library updates, not user typing
+    const isLibraryUpdate = lastUpdate !== prevLastUpdateRef.current;
+    if (isLibraryUpdate) {
+      prevLastUpdateRef.current = lastUpdate;
+      const now = Date.now();
+      if (now - lastRefreshRef.current < 3000) return;
+      lastRefreshRef.current = now;
+    }
 
     const id = setTimeout(async () => {
       setLoading(true);

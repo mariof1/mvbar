@@ -93,15 +93,19 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
   
   // Throttle library update refreshes to avoid spam during scans
   const lastRefreshRef = useRef<number>(0);
+  const prevLastUpdateRef = useRef(0);
 
   useEffect(() => {
     if (!canSearch || q.trim().length === 0) return;
     
-    // If triggered by lastUpdate, throttle to once per 2 seconds
-    const now = Date.now();
-    const isThrottled = lastUpdate > 0 && (now - lastRefreshRef.current < 2000);
-    if (isThrottled) return;
-    if (lastUpdate > 0) lastRefreshRef.current = now;
+    // Only throttle searches triggered by library updates, not user typing
+    const isLibraryUpdate = lastUpdate !== prevLastUpdateRef.current;
+    if (isLibraryUpdate) {
+      prevLastUpdateRef.current = lastUpdate;
+      const now = Date.now();
+      if (now - lastRefreshRef.current < 3000) return;
+      lastRefreshRef.current = now;
+    }
     
     const id = setTimeout(async () => {
       setLoading(true);
