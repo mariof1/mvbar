@@ -199,7 +199,7 @@ export async function lookupRecording(mbid: string): Promise<{ title?: string; a
 }
 
 // Get user's ListenBrainz config
-async function getUserLBConfig(userId: string): Promise<ListenBrainzConfig | null> {
+export async function getUserLBConfig(userId: string): Promise<ListenBrainzConfig | null> {
   const r = await db().query<{ listenbrainz_token: string | null; listenbrainz_username: string | null }>(
     'SELECT listenbrainz_token, listenbrainz_username FROM users WHERE id = $1',
     [userId]

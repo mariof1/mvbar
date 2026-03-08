@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
 import { findSimilarLocalArtists, isLastfmEnabled } from './lastfm.js';
+import { fetchRecommendations as fetchLBRecommendations, lookupRecording, getUserLBConfig } from './listenbrainz.js';
 
 // ============================================================================
 // GENRE TAXONOMY - Comprehensive genre families
@@ -413,6 +414,51 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       const scored = topPicksR.rows.map(t => ({ ...t, score: scoreTrack(t, scoringOpts) }));
       const diverse = diversify(scored, { limit: 50, seed: dailySeed(userId, 'top_picks') });
       await addBucket('top_picks', 'Top Picks For You', diverse, 'Personalized just for you');
+    }
+
+    // ========================================================================
+    // BUCKET: LISTENBRAINZ RECOMMENDED
+    // ========================================================================
+
+    try {
+      const lbConfig = await getUserLBConfig(userId);
+      if (lbConfig?.username) {
+        const lbMbids = await fetchLBRecommendations(lbConfig.username, 50);
+        if (lbMbids.length > 0) {
+          // Look up recordings in parallel (batched to avoid rate limits)
+          const lbTracks: TrackData[] = [];
+          const BATCH_SIZE = 5;
+          for (let i = 0; i < lbMbids.length && lbTracks.length < 20; i += BATCH_SIZE) {
+            const batch = lbMbids.slice(i, i + BATCH_SIZE);
+            const infos = await Promise.all(batch.map(m => lookupRecording(m.recording_mbid)));
+            for (let j = 0; j < infos.length; j++) {
+              const info = infos[j];
+              if (!info?.title || !info?.artist) continue;
+              // Match against local library
+              const match = await db().query<TrackData>(
+                `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
+                        0 as play_count, 0 as skip_count, null as last_played_at,
+                        false as is_favorite, null as updated_at
+                 from active_tracks t
+                 where lower(t.title) = lower($1)
+                   and (lower(t.artist) like lower($2 || '%') or lower(t.album_artist) like lower($2 || '%'))
+                   ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
+                 limit 1`,
+                allowed ? [info.title, info.artist, allowed] : [info.title, info.artist]
+              );
+              if (match.rows[0]) lbTracks.push(match.rows[0]);
+            }
+          }
+          if (lbTracks.length >= 4) {
+            // Deduplicate by track id
+            const seen = new Set<number>();
+            const unique = lbTracks.filter(t => { if (seen.has(t.id)) return false; seen.add(t.id); return true; });
+            await addBucket('listenbrainz_picks', 'Recommended by ListenBrainz', unique, `Based on your listening profile`);
+          }
+        }
+      }
+    } catch {
+      // LB unavailable — skip bucket silently
     }
 
     // ========================================================================

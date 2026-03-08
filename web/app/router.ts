@@ -71,7 +71,7 @@ function routeToHash(route: Route): string {
     case 'podcast': return `#/podcast/${route.podcastId}`;
     case 'settings': return '#/settings';
     case 'admin': return '#/admin';
-    default: return '#/search';
+    default: return '#/for-you';
   }
 }
 
@@ -81,7 +81,8 @@ function hashToRoute(hash: string): Route {
   const parts = path.split('/').map(p => decodeURIComponent(p));
   const query = new URLSearchParams(hash.split('?')[1] || '');
   
-  if (!path || path === 'search') return { type: 'search' };
+  if (!path) return { type: 'for-you' };
+  if (path === 'search') return { type: 'search' };
   if (path === 'for-you') return { type: 'for-you' };
   if (path === 'recently-added') return { type: 'recently-added' };
   if (path === 'favorites') return { type: 'favorites' };
@@ -135,12 +136,12 @@ function hashToRoute(hash: string): Route {
     return { type: 'podcast', podcastId: parseInt(parts[1], 10) };
   }
   
-  return { type: 'search' };
+  return { type: 'for-you' };
 }
 
 // Get initial route from URL or localStorage
 function getInitialRoute(): Route {
-  if (typeof window === 'undefined') return { type: 'search' };
+  if (typeof window === 'undefined') return { type: 'for-you' };
   
   // Try URL hash first
   if (window.location.hash) {
@@ -158,13 +159,13 @@ function getInitialRoute(): Route {
   }
   
   // Default
-  return { type: 'search' };
+  return { type: 'for-you' };
 }
 
 // Create the router store
 export const useRouter = create<RouterState>((set, get) => ({
-  route: { type: 'search' },
-  history: [{ type: 'search' }],
+  route: { type: 'for-you' },
+  history: [{ type: 'for-you' }],
   historyIndex: 0,
   version: 0,
   
@@ -327,7 +328,7 @@ export function getTabFromRoute(route: Route): string {
       return 'podcasts';
     case 'settings': return 'settings';
     case 'admin': return 'admin';
-    default: return 'search';
+    default: return 'for-you';
   }
 }
 

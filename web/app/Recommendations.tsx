@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
-import { getRecommendations, getListenBrainzRecommendations } from './apiClient';
+import { getRecommendations } from './apiClient';
 import { useHistoryUpdates } from './useWebSocket';
 
 type Track = {
@@ -176,41 +176,24 @@ function BucketCard({ bucket, onClick, flipId }: { bucket: Bucket; onClick?: () 
   );
 }
 
-type LBRecommendation = {
-  mbid: string;
-  title: string;
-  artist: string;
-  score: number;
-  localTrack?: { id: number; title: string; artist: string; album: string | null };
-};
-
 export function Recommendations() {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
-  const { setQueueAndPlay, playTrackNow } = usePlayer();
+  const { setQueueAndPlay } = usePlayer();
 
   const [loading, setLoading] = useState(false);
   const [wsRefreshing, setWsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [buckets, setBuckets] = useState<Bucket[]>([]);
 
-  // ListenBrainz state
-  const [lbConnected, setLbConnected] = useState(false);
-  const [lbUsername, setLbUsername] = useState<string | null>(null);
-  const [lbRecs, setLbRecs] = useState<LBRecommendation[]>([]);
-  const [lbLoading, setLbLoading] = useState(false);
-
   // Live updates
   const historyLastUpdate = useHistoryUpdates((s) => s.lastUpdate);
 
   const bucketsRef = useRef<HTMLDivElement>(null);
-  const lbRef = useRef<HTMLDivElement>(null);
 
   const bucketsIdsKey = useMemo(() => `buckets:${buckets.map((b) => b.name).join(',')}`, [buckets]);
-  const lbIdsKey = useMemo(() => `lbrecs:${lbRecs.map((r) => r.mbid).join(',')}`, [lbRecs]);
 
   useFlipAnimation(bucketsRef, bucketsIdsKey);
-  useFlipAnimation(lbRef, lbIdsKey);
 
   const playBucket = (bucket: Bucket) => {
     if (bucket.tracks.length > 0) {
@@ -235,19 +218,6 @@ export function Recommendations() {
       .finally(() => {
         if (silent) setWsRefreshing(false);
         else setLoading(false);
-      });
-
-    // Also fetch ListenBrainz recommendations
-    if (!silent) setLbLoading(true);
-    getListenBrainzRecommendations(token)
-      .then((r) => {
-        setLbConnected(r.connected);
-        setLbUsername(r.username ?? null);
-        setLbRecs(r.recommendations ?? []);
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!silent) setLbLoading(false);
       });
   };
 
@@ -306,61 +276,8 @@ export function Recommendations() {
         </div>
       )}
 
-      {/* ListenBrainz Recommendations */}
-      {lbConnected && (
-        <div>
-          <div className="flex items-center gap-2 mb-4">
-            <svg className="w-5 h-5 text-orange-400" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-            </svg>
-            <h3 className="text-lg font-semibold text-white">ListenBrainz Recommendations</h3>
-            {lbUsername && <span className="text-sm text-slate-400">for {lbUsername}</span>}
-          </div>
-          
-          {lbLoading ? (
-            <div className="flex items-center justify-center h-32">
-              <div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-            </div>
-          ) : lbRecs.length === 0 ? (
-            <div className="p-4 bg-slate-800/50 rounded-xl text-slate-400 text-sm">
-              No recommendations yet. Keep listening to build your profile!
-            </div>
-          ) : (
-            <div className="grid gap-2">
-              {lbRecs.map((rec) => (
-                <div
-                  key={rec.mbid}
-                  data-flip-id={`lbreco:${rec.mbid}`}
-                  className={`flex items-center gap-3 p-3 rounded-lg transition-colors ${
-                    rec.localTrack 
-                      ? 'bg-slate-800/50 hover:bg-slate-700/50 cursor-pointer' 
-                      : 'bg-slate-800/30 opacity-60'
-                  }`}
-                  onClick={() => rec.localTrack && playTrackNow({ id: rec.localTrack.id, title: rec.localTrack.title, artist: rec.localTrack.artist })}
-                >
-                  <div className="w-10 h-10 rounded bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center flex-shrink-0">
-                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                    </svg>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-white truncate">{rec.title}</div>
-                    <div className="text-sm text-slate-400 truncate">{rec.artist}</div>
-                  </div>
-                  {rec.localTrack ? (
-                    <div className="text-xs text-green-400 px-2 py-1 bg-green-500/10 rounded">In Library</div>
-                  ) : (
-                    <div className="text-xs text-slate-500 px-2 py-1 bg-slate-700/50 rounded">Not in Library</div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Empty state */}
-      {buckets.length === 0 && !lbConnected && (
+      {buckets.length === 0 && (
         <div className="text-center py-16">
           <div className="w-16 h-16 mx-auto mb-4 bg-slate-800 rounded-full flex items-center justify-center">
             <svg className="w-8 h-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">

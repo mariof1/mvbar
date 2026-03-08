@@ -28,10 +28,10 @@ export const preferencesPlugin: FastifyPluginAsync = fp(async (app) => {
     );
 
     if (r.rows.length === 0) {
-      return { ok: true, preferences: DEFAULT_PREFS };
+      return { ok: true, preferences: DEFAULT_PREFS, lastfmEnabled: isLastfmEnabled() };
     }
 
-    return { ok: true, preferences: r.rows[0] };
+    return { ok: true, preferences: r.rows[0], lastfmEnabled: isLastfmEnabled() };
   });
 
   // Update user preferences (upsert)

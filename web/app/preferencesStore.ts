@@ -10,6 +10,7 @@ export interface UserPreferences {
 
 interface PreferencesState {
   preferences: UserPreferences;
+  lastfmEnabled: boolean;
   loaded: boolean;
   loading: boolean;
   load: (token: string) => Promise<void>;
@@ -24,6 +25,7 @@ const DEFAULT_PREFS: UserPreferences = {
 
 export const usePreferences = create<PreferencesState>((set, get) => ({
   preferences: DEFAULT_PREFS,
+  lastfmEnabled: false,
   loaded: false,
   loading: false,
 
@@ -31,9 +33,9 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
     if (get().loaded || get().loading) return;
     set({ loading: true });
     try {
-      const r = await apiFetch('/preferences', { method: 'GET' }, token) as { ok: boolean; preferences: UserPreferences };
+      const r = await apiFetch('/preferences', { method: 'GET' }, token) as { ok: boolean; preferences: UserPreferences; lastfmEnabled?: boolean };
       if (r.ok && r.preferences) {
-        set({ preferences: r.preferences, loaded: true });
+        set({ preferences: r.preferences, lastfmEnabled: !!r.lastfmEnabled, loaded: true });
       }
     } catch {
       // Keep defaults
@@ -62,5 +64,5 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
     }
   },
 
-  reset: () => set({ preferences: DEFAULT_PREFS, loaded: false, loading: false }),
+  reset: () => set({ preferences: DEFAULT_PREFS, lastfmEnabled: false, loaded: false, loading: false }),
 }));

@@ -5,6 +5,7 @@ import * as fav from './favoritesRepo.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import { submitFeedback } from './listenbrainz.js';
 import { broadcastToUser } from './websocket.js';
+import logger from './logger.js';
 
 // Get user's ListenBrainz token
 async function getUserLBToken(userId: string): Promise<string | null> {
@@ -36,7 +37,7 @@ export const favoritesPlugin: FastifyPluginAsync = fp(async (app) => {
     // Submit love to ListenBrainz if connected (fire and forget)
     const lbToken = await getUserLBToken(req.user.userId);
     if (lbToken) {
-      submitFeedback(lbToken, { title: row.title, artist: row.artist }, 1).catch(() => {});
+      submitFeedback(lbToken, { title: row.title, artist: row.artist }, 1).catch((e) => logger.debug('listenbrainz', `feedback failed: ${e instanceof Error ? e.message : String(e)}`));
     }
 
     return { ok: true };
@@ -59,7 +60,7 @@ export const favoritesPlugin: FastifyPluginAsync = fp(async (app) => {
     // Remove love from ListenBrainz if connected (fire and forget)
     const lbToken = await getUserLBToken(req.user.userId);
     if (lbToken && trackRow.rows[0]) {
-      submitFeedback(lbToken, { title: trackRow.rows[0].title, artist: trackRow.rows[0].artist }, 0).catch(() => {});
+      submitFeedback(lbToken, { title: trackRow.rows[0].title, artist: trackRow.rows[0].artist }, 0).catch((e) => logger.debug('listenbrainz', `feedback failed: ${e instanceof Error ? e.message : String(e)}`));
     }
 
     return { ok: true };

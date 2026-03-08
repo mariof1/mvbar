@@ -31,6 +31,7 @@ export function Settings() {
   const clear = useAuth((s) => s.clear);
   const resetPlayer = usePlayer((s) => s.reset);
   const preferences = usePreferences((s) => s.preferences);
+  const lastfmEnabled = usePreferences((s) => s.lastfmEnabled);
   const loadPreferences = usePreferences((s) => s.load);
   const updatePreferences = usePreferences((s) => s.update);
 
@@ -509,9 +510,12 @@ export function Settings() {
               
               <ToggleSetting
                 label="Continue Playback After Queue Ends"
-                description="When the queue ends, automatically add similar tracks based on the last played song. Uses Last.fm to find related music from your library."
+                description={lastfmEnabled
+                  ? "When the queue ends, automatically add similar tracks based on the last played song. Uses Last.fm to find related music from your library."
+                  : "Requires Last.fm integration. Ask your server administrator to configure the LASTFM_API_KEY environment variable."}
                 enabled={preferences.auto_continue}
                 onChange={(v) => updatePreferences(token, { auto_continue: v })}
+                disabled={!lastfmEnabled}
               />
             </section>
           </>
@@ -522,9 +526,15 @@ export function Settings() {
             {/* ListenBrainz */}
             <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
               <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                <svg className="w-5 h-5 text-orange-400" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-                </svg>
+                {lbConnected ? (
+                  <svg className="w-5 h-5 text-orange-400" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" />
+                  </svg>
+                )}
                 ListenBrainz
               </h2>
 
@@ -579,9 +589,15 @@ export function Settings() {
             {/* Last.fm Info */}
             <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
               <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
-                </svg>
+                {lastfmEnabled ? (
+                  <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" />
+                  </svg>
+                )}
                 Last.fm
               </h2>
 
@@ -647,28 +663,33 @@ function ToggleSetting({
   label, 
   description, 
   enabled, 
-  onChange 
+  onChange,
+  disabled,
 }: { 
   label: string; 
   description: string; 
   enabled: boolean; 
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4">
+    <div className={`flex items-start justify-between gap-4 ${disabled ? 'opacity-50' : ''}`}>
       <div className="flex-1">
         <div className="font-medium text-white">{label}</div>
         <p className="text-sm text-slate-400 mt-1">{description}</p>
       </div>
       <button
-        onClick={() => onChange(!enabled)}
+        onClick={() => !disabled && onChange(!enabled)}
+        disabled={disabled}
         className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
-          enabled ? 'bg-cyan-600' : 'bg-slate-600'
+          disabled ? 'cursor-not-allowed' : ''
+        } ${
+          enabled && !disabled ? 'bg-cyan-600' : 'bg-slate-600'
         }`}
       >
         <span
           className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-            enabled ? 'translate-x-5' : 'translate-x-0'
+            enabled && !disabled ? 'translate-x-5' : 'translate-x-0'
           }`}
         />
       </button>

@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { mimeFromFormat, pickBestPicture } from './art.js';
 import { sanitize, splitAndClassifyTags, splitArtistValue } from './tagRules.js';
+import logger from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -395,7 +396,7 @@ export async function readTagsAsync(filePath: string, timeoutMs = 30000): Promis
       if (settled) return;
       settled = true;
       if (error) {
-        console.error(`[readTagsAsync] Error: ${stderr || error.message}`);
+        logger.debug('metadata', `readTagsAsync error: ${stderr || error.message}`);
         // Ensure child process is killed on error
         if (!child.killed) child.kill('SIGTERM');
         reject(new Error(stderr || error.message));
@@ -414,14 +415,14 @@ export async function readTagsAsync(filePath: string, timeoutMs = 30000): Promis
           artDataBase64: undefined
         });
       } catch (e) {
-        console.error(`[readTagsAsync] Parse error: ${e}`);
+        logger.debug('metadata', `readTagsAsync parse error: ${e}`);
         if (!child.killed) child.kill('SIGTERM');
         reject(new Error(`Failed to parse child output: ${e}`));
       }
     });
     
     child.on('spawn', () => {
-      console.error(`[readTagsAsync] Child spawned for: ${filePath}`);
+      logger.debug('metadata', `readTagsAsync child spawned for: ${filePath}`);
     });
 
     // Cleanup on timeout (exec timeout fires error callback, but ensure kill)
