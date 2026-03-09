@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { createPlaylist, getPlaylistItems, listPlaylists, addTrackToPlaylist, removeTrackFromPlaylist, setPlaylistItemPosition } from './apiClient';
+import { createPlaylist, getPlaylistItems, listPlaylists, addTrackToPlaylist, removeTrackFromPlaylist, setPlaylistItemPosition, deletePlaylist } from './apiClient';
 import { useAuth } from './store';
 import { SmartPlaylists } from './SmartPlaylists';
 import { useRouter } from './router';
@@ -133,6 +133,16 @@ export function Playlists(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
       setError(e?.data?.error ?? e?.message ?? 'error');
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!token || !confirm('Delete this playlist? This cannot be undone.')) return;
+    try {
+      await deletePlaylist(token, Number(id));
+      await refreshPlaylists();
+    } catch (e: any) {
+      if (e?.status === 401) clear();
     }
   }
 
@@ -369,12 +379,11 @@ export function Playlists(props: {
           {pls.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {pls.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => selectPlaylist(p.id)}
-                  className="text-left p-4 rounded-xl bg-slate-800/30 border border-slate-700/30 hover:bg-slate-800/50 hover:border-slate-600/50 transition-all"
-                >
-                  <div className="flex items-center gap-3">
+                <div key={p.id} className="group relative text-left p-4 rounded-xl bg-slate-800/30 border border-slate-700/30 hover:bg-slate-800/50 hover:border-slate-600/50 transition-all">
+                  <button
+                    onClick={() => selectPlaylist(p.id)}
+                    className="flex items-center gap-3 w-full text-left"
+                  >
                     <div className="w-12 h-12 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
                       <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
@@ -389,8 +398,17 @@ export function Playlists(props: {
                     <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
-                  </div>
-                </button>
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}
+                    className="absolute top-2 right-2 p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                    title="Delete playlist"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
               ))}
             </div>
           ) : (

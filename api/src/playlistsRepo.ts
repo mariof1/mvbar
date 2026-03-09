@@ -52,6 +52,14 @@ export async function setPosition(userId: string, playlistId: number, trackId: n
   return { ok: true };
 }
 
+export async function deletePlaylist(userId: string, playlistId: number) {
+  const r = await db().query(
+    'delete from playlists where id=$1 and user_id=$2 returning id',
+    [playlistId, userId]
+  );
+  return r.rowCount! > 0;
+}
+
 export async function listItems(userId: string, playlistId: number) {
   const owns = await db().query('select 1 from playlists where id=$1 and user_id=$2', [playlistId, userId]);
   if (owns.rowCount === 0) return null;
