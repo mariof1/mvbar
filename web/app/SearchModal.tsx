@@ -100,6 +100,16 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
     }
   }, [isOpen]);
 
+  // Close on Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isOpen, onClose]);
+
   // Lock body scroll when open
   useEffect(() => {
     if (isOpen) {
