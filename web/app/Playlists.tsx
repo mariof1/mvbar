@@ -5,6 +5,7 @@ import { createPlaylist, getPlaylistItems, listPlaylists, addTrackToPlaylist, re
 import { useAuth } from './store';
 import { SmartPlaylists } from './SmartPlaylists';
 import { useRouter } from './router';
+import { showConfirm } from './ConfirmModal';
 import { usePlaylistUpdates, useLibraryUpdates } from './useWebSocket';
 
 type PlaylistTab = 'regular' | 'smart';
@@ -137,7 +138,9 @@ export function Playlists(props: {
   }
 
   async function handleDelete(id: string) {
-    if (!token || !confirm('Delete this playlist? This cannot be undone.')) return;
+    if (!token) return;
+    const ok = await showConfirm({ title: 'Delete Playlist', message: 'Delete this playlist? This cannot be undone.', confirmLabel: 'Delete', danger: true });
+    if (!ok) return;
     try {
       await deletePlaylist(token, Number(id));
       await refreshPlaylists();

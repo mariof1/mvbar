@@ -10,6 +10,7 @@ import { LibraryManagementPanel } from './LibraryManagementPanel';
 import { Admin } from './Admin';
 import { SearchModal } from './SearchModal';
 import { ToastContainer } from './Toast';
+import { ConfirmModal } from './ConfirmModal';
 import { Tracks } from './Tracks';
 import { Playlists } from './Playlists';
 import { BrowseNew } from './BrowseNew';
@@ -1823,6 +1824,7 @@ export function AppShellNew() {
       />
 
       <ToastContainer />
+      <ConfirmModal />
 
       {/* Lyrics Overlay */}
       {showLyrics && nowPlaying && (

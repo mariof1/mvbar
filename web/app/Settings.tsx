@@ -5,6 +5,7 @@ import { apiFetch, logout, getListenBrainzSettings, connectListenBrainz, disconn
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { usePreferences } from './preferencesStore';
+import { showConfirm } from './ConfirmModal';
 
 type Tab = 'account' | 'playback' | 'integrations' | 'about';
 
@@ -143,8 +144,9 @@ export function Settings() {
       setError('Password must be at least 8 characters');
       return;
     }
-    if (unlinkAction === 'delete' && !confirm('Are you sure you want to delete your account? This cannot be undone.')) {
-      return;
+    if (unlinkAction === 'delete') {
+      const ok = await showConfirm({ title: 'Delete Account', message: 'Are you sure you want to delete your account? This cannot be undone.', confirmLabel: 'Delete', danger: true });
+      if (!ok) return;
     }
 
     setLoading(true);

@@ -6,6 +6,7 @@ import { useUi, PodcastEpisode } from './uiStore';
 import { usePlayer } from './playerStore';
 import { useRouter } from './router';
 import { apiFetch } from './apiClient';
+import { showConfirm, showAlert } from './ConfirmModal';
 import { sendWebSocketMessage, usePodcastProgress, updateLocalPodcastProgress } from './useWebSocket';
 
 // ============================================================================
@@ -1110,7 +1111,7 @@ export function Podcasts() {
       setNewEpisodes((prev) => prev.map((e) => (e.id === episodeId ? { ...e, downloaded: true } : e)));
     } catch (e: any) {
       if (e?.status === 401) clear();
-      else alert('Download failed: ' + (e?.message || 'Unknown error'));
+      else showAlert('Download Failed', e?.message || 'Unknown error');
     }
   };
 
@@ -1128,7 +1129,8 @@ export function Podcasts() {
 
   const handleUnsubscribe = async (podcastId: number) => {
     if (!token) return;
-    if (!confirm('Unsubscribe from this podcast?')) return;
+    const ok = await showConfirm({ title: 'Unsubscribe', message: 'Unsubscribe from this podcast?', confirmLabel: 'Unsubscribe', danger: true });
+    if (!ok) return;
     try {
       await apiFetch(`/podcasts/${podcastId}/unsubscribe`, { method: 'DELETE' }, token);
       setPodcasts((prev) => prev.filter((p) => p.id !== podcastId));

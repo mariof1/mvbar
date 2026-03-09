@@ -19,6 +19,7 @@ import {
   type ScanProgress,
 } from './apiClient';
 import { useAuth } from './store';
+import { showConfirm } from './ConfirmModal';
 import { useScanProgress, useLibraryUpdates } from './useWebSocket';
 
 type Tab = 'library' | 'users' | 'settings';
@@ -658,7 +659,8 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
   }
 
   async function rejectUser(userId: string) {
-    if (!confirm('Reject this user? They will not be able to access the app.')) return;
+    const ok = await showConfirm({ title: 'Reject User', message: 'Reject this user? They will not be able to access the app.', confirmLabel: 'Reject', danger: true });
+    if (!ok) return;
     try {
       await apiFetch(`/admin/users/${userId}/reject`, { method: 'POST' }, token);
       setNotice('User rejected');
@@ -760,7 +762,7 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
 
   async function deleteUser() {
     if (!selectedUser) return;
-    const ok = confirm(`Delete user ${selectedUser.email}? This cannot be undone.`);
+    const ok = await showConfirm({ title: 'Delete User', message: `Delete user ${selectedUser.email}? This cannot be undone.`, confirmLabel: 'Delete', danger: true });
     if (!ok) return;
 
     setLoading(true);

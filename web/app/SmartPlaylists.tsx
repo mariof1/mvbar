@@ -14,6 +14,7 @@ import {
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { useLibraryUpdates } from './useWebSocket';
+import { showConfirm } from './ConfirmModal';
 
 const SORT_OPTIONS = [
   { value: 'random', label: 'Random' },
@@ -304,7 +305,9 @@ export function SmartPlaylists(props: {
   }
 
   async function handleDelete(id: number) {
-    if (!token || !confirm('Delete this smart playlist?')) return;
+    if (!token) return;
+    const ok = await showConfirm({ title: 'Delete Smart Playlist', message: 'Delete this smart playlist?', confirmLabel: 'Delete', danger: true });
+    if (!ok) return;
     try {
       await deleteSmartPlaylist(token, id);
       if (selectedId === id) {
