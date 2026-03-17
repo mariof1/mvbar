@@ -539,6 +539,127 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
     }
   );
 
+  // Mobile: Verify Google ID token directly (for Android/iOS clients)
+  fastify.post<{ Body: { idToken: string } }>(
+    '/api/auth/google/token',
+    async (request, reply) => {
+      if (!isGoogleOAuthEnabled()) {
+        return reply.status(400).send({ error: 'Google OAuth not configured' });
+      }
+
+      const { idToken } = request.body || {};
+      if (!idToken) {
+        return reply.status(400).send({ error: 'idToken required' });
+      }
+
+      try {
+        const client = getOAuthClient();
+
+        // Verify the ID token from the mobile client
+        const ticket = await client.verifyIdToken({
+          idToken,
+          audience: GOOGLE_CLIENT_ID,
+        });
+        const payload = ticket.getPayload();
+
+        if (!payload || !payload.email) {
+          return reply.status(400).send({ error: 'Invalid token: missing email' });
+        }
+
+        const googleId = payload.sub;
+        const email = payload.email;
+        const pictureUrl = payload.picture;
+
+        const pool = db();
+
+        // Check if user exists by Google ID
+        let result = await pool.query(
+          'SELECT id, email, role, session_version, approval_status, avatar_path FROM users WHERE google_id = $1',
+          [googleId]
+        );
+        let user = result.rows[0];
+
+        if (!user) {
+          // Check if user exists by email (for linking)
+          result = await pool.query(
+            'SELECT id, email, role, session_version, approval_status, avatar_path FROM users WHERE email = $1',
+            [email]
+          );
+          user = result.rows[0];
+
+          if (user) {
+            if (user.role === 'admin') {
+              return reply.status(403).send({ error: 'Admins cannot use Google OAuth' });
+            }
+            await pool.query(
+              'UPDATE users SET google_id = $1 WHERE id = $2',
+              [googleId, user.id]
+            );
+            fastify.log.info(`Mobile: Linked Google account to existing user: ${email}`);
+          } else {
+            // New user — create with pending approval
+            const userId = crypto.randomUUID();
+            await pool.query(
+              `INSERT INTO users (id, email, role, google_id, approval_status, session_version)
+               VALUES ($1, $2, 'user', $3, 'pending', 0)`,
+              [userId, email, googleId]
+            );
+            user = {
+              id: userId,
+              email,
+              role: 'user',
+              session_version: 0,
+              approval_status: 'pending',
+              avatar_path: null,
+            };
+            fastify.log.info(`Mobile: Created new Google user (pending approval): ${email}`);
+          }
+        }
+
+        // Download/update avatar
+        if (pictureUrl) {
+          const avatarFilename = await downloadAvatar(pictureUrl, user.id);
+          if (avatarFilename && avatarFilename !== user.avatar_path) {
+            await pool.query(
+              'UPDATE users SET avatar_path = $1 WHERE id = $2',
+              [avatarFilename, user.id]
+            );
+          }
+        }
+
+        // Check approval status
+        if (user.approval_status === 'pending') {
+          return reply.status(403).send({ ok: false, error: 'Account pending admin approval' });
+        }
+        if (user.approval_status === 'rejected') {
+          return reply.status(403).send({ ok: false, error: 'Account rejected' });
+        }
+
+        // Generate JWT token
+        const token = signJwt({
+          sub: user.id,
+          email: user.email,
+          role: user.role,
+          sv: user.session_version,
+        });
+
+        return {
+          ok: true,
+          token,
+          user: {
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            avatar_path: user.avatar_path,
+          },
+        };
+      } catch (err) {
+        fastify.log.error(err, 'Google token verification failed (mobile)');
+        return reply.status(401).send({ error: 'Token verification failed' });
+      }
+    }
+  );
+
   done();
 };
 
