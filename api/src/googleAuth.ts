@@ -100,7 +100,7 @@ function signJwt(payload: object, expiresInSeconds = 86400 * 7): string {
 const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts, done) => {
   // Check if Google OAuth is enabled
   fastify.get('/api/auth/google/enabled', async () => {
-    return { enabled: isGoogleOAuthEnabled(), clientId: isGoogleOAuthEnabled() ? GOOGLE_CLIENT_ID : undefined };
+    return { enabled: isGoogleOAuthEnabled() };
   });
 
   // Initiate Google OAuth flow
