@@ -7,11 +7,17 @@ import { transcodeTrackToHls } from './transcoder.js';
 import { runFastScan } from './fastScan.js';
 import { runTempoBackfillBatch } from './tempoBackfill.js';
 import { startPodcastRefresh } from './podcastRefresh.js';
+import { scanAudiobooks } from './audiobookScanner.js';
 import logger from './logger.js';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
 
 const musicDirs = (process.env.MUSIC_DIRS ?? process.env.MUSIC_DIR ?? '/music')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const audiobookDirs = (process.env.AUDIOBOOK_DIRS ?? '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
@@ -127,6 +133,44 @@ if (tempoDetectEnabled) {
 
 // Start automatic podcast refresh (every hour by default)
 startPodcastRefresh();
+
+// Audiobook scanning
+const audiobookRescanIntervalMs = parseInt(process.env.AUDIOBOOK_RESCAN_INTERVAL_MS ?? '600000', 10); // Default 10 minutes
+
+if (audiobookDirs.length > 0) {
+  logger.info('worker', `Audiobook dirs: ${audiobookDirs.join(', ')}`);
+
+  async function audiobookRescan() {
+    try {
+      await scanAudiobooks(audiobookDirs);
+    } catch (e) {
+      logger.error('audiobook-scan', `Scan failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Initial scan after a short delay
+  setTimeout(audiobookRescan, 5000);
+  // Periodic rescans
+  logger.info('worker', `Scheduling audiobook scan every ${audiobookRescanIntervalMs / 1000}s`);
+  setInterval(audiobookRescan, audiobookRescanIntervalMs);
+
+  // Listen for manual audiobook rescan commands
+  const abSubscriber = new Redis(REDIS_URL);
+  abSubscriber.subscribe('audiobook:commands', (err) => {
+    if (err) logger.error('worker', `Failed to subscribe to audiobook commands: ${err.message}`);
+  });
+  abSubscriber.on('message', async (_channel, message) => {
+    try {
+      const cmd = JSON.parse(message);
+      if (cmd.command === 'rescan') {
+        logger.info('audiobook-scan', `Manual rescan triggered by ${cmd.by || 'unknown'}`);
+        audiobookRescan();
+      }
+    } catch {
+      // ignore
+    }
+  });
+}
 
 
 // Graceful shutdown handler

@@ -21,6 +21,7 @@ import { smartPlaylistsPlugin } from './smartPlaylists.js';
 import { listenbrainzPlugin } from './listenbrainz.js';
 import { subsonicPlugin } from './subsonic.js';
 import { podcastsPlugin } from './podcasts.js';
+import { audiobooksPlugin } from './audiobooks.js';
 import { preferencesPlugin } from './preferences.js';
 import googleAuthPlugin, { startAvatarSyncScheduler } from './googleAuth.js';
 import { initDb } from './db.js';
@@ -106,6 +107,7 @@ await app.register(smartPlaylistsPlugin);
 await app.register(listenbrainzPlugin);
 await app.register(subsonicPlugin);
 await app.register(podcastsPlugin);
+await app.register(audiobooksPlugin);
 await app.register(preferencesPlugin);
 
 const host = '0.0.0.0';

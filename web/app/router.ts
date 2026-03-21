@@ -30,6 +30,8 @@ export type Route =
   | { type: 'history' }
   | { type: 'podcasts'; sub?: 'subscriptions' | 'new' }
   | { type: 'podcast'; podcastId: number }
+  | { type: 'audiobooks' }
+  | { type: 'audiobook'; audiobookId: number }
   | { type: 'settings' }
   | { type: 'admin' };
 
@@ -69,6 +71,8 @@ function routeToHash(route: Route): string {
     case 'history': return '#/history';
     case 'podcasts': return route.sub ? `#/podcasts/${route.sub}` : '#/podcasts';
     case 'podcast': return `#/podcast/${route.podcastId}`;
+    case 'audiobooks': return '#/audiobooks';
+    case 'audiobook': return `#/audiobook/${route.audiobookId}`;
     case 'settings': return '#/settings';
     case 'admin': return '#/admin';
     default: return '#/for-you';
@@ -134,6 +138,14 @@ function hashToRoute(hash: string): Route {
   }
   if (parts[0] === 'podcast' && parts[1]) {
     return { type: 'podcast', podcastId: parseInt(parts[1], 10) };
+  }
+  
+  // Audiobook routes
+  if (parts[0] === 'audiobooks') {
+    return { type: 'audiobooks' };
+  }
+  if (parts[0] === 'audiobook' && parts[1]) {
+    return { type: 'audiobook', audiobookId: parseInt(parts[1], 10) };
   }
   
   return { type: 'for-you' };
@@ -326,6 +338,9 @@ export function getTabFromRoute(route: Route): string {
     case 'podcasts':
     case 'podcast':
       return 'podcasts';
+    case 'audiobooks':
+    case 'audiobook':
+      return 'audiobooks';
     case 'settings': return 'settings';
     case 'admin': return 'admin';
     default: return 'for-you';
@@ -339,6 +354,10 @@ export function isBrowseRoute(route: Route): route is Route & { type: 'browse' |
 
 export function isPodcastRoute(route: Route): route is Route & { type: 'podcasts' | 'podcast' } {
   return route.type === 'podcasts' || route.type === 'podcast';
+}
+
+export function isAudiobookRoute(route: Route): route is Route & { type: 'audiobooks' | 'audiobook' } {
+  return route.type === 'audiobooks' || route.type === 'audiobook';
 }
 
 export function isPlaylistRoute(route: Route): route is Route & { type: 'playlists' | 'playlist' } {

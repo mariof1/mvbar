@@ -18,6 +18,7 @@ import { Favorites } from './Favorites';
 import { History } from './History';
 import { Recommendations } from './Recommendations';
 import { Podcasts, PodcastPlayer } from './Podcasts';
+import { Audiobooks, AudiobookPlayer } from './Audiobooks';
 import { Settings } from './Settings';
 import { RecentlyAdded } from './RecentlyAdded';
 import { useAuth } from './store';
@@ -65,6 +66,11 @@ const Icons = {
   Podcast: () => (
     <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
+    </svg>
+  ),
+  Audiobook: () => (
+    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
     </svg>
   ),
   Playlist: () => (
@@ -304,6 +310,21 @@ function GlobalPodcastPlayer() {
     <PodcastPlayer
       episode={podcastEpisode}
       onClose={() => setPodcastEpisode(null)}
+    />
+  );
+}
+
+// Global Audiobook Player wrapper that uses the store
+function GlobalAudiobookPlayer() {
+  const audiobookChapter = useUi((s) => s.audiobookChapter);
+  const setAudiobookChapter = useUi((s) => s.setAudiobookChapter);
+  
+  if (!audiobookChapter) return null;
+  
+  return (
+    <AudiobookPlayer
+      chapter={audiobookChapter}
+      onClose={() => setAudiobookChapter(null)}
     />
   );
 }
@@ -1126,6 +1147,7 @@ function MobileSidebar(props: {
   onClose: () => void;
   hasMusicPlayer: boolean;
   hasPodcastPlayer: boolean;
+  hasAudiobookPlayer: boolean;
 }) {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const touchStartedInsideRef = useRef(false);
@@ -1198,10 +1220,11 @@ function MobileSidebar(props: {
   // Music player bar: ~72px on mobile, ~80px on desktop
   // Use 72px as it needs to just clear the player bar
   const getBottomClass = () => {
-    if (props.hasMusicPlayer && props.hasPodcastPlayer) {
-      return 'bottom-36'; // 144px for both stacked
-    } else if (props.hasMusicPlayer || props.hasPodcastPlayer) {
-      return 'bottom-[72px]'; // Match player bar height
+    const playerCount = [props.hasMusicPlayer, props.hasPodcastPlayer, props.hasAudiobookPlayer].filter(Boolean).length;
+    if (playerCount >= 2) {
+      return 'bottom-36';
+    } else if (playerCount === 1) {
+      return 'bottom-[72px]';
     }
     return 'bottom-0';
   };
@@ -1242,6 +1265,7 @@ function MobileSidebar(props: {
             <NavItem icon={<Icons.Heart />} label="Favorites" active={props.tab === 'favorites'} onClick={() => handleNavClick('favorites')} />
             <NavItem icon={<Icons.Clock />} label="History" active={props.tab === 'history'} onClick={() => handleNavClick('history')} />
             <NavItem icon={<Icons.Podcast />} label="Podcasts" active={props.tab === 'podcasts'} onClick={() => handleNavClick('podcasts')} />
+            <NavItem icon={<Icons.Audiobook />} label="Audiobooks" active={props.tab === 'audiobooks'} onClick={() => handleNavClick('audiobooks')} />
             <NavItem icon={<Icons.Settings />} label="Settings" active={props.tab === 'settings'} onClick={() => handleNavClick('settings')} />
           </nav>
 
@@ -1303,6 +1327,7 @@ function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boo
         <NavItem icon={<Icons.Heart />} label="Favorites" active={props.tab === 'favorites'} onClick={() => props.setTab('favorites')} />
         <NavItem icon={<Icons.Clock />} label="History" active={props.tab === 'history'} onClick={() => props.setTab('history')} />
         <NavItem icon={<Icons.Podcast />} label="Podcasts" active={props.tab === 'podcasts'} onClick={() => props.setTab('podcasts')} />
+        <NavItem icon={<Icons.Audiobook />} label="Audiobooks" active={props.tab === 'audiobooks'} onClick={() => props.setTab('audiobooks')} />
       </nav>
 
       <div className="mt-auto">
@@ -1357,6 +1382,9 @@ export function AppShellNew() {
   // Podcast player state
   const podcastEpisode = useUi((s) => s.podcastEpisode);
 
+  // Audiobook player state
+  const audiobookChapter = useUi((s) => s.audiobookChapter);
+
   // User preferences
   const preferences = usePreferences((s) => s.preferences);
   const loadPreferences = usePreferences((s) => s.load);
@@ -1396,6 +1424,7 @@ export function AppShellNew() {
       case 'favorites': navigate({ type: 'favorites' }); break;
       case 'history': navigate({ type: 'history' }); break;
       case 'podcasts': navigate({ type: 'podcasts' }); break;
+      case 'audiobooks': navigate({ type: 'audiobooks' }); break;
       case 'settings': navigate({ type: 'settings' }); break;
       case 'admin': navigate({ type: 'admin' }); break;
       default: navigate({ type: 'for-you' });
@@ -1628,6 +1657,7 @@ export function AppShellNew() {
         onClose={() => setMobileSidebarOpen(false)}
         hasMusicPlayer={!!(isOpen && nowPlaying)}
         hasPodcastPlayer={!!podcastEpisode}
+        hasAudiobookPlayer={!!audiobookChapter}
       />
 
       {/* Sticky Mobile Header */}
@@ -1651,6 +1681,7 @@ export function AppShellNew() {
             {tab === 'favorites' && 'Favorites'}
             {tab === 'history' && 'Recently Played'}
             {tab === 'podcasts' && 'Podcasts'}
+            {tab === 'audiobooks' && 'Audiobooks'}
             {tab === 'settings' && 'Settings'}
             {tab === 'admin' && 'Admin'}
           </h2>
@@ -1681,6 +1712,7 @@ export function AppShellNew() {
                 {tab === 'favorites' && 'Favorites'}
                 {tab === 'history' && 'Recently Played'}
                 {tab === 'podcasts' && 'Podcasts'}
+                {tab === 'audiobooks' && 'Audiobooks'}
                 {tab === 'settings' && 'Settings'}
                 {tab === 'admin' && 'Admin'}
               </h2>
@@ -1736,6 +1768,8 @@ export function AppShellNew() {
             )}
 
             {tab === 'podcasts' && <Podcasts />}
+
+            {tab === 'audiobooks' && <Audiobooks />}
 
             {tab === 'for-you' && <Recommendations />}
 
@@ -1837,6 +1871,9 @@ export function AppShellNew() {
 
       {/* Global Podcast Player - persists across tab changes */}
       <GlobalPodcastPlayer />
+
+      {/* Global Audiobook Player - persists across tab changes */}
+      <GlobalAudiobookPlayer />
     </div>
   );
 }

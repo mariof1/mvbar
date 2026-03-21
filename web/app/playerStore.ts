@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import { closePodcastPlayer } from './uiStore';
+import { closePodcastPlayer, closeAudiobookPlayer } from './uiStore';
 import { useToastStore } from './Toast';
 
 export type QueueTrack = { id: number; title: string | null; artist: string | null; album?: string | null };
@@ -28,18 +28,21 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   index: 0,
   isOpen: false,
   setQueueAndPlay: (tracks, startIndex) => {
-    closePodcastPlayer(); // Close podcast when music starts
+    closePodcastPlayer();
+    closeAudiobookPlayer();
     const idx = Math.max(0, Math.min(startIndex, tracks.length - 1));
     set({ queue: tracks, index: idx, isOpen: tracks.length > 0 });
   },
   playTrackNow: (t) => {
-    closePodcastPlayer(); // Close podcast when music starts
+    closePodcastPlayer();
+    closeAudiobookPlayer();
     set({ queue: [t], index: 0, isOpen: true });
   },
   playIndex: (idx) => {
     const s = get();
     if (idx >= 0 && idx < s.queue.length) {
-      closePodcastPlayer(); // Close podcast when music starts
+      closePodcastPlayer();
+      closeAudiobookPlayer();
       set({ index: idx, isOpen: true });
     }
   },

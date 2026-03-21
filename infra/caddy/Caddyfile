@@ -30,6 +30,7 @@
   reverse_proxy /api/hls/* 127.0.0.1:{env.WEB_PORT}
 
   reverse_proxy /api/stream/* 127.0.0.1:{env.WEB_PORT}
+  reverse_proxy /api/audiobook-stream/* 127.0.0.1:{env.WEB_PORT}
   reverse_proxy /api/art/* 127.0.0.1:{env.WEB_PORT}
   reverse_proxy /api/lyrics/* 127.0.0.1:{env.WEB_PORT}
   reverse_proxy /api/* 127.0.0.1:{env.API_PORT}
