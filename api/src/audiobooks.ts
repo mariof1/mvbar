@@ -346,4 +346,80 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
 
     return { ok: true };
   });
+
+  // ========================================================================
+  // ADMIN: EDIT AUDIOBOOK METADATA
+  // ========================================================================
+
+  app.post('/api/admin/audiobooks/:id/metadata', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id)) return reply.code(400).send({ ok: false });
+
+    const body = (req.body ?? {}) as {
+      title?: string | null;
+      author?: string | null;
+      narrator?: string | null;
+      description?: string | null;
+    };
+
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let idx = 1;
+
+    const addField = (col: string, val: unknown) => {
+      if (val !== undefined) {
+        const v = typeof val === 'string' ? val.trim() || null : val;
+        sets.push(`${col} = $${idx++}`);
+        vals.push(v);
+      }
+    };
+
+    addField('title', body.title);
+    addField('author', body.author);
+    addField('narrator', body.narrator);
+    addField('description', body.description);
+
+    if (sets.length === 0) return reply.code(400).send({ ok: false, error: 'No fields to update' });
+
+    sets.push(`metadata_locked = true`);
+    sets.push(`updated_at = now()`);
+    vals.push(id);
+
+    const r = await db().query(
+      `UPDATE audiobooks SET ${sets.join(', ')} WHERE id = $${idx}`,
+      vals
+    );
+    if (r.rowCount === 0) return reply.code(404).send({ ok: false });
+
+    return { ok: true };
+  });
+
+  // ========================================================================
+  // ADMIN: EDIT CHAPTER METADATA
+  // ========================================================================
+
+  app.post('/api/admin/audiobooks/:id/chapters/:chapterId/metadata', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+
+    const id = Number((req.params as { id: string; chapterId: string }).id);
+    const chapterId = Number((req.params as { id: string; chapterId: string }).chapterId);
+    if (!Number.isFinite(id) || !Number.isFinite(chapterId))
+      return reply.code(400).send({ ok: false });
+
+    const body = (req.body ?? {}) as { title?: string | null };
+
+    if (body.title === undefined) return reply.code(400).send({ ok: false, error: 'No fields to update' });
+
+    const title = typeof body.title === 'string' ? body.title.trim() || null : null;
+
+    const r = await db().query(
+      'UPDATE audiobook_chapters SET title = $1, metadata_locked = true WHERE id = $2 AND audiobook_id = $3',
+      [title, chapterId, id]
+    );
+    if (r.rowCount === 0) return reply.code(404).send({ ok: false });
+
+    return { ok: true };
+  });
 });

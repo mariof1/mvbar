@@ -204,7 +204,9 @@ async function scanOneAudiobook(audiobookDir: string): Promise<{
     `INSERT INTO audiobooks (path, title, author, narrator, cover_path, duration_ms)
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (path) DO UPDATE SET
-       title = EXCLUDED.title, author = EXCLUDED.author, narrator = EXCLUDED.narrator,
+       title = CASE WHEN audiobooks.metadata_locked THEN audiobooks.title ELSE EXCLUDED.title END,
+       author = CASE WHEN audiobooks.metadata_locked THEN audiobooks.author ELSE EXCLUDED.author END,
+       narrator = CASE WHEN audiobooks.metadata_locked THEN audiobooks.narrator ELSE EXCLUDED.narrator END,
        cover_path = EXCLUDED.cover_path, duration_ms = EXCLUDED.duration_ms,
        updated_at = now()
      RETURNING id`,
@@ -218,7 +220,8 @@ async function scanOneAudiobook(audiobookDir: string): Promise<{
       `INSERT INTO audiobook_chapters (audiobook_id, path, title, position, duration_ms, size_bytes, mtime_ms)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (audiobook_id, path) DO UPDATE SET
-         title = EXCLUDED.title, position = EXCLUDED.position,
+         title = CASE WHEN audiobook_chapters.metadata_locked THEN audiobook_chapters.title ELSE EXCLUDED.title END,
+         position = EXCLUDED.position,
          duration_ms = EXCLUDED.duration_ms, size_bytes = EXCLUDED.size_bytes,
          mtime_ms = EXCLUDED.mtime_ms`,
       [audiobookId, ch.filename, ch.title, ch.position, ch.durationMs, ch.sizeBytes, ch.mtimeMs],
