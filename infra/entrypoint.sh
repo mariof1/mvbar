@@ -3,7 +3,7 @@ set -e
 
 mkdir -p /data/redis /meili_data /data/caddy /config/caddy \
   /data/cache/lyrics /data/cache/art /data/cache/avatars \
-  /hls /podcasts /run/postgresql
+  /hls /podcasts /audiobooks /data/cache/audiobook-art /run/postgresql
 chown -R postgres:postgres /run/postgresql || true
 
 migrate_cache_dir() {

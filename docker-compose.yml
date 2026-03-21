@@ -33,6 +33,7 @@ services:
 
       # worker
       MUSIC_DIRS: /music
+      AUDIOBOOK_DIRS: /audiobooks
       TEMPO_DETECT: ${TEMPO_DETECT:-0}
       TEMPO_MODE: ${TEMPO_MODE:-batch}
       TEMPO_METHOD: ${TEMPO_METHOD:-energy}
@@ -49,6 +50,9 @@ services:
       - /path/to/music:/music:ro
       #- /path/to/music2:/music2:ro
 
+      # mount your audiobooks
+      #- /path/to/audiobooks:/audiobooks:ro
+
       # persistent data
       - pg:/var/lib/postgresql/data
       - redis:/data/redis
@@ -58,6 +62,7 @@ services:
       - cache:/data/cache
       - hls:/hls
       - podcasts:/podcasts
+      - audiobooks:/audiobooks
 
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost/health >/dev/null"]
@@ -74,3 +79,4 @@ volumes:
   cache:
   hls:
   podcasts:
+  audiobooks:

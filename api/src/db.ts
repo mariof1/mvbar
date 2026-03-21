@@ -555,6 +555,55 @@ export async function initDb() {
   await pool.query('create index if not exists user_episode_progress_user_idx on user_episode_progress(user_id)');
 
   // ========================================================================
+  // AUDIOBOOKS
+  // ========================================================================
+
+  await pool.query(`
+    create table if not exists audiobooks (
+      id bigserial primary key,
+      library_id bigint references libraries(id) on delete set null,
+      path text not null unique,
+      title text not null,
+      author text,
+      narrator text,
+      description text,
+      cover_path text,
+      duration_ms bigint not null default 0,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+  `);
+
+  await pool.query(`
+    create table if not exists audiobook_chapters (
+      id bigserial primary key,
+      audiobook_id bigint not null references audiobooks(id) on delete cascade,
+      path text not null,
+      title text not null,
+      position integer not null,
+      duration_ms integer,
+      size_bytes bigint,
+      mtime_ms bigint,
+      created_at timestamptz not null default now(),
+      unique(audiobook_id, path)
+    );
+  `);
+  await pool.query('create index if not exists audiobook_chapters_book_idx on audiobook_chapters(audiobook_id, position)');
+
+  await pool.query(`
+    create table if not exists user_audiobook_progress (
+      user_id text not null references users(id) on delete cascade,
+      audiobook_id bigint not null references audiobooks(id) on delete cascade,
+      chapter_id bigint not null references audiobook_chapters(id) on delete cascade,
+      position_ms integer not null default 0,
+      finished boolean not null default false,
+      updated_at timestamptz not null default now(),
+      primary key (user_id, audiobook_id)
+    );
+  `);
+  await pool.query('create index if not exists user_audiobook_progress_user_idx on user_audiobook_progress(user_id)');
+
+  // ========================================================================
   // USER PREFERENCES
   // ========================================================================
 
