@@ -56,7 +56,17 @@ async function fetchAudiobooks(token: string): Promise<Audiobook[]> {
 }
 
 async function fetchAudiobook(id: number, token: string): Promise<AudiobookDetail> {
-  return apiFetch(`/audiobooks/${id}`, {}, token);
+  const data = await apiFetch(`/audiobooks/${id}`, {}, token) as {
+    audiobook: Omit<Audiobook, 'chapter_count' | 'progress'> & { description: string | null };
+    chapters: AudiobookChapter[];
+    progress: Audiobook['progress'];
+  };
+  return {
+    ...data.audiobook,
+    chapter_count: data.chapters.length,
+    progress: data.progress,
+    chapters: data.chapters,
+  };
 }
 
 async function updateProgress(audiobookId: number, chapterId: number, positionMs: number, finished: boolean, token: string) {
