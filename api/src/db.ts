@@ -569,10 +569,12 @@ export async function initDb() {
       description text,
       cover_path text,
       duration_ms bigint not null default 0,
+      metadata_locked boolean not null default false,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     );
   `);
+  await pool.query(`ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS metadata_locked boolean NOT NULL DEFAULT false`);
 
   await pool.query(`
     create table if not exists audiobook_chapters (
@@ -584,10 +586,12 @@ export async function initDb() {
       duration_ms integer,
       size_bytes bigint,
       mtime_ms bigint,
+      metadata_locked boolean not null default false,
       created_at timestamptz not null default now(),
       unique(audiobook_id, path)
     );
   `);
+  await pool.query(`ALTER TABLE audiobook_chapters ADD COLUMN IF NOT EXISTS metadata_locked boolean NOT NULL DEFAULT false`);
   await pool.query('create index if not exists audiobook_chapters_book_idx on audiobook_chapters(audiobook_id, position)');
 
   await pool.query(`

@@ -80,6 +80,23 @@ async function markFinished(audiobookId: number, token: string) {
   return apiFetch(`/audiobooks/${audiobookId}/mark-finished`, { method: 'POST' }, token);
 }
 
+async function adminUpdateAudiobookMeta(
+  token: string,
+  id: number,
+  payload: { title?: string | null; author?: string | null; narrator?: string | null; description?: string | null }
+) {
+  return apiFetch(`/admin/audiobooks/${id}/metadata`, { method: 'POST', body: JSON.stringify(payload) }, token) as Promise<{ ok: boolean }>;
+}
+
+async function adminUpdateChapterMeta(
+  token: string,
+  audiobookId: number,
+  chapterId: number,
+  payload: { title?: string | null }
+) {
+  return apiFetch(`/admin/audiobooks/${audiobookId}/chapters/${chapterId}/metadata`, { method: 'POST', body: JSON.stringify(payload) }, token) as Promise<{ ok: boolean }>;
+}
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -587,9 +604,24 @@ function AudiobookDetailView({
   onBack: () => void;
 }) {
   const token = useAuth((s) => s.token);
+  const user = useAuth((s) => s.user);
+  const isAdmin = user?.role === 'admin';
   const [book, setBook] = useState<AudiobookDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Edit book modal state
+  const [editBookOpen, setEditBookOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editAuthor, setEditAuthor] = useState('');
+  const [editNarrator, setEditNarrator] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editBookSaving, setEditBookSaving] = useState(false);
+
+  // Edit chapter modal state
+  const [editChapter, setEditChapter] = useState<AudiobookChapter | null>(null);
+  const [editChapterTitle, setEditChapterTitle] = useState('');
+  const [editChapterSaving, setEditChapterSaving] = useState(false);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -637,6 +669,49 @@ function AudiobookDetailView({
     }
     // No progress — start from the beginning
     if (sorted.length > 0) playChapter(sorted[0], 0);
+  };
+
+  const openEditBook = () => {
+    if (!book) return;
+    setEditTitle(book.title);
+    setEditAuthor(book.author ?? '');
+    setEditNarrator(book.narrator ?? '');
+    setEditDescription(book.description ?? '');
+    setEditBookOpen(true);
+  };
+
+  const saveEditBook = async () => {
+    if (!book || !token) return;
+    setEditBookSaving(true);
+    try {
+      await adminUpdateAudiobookMeta(token, book.id, {
+        title: editTitle || null,
+        author: editAuthor || null,
+        narrator: editNarrator || null,
+        description: editDescription || null,
+      });
+      setEditBookOpen(false);
+      await load();
+    } catch { /* ignore */ } finally {
+      setEditBookSaving(false);
+    }
+  };
+
+  const openEditChapter = (ch: AudiobookChapter) => {
+    setEditChapter(ch);
+    setEditChapterTitle(ch.title);
+  };
+
+  const saveEditChapter = async () => {
+    if (!editChapter || !book || !token) return;
+    setEditChapterSaving(true);
+    try {
+      await adminUpdateChapterMeta(token, book.id, editChapter.id, { title: editChapterTitle || null });
+      setEditChapter(null);
+      await load();
+    } catch { /* ignore */ } finally {
+      setEditChapterSaving(false);
+    }
   };
 
   if (loading) {
@@ -702,7 +777,21 @@ function AudiobookDetailView({
 
         {/* Info */}
         <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold text-white mb-1">{book.title}</h1>
+          <div className="flex items-center gap-2 mb-1">
+            <h1 className="text-2xl font-bold text-white">{book.title}</h1>
+            {isAdmin && (
+              <button
+                onClick={openEditBook}
+                className="p-1.5 rounded-full hover:bg-white/10 text-white/40 hover:text-white transition"
+                title="Edit audiobook metadata"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                </svg>
+              </button>
+            )}
+          </div>
           {book.author && <p className="text-white/70 mb-0.5">by {book.author}</p>}
           {book.narrator && <p className="text-white/50 text-sm mb-3">Narrated by {book.narrator}</p>}
 
@@ -797,10 +886,122 @@ function AudiobookDetailView({
               {isCurrent && (
                 <span className="flex-shrink-0 text-xs text-cyan-400 font-medium">Playing</span>
               )}
+
+              {/* Edit chapter button (admin) */}
+              {isAdmin && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openEditChapter(ch);
+                  }}
+                  className="flex-shrink-0 p-1.5 rounded-full hover:bg-white/10 text-white/30 hover:text-white transition"
+                  title="Edit chapter title"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                  </svg>
+                </button>
+              )}
             </div>
           );
         })}
       </div>
+
+      {/* Edit Book Modal */}
+      {editBookOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditBookOpen(false)}>
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 w-full max-w-lg mx-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-white mb-4">Edit Audiobook</h3>
+            <div className="space-y-3">
+              <label className="block">
+                <span className="text-sm text-white/70">Title</span>
+                <input
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500"
+                />
+              </label>
+              <label className="block">
+                <span className="text-sm text-white/70">Author</span>
+                <input
+                  value={editAuthor}
+                  onChange={(e) => setEditAuthor(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500"
+                />
+              </label>
+              <label className="block">
+                <span className="text-sm text-white/70">Narrator</span>
+                <input
+                  value={editNarrator}
+                  onChange={(e) => setEditNarrator(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500"
+                />
+              </label>
+              <label className="block">
+                <span className="text-sm text-white/70">Description</span>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  rows={3}
+                  className="mt-1 w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500 resize-none"
+                />
+              </label>
+              <p className="text-xs text-white/40">Changes are saved to the database only (audio file tags are not modified).</p>
+            </div>
+            <div className="flex justify-end gap-3 mt-5">
+              <button
+                onClick={() => setEditBookOpen(false)}
+                className="px-4 py-2 text-sm text-white/70 hover:text-white transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEditBook}
+                disabled={editBookSaving}
+                className="px-4 py-2 text-sm bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white rounded-lg transition"
+              >
+                {editBookSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Chapter Modal */}
+      {editChapter && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditChapter(null)}>
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 w-full max-w-lg mx-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-white mb-4">Edit Chapter</h3>
+            <div className="space-y-3">
+              <label className="block">
+                <span className="text-sm text-white/70">Chapter Title</span>
+                <input
+                  value={editChapterTitle}
+                  onChange={(e) => setEditChapterTitle(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500"
+                />
+              </label>
+              <p className="text-xs text-white/40">Changes are saved to the database only (audio file tags are not modified).</p>
+            </div>
+            <div className="flex justify-end gap-3 mt-5">
+              <button
+                onClick={() => setEditChapter(null)}
+                className="px-4 py-2 text-sm text-white/70 hover:text-white transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEditChapter}
+                disabled={editChapterSaving}
+                className="px-4 py-2 text-sm bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white rounded-lg transition"
+              >
+                {editChapterSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
