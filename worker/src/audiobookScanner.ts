@@ -41,7 +41,9 @@ async function detectCover(
   files: string[],
   firstFileTags: { artData: Uint8Array | null; artMime: string | null },
 ): Promise<string | null> {
-  // Look for cover image files (case insensitive)
+  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png']);
+
+  // Look for well-known cover image files (case insensitive)
   const lowerMap = new Map(files.map(f => [f.toLowerCase(), f]));
   for (const name of COVER_NAMES) {
     const actual = lowerMap.get(name);
@@ -52,8 +54,21 @@ async function detectCover(
         const result = await writeArt(ART_DIR, data, mime);
         return result.relPath;
       } catch {
-        // fall through to embedded art
+        // fall through
       }
+    }
+  }
+
+  // Fallback: pick the first image file in the directory
+  const imageFile = files.find(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()));
+  if (imageFile) {
+    try {
+      const data = await readFile(path.join(audiobookDir, imageFile));
+      const mime = mimeFromExt(path.extname(imageFile));
+      const result = await writeArt(ART_DIR, data, mime);
+      return result.relPath;
+    } catch {
+      // fall through
     }
   }
 
@@ -220,6 +235,46 @@ async function scanOneAudiobook(audiobookDir: string): Promise<{
   return { chapterCount: chapters.length, totalDurationMs };
 }
 
+// Recursively find directories that contain audio files (audiobook folders).
+// Supports any nesting depth (e.g., Author/Book/chapters or just Book/chapters).
+async function findAudiobookDirs(rootDir: string): Promise<string[]> {
+  const results: string[] = [];
+  const stack: string[] = [rootDir];
+
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    let hasAudio = false;
+    const subdirs: string[] = [];
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        subdirs.push(path.join(dir, entry.name));
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (AUDIO_EXTS.has(ext)) hasAudio = true;
+      }
+    }
+
+    if (hasAudio) {
+      // This directory is an audiobook (contains audio files)
+      results.push(dir);
+      // Don't recurse into subdirs — chapter files are in this dir
+    } else {
+      // No audio here — recurse into subdirs (could be author/group folders)
+      stack.push(...subdirs);
+    }
+  }
+
+  return results;
+}
+
 export async function scanAudiobooks(audiobookDirs: string[]): Promise<void> {
   const startedAt = Date.now();
   logger.info('audiobook-scan', `Starting audiobook scan across ${audiobookDirs.length} director${audiobookDirs.length === 1 ? 'y' : 'ies'}`);
@@ -230,20 +285,10 @@ export async function scanAudiobooks(audiobookDirs: string[]): Promise<void> {
   const validPaths = new Set<string>();
 
   for (const rootDir of audiobookDirs) {
-    let topEntries;
-    try {
-      topEntries = await readdir(rootDir, { withFileTypes: true });
-    } catch (e) {
-      logger.error('audiobook-scan', `Cannot read audiobook root: ${rootDir}`, {
-        error: e instanceof Error ? e.message : String(e),
-      });
-      continue;
-    }
+    // Recursively find all directories that contain audio files
+    const audiobookCandidates = await findAudiobookDirs(rootDir);
 
-    for (const entry of topEntries) {
-      if (!entry.isDirectory()) continue;
-
-      const audiobookDir = path.join(rootDir, entry.name);
+    for (const audiobookDir of audiobookCandidates) {
       try {
         const result = await scanOneAudiobook(audiobookDir);
         if (result) {
