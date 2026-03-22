@@ -567,6 +567,7 @@ export async function initDb() {
       author text,
       narrator text,
       description text,
+      language text,
       cover_path text,
       duration_ms bigint not null default 0,
       metadata_locked boolean not null default false,
@@ -575,6 +576,7 @@ export async function initDb() {
     );
   `);
   await pool.query(`ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS metadata_locked boolean NOT NULL DEFAULT false`);
+  await pool.query(`ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS language text`);
 
   await pool.query(`
     create table if not exists audiobook_chapters (
