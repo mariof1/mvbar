@@ -15,6 +15,7 @@ interface Audiobook {
   title: string;
   author: string | null;
   narrator: string | null;
+  language: string | null;
   cover_path: string | null;
   duration_ms: number;
   chapter_count: number;
@@ -83,7 +84,7 @@ async function markFinished(audiobookId: number, token: string) {
 async function adminUpdateAudiobookMeta(
   token: string,
   id: number,
-  payload: { title?: string | null; author?: string | null; narrator?: string | null; description?: string | null }
+  payload: { title?: string | null; author?: string | null; narrator?: string | null; description?: string | null; language?: string | null }
 ) {
   return apiFetch(`/admin/audiobooks/${id}/metadata`, { method: 'POST', body: JSON.stringify(payload) }, token) as Promise<{ ok: boolean }>;
 }
@@ -616,6 +617,7 @@ function AudiobookDetailView({
   const [editAuthor, setEditAuthor] = useState('');
   const [editNarrator, setEditNarrator] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editLanguage, setEditLanguage] = useState('');
   const [editBookSaving, setEditBookSaving] = useState(false);
 
   // Edit chapter modal state
@@ -677,6 +679,7 @@ function AudiobookDetailView({
     setEditAuthor(book.author ?? '');
     setEditNarrator(book.narrator ?? '');
     setEditDescription(book.description ?? '');
+    setEditLanguage(book.language ?? '');
     setEditBookOpen(true);
   };
 
@@ -689,6 +692,7 @@ function AudiobookDetailView({
         author: editAuthor || null,
         narrator: editNarrator || null,
         description: editDescription || null,
+        language: editLanguage || null,
       });
       setEditBookOpen(false);
       await load();
@@ -793,7 +797,13 @@ function AudiobookDetailView({
             )}
           </div>
           {book.author && <p className="text-white/70 mb-0.5">by {book.author}</p>}
-          {book.narrator && <p className="text-white/50 text-sm mb-3">Narrated by {book.narrator}</p>}
+          {book.narrator && <p className="text-white/50 text-sm mb-1">Narrated by {book.narrator}</p>}
+          {book.language && (
+            <span className="inline-block px-2 py-0.5 text-xs bg-white/10 text-white/70 rounded-full mb-3">
+              {book.language}
+            </span>
+          )}
+          {!book.narrator && !book.language && <div className="mb-3" />}
 
           <div className="flex flex-wrap items-center gap-3 text-sm text-white/50 mb-4">
             <span>{book.chapter_count} chapter{book.chapter_count !== 1 ? 's' : ''}</span>
@@ -947,6 +957,15 @@ function AudiobookDetailView({
                   className="mt-1 w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500 resize-none"
                 />
               </label>
+              <label className="block">
+                <span className="text-sm text-white/70">Language</span>
+                <input
+                  value={editLanguage}
+                  onChange={(e) => setEditLanguage(e.target.value)}
+                  placeholder="e.g. English, Polish, Spanish"
+                  className="mt-1 w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500"
+                />
+              </label>
               <p className="text-xs text-white/40">Changes are saved to the database only (audio file tags are not modified).</p>
             </div>
             <div className="flex justify-end gap-3 mt-5">
@@ -1016,6 +1035,7 @@ export function Audiobooks() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedBookId, setSelectedBookId] = useState<number | null>(null);
+  const [languageFilter, setLanguageFilter] = useState<string>('all');
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -1032,6 +1052,10 @@ export function Audiobooks() {
   }, [token]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Collect unique languages for filter
+  const languages = Array.from(new Set(books.map((b) => b.language).filter(Boolean) as string[])).sort();
+  const filtered = languageFilter === 'all' ? books : books.filter((b) => b.language === languageFilter);
 
   // Detail view
   if (selectedBookId !== null) {
@@ -1080,11 +1104,25 @@ export function Audiobooks() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-white">Audiobooks</h1>
-        <span className="text-sm text-white/50">{books.length} book{books.length !== 1 ? 's' : ''}</span>
+        <div className="flex items-center gap-3">
+          {languages.length > 0 && (
+            <select
+              value={languageFilter}
+              onChange={(e) => setLanguageFilter(e.target.value)}
+              className="px-3 py-1.5 text-sm bg-slate-800 border border-white/10 rounded-lg text-white focus:outline-none focus:border-cyan-500 cursor-pointer"
+            >
+              <option value="all" className="bg-slate-800 text-white">All Languages</option>
+              {languages.map((lang) => (
+                <option key={lang} value={lang} className="bg-slate-800 text-white">{lang}</option>
+              ))}
+            </select>
+          )}
+          <span className="text-sm text-white/50">{filtered.length} book{filtered.length !== 1 ? 's' : ''}</span>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-        {books.map((book) => {
+        {filtered.map((book) => {
           const coverUrl = book.cover_path ? `/api/audiobook-art/${book.id}` : null;
           const progress = book.progress;
           const chapterProgress = progress

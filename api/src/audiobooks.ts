@@ -19,6 +19,7 @@ interface Audiobook {
   author: string | null;
   narrator: string | null;
   description: string | null;
+  language: string | null;
   cover_path: string | null;
   duration_ms: number;
   created_at: Date;
@@ -68,7 +69,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
         chapters_finished: number;
       }
     >(
-      `SELECT a.id, a.title, a.author, a.narrator, a.cover_path, a.duration_ms,
+      `SELECT a.id, a.title, a.author, a.narrator, a.language, a.cover_path, a.duration_ms,
               (SELECT COUNT(*)::int FROM audiobook_chapters WHERE audiobook_id = a.id) AS chapter_count,
               uap.chapter_id AS progress_chapter_id,
               pc.position AS progress_chapter_position,
@@ -92,6 +93,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
       title: row.title,
       author: row.author,
       narrator: row.narrator,
+      language: row.language,
       cover_path: row.cover_path,
       duration_ms: row.duration_ms,
       chapter_count: row.chapter_count,
@@ -122,7 +124,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!Number.isFinite(id)) return reply.code(400).send({ ok: false });
 
     const bookR = await db().query<Audiobook>(
-      `SELECT id, library_id, path, title, author, narrator, description, cover_path, duration_ms, created_at, updated_at
+      `SELECT id, library_id, path, title, author, narrator, description, language, cover_path, duration_ms, created_at, updated_at
        FROM audiobooks WHERE id = $1`,
       [id]
     );
@@ -362,6 +364,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
       author?: string | null;
       narrator?: string | null;
       description?: string | null;
+      language?: string | null;
     };
 
     const sets: string[] = [];
@@ -380,6 +383,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
     addField('author', body.author);
     addField('narrator', body.narrator);
     addField('description', body.description);
+    addField('language', body.language);
 
     if (sets.length === 0) return reply.code(400).send({ ok: false, error: 'No fields to update' });
 

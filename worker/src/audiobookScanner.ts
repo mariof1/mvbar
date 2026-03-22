@@ -133,6 +133,7 @@ async function scanOneAudiobook(audiobookDir: string): Promise<{
     firstTags?.albumartist && firstTags?.artist && firstTags.albumartist !== firstTags.artist
       ? firstTags.artist
       : null;
+  const language = firstTags?.language || null;
 
   // Detect cover art
   const coverPath = await detectCover(audiobookDir, allFiles, {
@@ -201,16 +202,17 @@ async function scanOneAudiobook(audiobookDir: string): Promise<{
 
   // Upsert audiobook
   const { rows } = await db().query<{ id: number }>(
-    `INSERT INTO audiobooks (path, title, author, narrator, cover_path, duration_ms)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO audiobooks (path, title, author, narrator, language, cover_path, duration_ms)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (path) DO UPDATE SET
        title = CASE WHEN audiobooks.metadata_locked THEN audiobooks.title ELSE EXCLUDED.title END,
        author = CASE WHEN audiobooks.metadata_locked THEN audiobooks.author ELSE EXCLUDED.author END,
        narrator = CASE WHEN audiobooks.metadata_locked THEN audiobooks.narrator ELSE EXCLUDED.narrator END,
+       language = CASE WHEN audiobooks.metadata_locked THEN audiobooks.language ELSE EXCLUDED.language END,
        cover_path = EXCLUDED.cover_path, duration_ms = EXCLUDED.duration_ms,
        updated_at = now()
      RETURNING id`,
-    [audiobookDir, title, author, narrator, coverPath, totalDurationMs],
+    [audiobookDir, title, author, narrator, language, coverPath, totalDurationMs],
   );
   const audiobookId = rows[0].id;
 
