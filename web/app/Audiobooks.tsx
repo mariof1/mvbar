@@ -1109,11 +1109,11 @@ export function Audiobooks() {
             <select
               value={languageFilter}
               onChange={(e) => setLanguageFilter(e.target.value)}
-              className="px-3 py-1.5 text-sm bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-cyan-500 appearance-none cursor-pointer"
+              className="px-3 py-1.5 text-sm bg-slate-800 border border-white/10 rounded-lg text-white focus:outline-none focus:border-cyan-500 cursor-pointer"
             >
-              <option value="all">All Languages</option>
+              <option value="all" className="bg-slate-800 text-white">All Languages</option>
               {languages.map((lang) => (
-                <option key={lang} value={lang}>{lang}</option>
+                <option key={lang} value={lang} className="bg-slate-800 text-white">{lang}</option>
               ))}
             </select>
           )}
