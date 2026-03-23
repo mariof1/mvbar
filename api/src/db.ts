@@ -618,9 +618,11 @@ export async function initDb() {
       user_id text primary key references users(id) on delete cascade,
       auto_continue boolean not null default false,
       prefer_hls boolean not null default false,
+      theme text not null default 'default',
       updated_at timestamptz not null default now()
     );
   `);
+  await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS theme text NOT NULL DEFAULT 'default'`);
 
   // ========================================================================
   // POPULATE ASCII NAMES FOR ARTISTS (one-time migration - runs in background)

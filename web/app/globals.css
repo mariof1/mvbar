@@ -77,3 +77,233 @@ audio {
 .animate-fade-in {
   animation: fadeIn 0.2s ease-out;
 }
+
+/* ========================================================================
+   NORTON COMMANDER RETRO SKIN (Easter Egg)
+   ======================================================================== */
+
+.theme-norton {
+  --nc-bg: #0000aa;
+  --nc-panel: #0000aa;
+  --nc-border: #00ffff;
+  --nc-text: #00ffff;
+  --nc-text-dim: #008888;
+  --nc-highlight: #ffff00;
+  --nc-active-bg: #008888;
+  --nc-active-text: #000000;
+  --nc-header-bg: #008888;
+  --nc-header-text: #000000;
+  --nc-white: #ffffff;
+  --nc-red: #ff5555;
+  --nc-green: #55ff55;
+}
+
+/* --- Base overrides --- */
+.theme-norton body,
+.theme-norton {
+  background: var(--nc-bg) !important;
+  color: var(--nc-text) !important;
+  font-family: 'Courier New', 'Lucida Console', 'Consolas', monospace !important;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: unset;
+  image-rendering: pixelated;
+}
+
+/* --- Gradients become solid blue --- */
+.theme-norton .bg-gradient-to-b,
+.theme-norton [class*="from-zinc"],
+.theme-norton [class*="to-black"] {
+  background: var(--nc-bg) !important;
+}
+
+/* --- Sidebar (panel look) --- */
+.theme-norton aside,
+.theme-norton [class*="bg-black/50"] {
+  background: var(--nc-panel) !important;
+  border-color: var(--nc-border) !important;
+  border-right: 2px solid var(--nc-border) !important;
+}
+
+/* --- Cards, sections, modals: bordered panels --- */
+.theme-norton [class*="bg-slate-800"],
+.theme-norton [class*="bg-white/5"],
+.theme-norton [class*="bg-white/10"],
+.theme-norton [class*="bg-zinc"],
+.theme-norton [class*="bg-black"],
+.theme-norton section,
+.theme-norton .glass {
+  background: var(--nc-bg) !important;
+  border: 1px solid var(--nc-border) !important;
+  border-radius: 0 !important;
+  backdrop-filter: none !important;
+}
+
+/* --- Text colors --- */
+.theme-norton h1,
+.theme-norton h2,
+.theme-norton h3,
+.theme-norton h4,
+.theme-norton [class*="text-white"] {
+  color: var(--nc-white) !important;
+}
+
+.theme-norton p,
+.theme-norton span,
+.theme-norton label,
+.theme-norton [class*="text-slate"],
+.theme-norton [class*="text-white/50"],
+.theme-norton [class*="text-white/40"],
+.theme-norton [class*="text-white/70"] {
+  color: var(--nc-text) !important;
+}
+
+/* --- Navigation items --- */
+.theme-norton nav button,
+.theme-norton nav a {
+  color: var(--nc-text) !important;
+  border-radius: 0 !important;
+}
+
+.theme-norton nav button:hover,
+.theme-norton nav a:hover {
+  background: var(--nc-active-bg) !important;
+  color: var(--nc-active-text) !important;
+}
+
+/* Active nav item */
+.theme-norton nav button[class*="bg-white"],
+.theme-norton nav a[class*="bg-white"] {
+  background: var(--nc-active-bg) !important;
+  color: var(--nc-active-text) !important;
+}
+
+/* --- Buttons --- */
+.theme-norton button[class*="bg-cyan"],
+.theme-norton button[class*="bg-blue"],
+.theme-norton a[class*="bg-cyan"] {
+  background: var(--nc-active-bg) !important;
+  color: var(--nc-active-text) !important;
+  border: 1px solid var(--nc-border) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.theme-norton button[class*="bg-cyan"]:hover,
+.theme-norton button[class*="bg-blue"]:hover {
+  background: var(--nc-border) !important;
+  color: var(--nc-bg) !important;
+}
+
+/* --- Inputs, selects, textareas --- */
+.theme-norton input,
+.theme-norton textarea,
+.theme-norton select {
+  background: var(--nc-bg) !important;
+  color: var(--nc-white) !important;
+  border: 1px solid var(--nc-border) !important;
+  border-radius: 0 !important;
+  font-family: 'Courier New', monospace !important;
+}
+
+.theme-norton input::placeholder,
+.theme-norton textarea::placeholder {
+  color: var(--nc-text-dim) !important;
+}
+
+.theme-norton option {
+  background: var(--nc-bg) !important;
+  color: var(--nc-white) !important;
+}
+
+/* --- Progress bars --- */
+.theme-norton [class*="bg-cyan-500"][class*="rounded-full"],
+.theme-norton [class*="bg-cyan-500"][class*="h-full"] {
+  background: var(--nc-green) !important;
+  border-radius: 0 !important;
+}
+
+.theme-norton [class*="bg-white/10"][class*="rounded-full"] {
+  background: var(--nc-text-dim) !important;
+  border-radius: 0 !important;
+}
+
+/* --- Remove all rounded corners --- */
+.theme-norton [class*="rounded"] {
+  border-radius: 0 !important;
+}
+
+/* --- Images: pixelated retro feel --- */
+.theme-norton img {
+  border: 2px solid var(--nc-border) !important;
+  border-radius: 0 !important;
+  image-rendering: pixelated;
+}
+
+/* --- Scrollbar: retro --- */
+.theme-norton ::-webkit-scrollbar-thumb {
+  background: var(--nc-border) !important;
+  border-radius: 0 !important;
+}
+
+.theme-norton ::-webkit-scrollbar-track {
+  background: var(--nc-bg) !important;
+}
+
+.theme-norton {
+  scrollbar-color: var(--nc-border) var(--nc-bg);
+}
+
+/* --- Player bar --- */
+.theme-norton [class*="fixed"][class*="bottom-0"],
+.theme-norton footer {
+  background: var(--nc-bg) !important;
+  border-top: 2px solid var(--nc-border) !important;
+}
+
+/* --- Mobile header --- */
+.theme-norton header[class*="fixed"] {
+  background: var(--nc-bg) !important;
+  border-bottom: 2px solid var(--nc-border) !important;
+  backdrop-filter: none !important;
+}
+
+/* --- Emerald/green status indicators --- */
+.theme-norton [class*="text-emerald"],
+.theme-norton [class*="bg-emerald"] {
+  color: var(--nc-green) !important;
+}
+
+/* --- Red/danger elements --- */
+.theme-norton [class*="text-red"] {
+  color: var(--nc-red) !important;
+}
+
+/* --- Cyan accent text as highlight --- */
+.theme-norton [class*="text-cyan"] {
+  color: var(--nc-highlight) !important;
+}
+
+/* --- Tab buttons in settings --- */
+.theme-norton [role="tablist"] button,
+.theme-norton [class*="border-b"] button {
+  border-radius: 0 !important;
+}
+
+/* --- Modal overlays --- */
+.theme-norton [class*="bg-black/60"],
+.theme-norton [class*="bg-black/40"] {
+  background: rgba(0, 0, 170, 0.85) !important;
+  backdrop-filter: none !important;
+}
+
+/* --- Disabled / muted --- */
+.theme-norton [class*="opacity-50"] {
+  opacity: 0.5;
+}
+
+/* --- Remove shadows and blurs --- */
+.theme-norton [class*="shadow"],
+.theme-norton [class*="backdrop-blur"] {
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}

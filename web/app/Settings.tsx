@@ -520,6 +520,25 @@ export function Settings() {
                 disabled={!lastfmEnabled}
               />
             </section>
+
+            {/* Theme / Skin */}
+            <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
+              <h2 className="text-lg font-semibold text-white">Appearance</h2>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1">
+                  <div className="font-medium text-white">Theme</div>
+                  <p className="text-sm text-slate-400 mt-1">Choose your visual style. Some themes are easter eggs — explore and enjoy!</p>
+                </div>
+                <select
+                  value={preferences.theme || 'default'}
+                  onChange={(e) => updatePreferences(token, { theme: e.target.value })}
+                  className="px-3 py-2 text-sm bg-slate-900 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500 cursor-pointer"
+                >
+                  <option value="default" className="bg-slate-800 text-white">Default</option>
+                  <option value="norton" className="bg-slate-800 text-white">Norton Commander</option>
+                </select>
+              </div>
+            </section>
           </>
         )}
 

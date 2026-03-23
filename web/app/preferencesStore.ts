@@ -3,9 +3,15 @@
 import { create } from 'zustand';
 import { apiFetch } from './apiClient';
 
+function applyTheme(theme: string) {
+  if (typeof document === 'undefined') return;
+  document.documentElement.classList.toggle('theme-norton', theme === 'norton');
+}
+
 export interface UserPreferences {
   auto_continue: boolean;
   prefer_hls: boolean;
+  theme: string;
 }
 
 interface PreferencesState {
@@ -21,6 +27,7 @@ interface PreferencesState {
 const DEFAULT_PREFS: UserPreferences = {
   auto_continue: false,
   prefer_hls: false,
+  theme: 'default',
 };
 
 export const usePreferences = create<PreferencesState>((set, get) => ({
@@ -36,6 +43,7 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
       const r = await apiFetch('/preferences', { method: 'GET' }, token) as { ok: boolean; preferences: UserPreferences; lastfmEnabled?: boolean };
       if (r.ok && r.preferences) {
         set({ preferences: r.preferences, lastfmEnabled: !!r.lastfmEnabled, loaded: true });
+        applyTheme(r.preferences.theme);
       }
     } catch {
       // Keep defaults
@@ -48,6 +56,7 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
     const current = get().preferences;
     const optimistic = { ...current, ...updates };
     set({ preferences: optimistic });
+    if (updates.theme) applyTheme(updates.theme);
     
     try {
       const r = await apiFetch('/preferences', { 
@@ -57,12 +66,17 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
       
       if (r.ok && r.preferences) {
         set({ preferences: r.preferences });
+        applyTheme(r.preferences.theme);
       }
     } catch {
       // Revert on error
       set({ preferences: current });
+      applyTheme(current.theme);
     }
   },
 
-  reset: () => set({ preferences: DEFAULT_PREFS, lastfmEnabled: false, loaded: false, loading: false }),
+  reset: () => {
+    set({ preferences: DEFAULT_PREFS, lastfmEnabled: false, loaded: false, loading: false });
+    applyTheme('default');
+  },
 }));
