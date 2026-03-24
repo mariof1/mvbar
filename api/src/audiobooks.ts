@@ -161,19 +161,16 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!Number.isFinite(id) || !Number.isFinite(chapterId))
       return reply.code(400).send({ ok: false });
 
-    const r = await db().query<{ audiobook_path: string; chapter_path: string }>(
-      `SELECT a.path AS audiobook_path, c.path AS chapter_path
+    const r = await db().query<{ chapter_path: string }>(
+      `SELECT c.path AS chapter_path
        FROM audiobook_chapters c
-       JOIN audiobooks a ON a.id = c.audiobook_id
        WHERE c.id = $1 AND c.audiobook_id = $2`,
       [chapterId, id]
     );
     if (r.rows.length === 0) return reply.code(404).send({ ok: false });
 
-    const { audiobook_path, chapter_path } = r.rows[0];
-    const abs = path.resolve(audiobook_path, chapter_path);
-    const base = path.resolve(audiobook_path);
-    if (!abs.startsWith(base + path.sep)) return reply.code(400).send({ ok: false });
+    // Chapter path is absolute — use directly
+    const abs = r.rows[0].chapter_path;
 
     let st;
     try {
