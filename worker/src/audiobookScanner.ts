@@ -9,6 +9,8 @@ const AUDIO_EXTS = new Set(['.mp3', '.m4a', '.m4b', '.flac', '.aac', '.ogg', '.o
 const COVER_NAMES = ['cover.jpg', 'cover.png', 'folder.jpg', 'folder.png'];
 const ART_DIR = '/data/cache/audiobook-art';
 
+// ── Helpers ─────────────────────────────────────────────────
+
 function naturalSort(a: string, b: string): number {
   const re = /(\d+)|(\D+)/g;
   const aParts = a.match(re) || [];
@@ -36,171 +38,267 @@ function mimeFromExt(ext: string): string {
   }
 }
 
-async function detectCover(
-  audiobookDir: string,
-  files: string[],
-  firstFileTags: { artData: Uint8Array | null; artMime: string | null },
-): Promise<string | null> {
-  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png']);
+/** Normalize a string into a stable grouping key component. */
+function normalize(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, ' ');
+}
 
-  // Look for well-known cover image files (case insensitive)
-  const lowerMap = new Map(files.map(f => [f.toLowerCase(), f]));
-  for (const name of COVER_NAMES) {
-    const actual = lowerMap.get(name);
-    if (actual) {
-      try {
-        const data = await readFile(path.join(audiobookDir, actual));
-        const mime = mimeFromExt(path.extname(actual));
-        const result = await writeArt(ART_DIR, data, mime);
-        return result.relPath;
-      } catch {
-        // fall through
+/** Build a stable grouping key from author + title. */
+function groupKey(author: string, title: string): string {
+  return `${normalize(author)}::${normalize(title)}`;
+}
+
+// ── Types ───────────────────────────────────────────────────
+
+interface ScannedFile {
+  absolutePath: string;
+  parentDir: string;
+  filename: string;
+  // Metadata (null if tag reading failed)
+  album: string | null;
+  albumArtist: string | null;
+  artist: string | null;
+  title: string | null;
+  language: string | null;
+  trackNumber: number | null;
+  discNumber: number | null;
+  durationMs: number | null;
+  artData: Uint8Array | null;
+  artMime: string | null;
+  sizeBytes: number;
+  mtimeMs: number;
+}
+
+interface AudiobookGroup {
+  key: string;           // stable grouping key
+  title: string;         // audiobook title
+  author: string | null;
+  narrator: string | null;
+  language: string | null;
+  files: ScannedFile[];  // chapters in this audiobook
+}
+
+// ── Step 1: Recursively collect all audio files ─────────────
+
+async function collectAllAudioFiles(rootDirs: string[]): Promise<ScannedFile[]> {
+  const files: ScannedFile[] = [];
+  const stack = [...rootDirs];
+
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (!AUDIO_EXTS.has(ext)) continue;
+
+        let st;
+        try {
+          st = await stat(fullPath);
+        } catch {
+          continue;
+        }
+
+        // Read tags
+        let tags: Awaited<ReturnType<typeof readTags>> | null = null;
+        try {
+          tags = await readTags(fullPath);
+        } catch {
+          // Tags unavailable — will use filename/directory fallback
+        }
+
+        files.push({
+          absolutePath: fullPath,
+          parentDir: dir,
+          filename: entry.name,
+          album: tags?.album ?? null,
+          albumArtist: tags?.albumartist ?? null,
+          artist: tags?.artist ?? null,
+          title: tags?.title ?? null,
+          language: tags?.language ?? null,
+          trackNumber: tags?.trackNumber ?? null,
+          discNumber: tags?.discNumber ?? null,
+          durationMs: tags?.durationMs ?? null,
+          artData: tags?.artData ?? null,
+          artMime: tags?.artMime ?? null,
+          sizeBytes: st.size,
+          mtimeMs: Math.floor(st.mtimeMs),
+        });
       }
     }
   }
 
-  // Fallback: pick the first image file in the directory
-  const imageFile = files.find(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()));
-  if (imageFile) {
+  return files;
+}
+
+// ── Step 2: Smart grouping ──────────────────────────────────
+
+function groupFilesIntoAudiobooks(files: ScannedFile[]): AudiobookGroup[] {
+  const groups = new Map<string, ScannedFile[]>();
+
+  for (const file of files) {
+    let key: string;
+
+    if (file.album) {
+      // Primary: group by album tag + author for disambiguation
+      const author = file.albumArtist || file.artist || 'Unknown';
+      key = groupKey(author, file.album);
+    } else {
+      // Fallback: group by parent directory (compatible with folder-based layouts)
+      key = `dir::${file.parentDir}`;
+    }
+
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(file);
+  }
+
+  const result: AudiobookGroup[] = [];
+
+  for (const [key, groupFiles] of groups) {
+    // Determine audiobook metadata from the group using majority vote
+    const title = mostCommon(groupFiles.map(f => f.album).filter(Boolean) as string[])
+      || path.basename(groupFiles[0].parentDir);
+
+    const authorCandidates = groupFiles
+      .map(f => f.albumArtist || f.artist)
+      .filter(Boolean) as string[];
+    const author = mostCommon(authorCandidates) || null;
+
+    // Narrator: if artist differs from albumArtist consistently, it's likely the narrator
+    const narratorCandidates = groupFiles
+      .filter(f => f.albumArtist && f.artist && f.albumArtist !== f.artist)
+      .map(f => f.artist!)
+      .filter(Boolean);
+    const narrator = mostCommon(narratorCandidates) || null;
+
+    const langCandidates = groupFiles.map(f => f.language).filter(Boolean) as string[];
+    const language = mostCommon(langCandidates) || null;
+
+    // Use a stable key based on resolved author+title
+    const stableKey = key.startsWith('dir::')
+      ? groupKey(author || 'Unknown', title)
+      : key;
+
+    // Sort chapters: disc number → track number → filename
+    groupFiles.sort((a, b) => {
+      const discA = a.discNumber ?? 0;
+      const discB = b.discNumber ?? 0;
+      if (discA !== discB) return discA - discB;
+
+      const trackA = a.trackNumber ?? Infinity;
+      const trackB = b.trackNumber ?? Infinity;
+      if (trackA !== trackB) return trackA - trackB;
+
+      return naturalSort(a.filename, b.filename);
+    });
+
+    result.push({ key: stableKey, title, author, narrator, language, files: groupFiles });
+  }
+
+  return result;
+}
+
+/** Pick the most common string from a list. */
+function mostCommon(arr: string[]): string | null {
+  if (arr.length === 0) return null;
+  const counts = new Map<string, number>();
+  for (const s of arr) {
+    const key = normalize(s);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  let best = '';
+  let bestCount = 0;
+  // Return the original (un-normalized) version of the most common
+  const origMap = new Map<string, string>();
+  for (const s of arr) {
+    const key = normalize(s);
+    if (!origMap.has(key)) origMap.set(key, s);
+  }
+  for (const [key, count] of counts) {
+    if (count > bestCount) { best = key; bestCount = count; }
+  }
+  return origMap.get(best) || arr[0];
+}
+
+// ── Step 3: Cover art detection ─────────────────────────────
+
+async function detectGroupCover(group: AudiobookGroup): Promise<string | null> {
+  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png']);
+
+  // Collect all unique directories containing this audiobook's files
+  const dirs = [...new Set(group.files.map(f => f.parentDir))];
+
+  // Check each directory for well-known cover files
+  for (const dir of dirs) {
+    let entries;
     try {
-      const data = await readFile(path.join(audiobookDir, imageFile));
-      const mime = mimeFromExt(path.extname(imageFile));
-      const result = await writeArt(ART_DIR, data, mime);
-      return result.relPath;
-    } catch {
-      // fall through
+      entries = await readdir(dir);
+    } catch { continue; }
+
+    const lowerMap = new Map(entries.map(f => [f.toLowerCase(), f]));
+
+    // Well-known cover files
+    for (const name of COVER_NAMES) {
+      const actual = lowerMap.get(name);
+      if (actual) {
+        try {
+          const data = await readFile(path.join(dir, actual));
+          const mime = mimeFromExt(path.extname(actual));
+          const result = await writeArt(ART_DIR, data, mime);
+          return result.relPath;
+        } catch { /* fall through */ }
+      }
+    }
+
+    // Any image file
+    const imageFile = entries.find(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()));
+    if (imageFile) {
+      try {
+        const data = await readFile(path.join(dir, imageFile));
+        const mime = mimeFromExt(path.extname(imageFile));
+        const result = await writeArt(ART_DIR, data, mime);
+        return result.relPath;
+      } catch { /* fall through */ }
     }
   }
 
-  // Try embedded art from first audio file
-  if (firstFileTags.artData && firstFileTags.artMime) {
+  // Embedded art from the first file with art data
+  const fileWithArt = group.files.find(f => f.artData && f.artMime);
+  if (fileWithArt?.artData && fileWithArt.artMime) {
     try {
-      const result = await writeArt(ART_DIR, firstFileTags.artData, firstFileTags.artMime);
+      const result = await writeArt(ART_DIR, fileWithArt.artData, fileWithArt.artMime);
       return result.relPath;
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }
 
   return null;
 }
 
-async function scanOneAudiobook(audiobookDir: string): Promise<{
+// ── Step 4: Upsert audiobook + chapters ─────────────────────
+
+async function upsertAudiobook(group: AudiobookGroup, coverPath: string | null): Promise<{
   chapterCount: number;
   totalDurationMs: number;
-} | null> {
-  let entries;
-  try {
-    entries = await readdir(audiobookDir, { withFileTypes: true });
-  } catch (e) {
-    logger.warn('audiobook-scan', `Cannot read directory: ${audiobookDir}`, {
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return null;
-  }
-
-  const allFiles: string[] = [];
-  const audioFiles: string[] = [];
-
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    allFiles.push(entry.name);
-    const ext = path.extname(entry.name).toLowerCase();
-    if (AUDIO_EXTS.has(ext)) {
-      audioFiles.push(entry.name);
-    }
-  }
-
-  if (audioFiles.length === 0) return null;
-
-  // Natural sort to determine chapter order
-  audioFiles.sort(naturalSort);
-
-  // Read metadata from first file
-  const firstFilePath = path.join(audiobookDir, audioFiles[0]);
-  let firstTags: Awaited<ReturnType<typeof readTags>> | null = null;
-  try {
-    firstTags = await readTags(firstFilePath);
-  } catch {
-    logger.warn('audiobook-scan', `Failed to read tags from: ${firstFilePath}`);
-  }
-
-  // Determine audiobook metadata
-  const dirName = path.basename(audiobookDir);
-  const title = firstTags?.album || dirName;
-  const author = firstTags?.albumartist || firstTags?.artist || null;
-  const narrator =
-    firstTags?.albumartist && firstTags?.artist && firstTags.albumartist !== firstTags.artist
-      ? firstTags.artist
-      : null;
-  const language = firstTags?.language || null;
-
-  // Detect cover art
-  const coverPath = await detectCover(audiobookDir, allFiles, {
-    artData: firstTags?.artData ?? null,
-    artMime: firstTags?.artMime ?? null,
-  });
-
-  // Collect chapter info (tags + stat for each file)
-  interface ChapterInfo {
-    filename: string;
-    position: number;
-    title: string;
-    durationMs: number | null;
-    sizeBytes: number;
-    mtimeMs: number;
-  }
-
-  const chapters: ChapterInfo[] = [];
+}> {
   let totalDurationMs = 0;
   let allDurationsKnown = true;
 
-  for (let i = 0; i < audioFiles.length; i++) {
-    const filename = audioFiles[i];
-    const filePath = path.join(audiobookDir, filename);
-
-    // Get tags — reuse firstTags for position 0
-    let tags: Awaited<ReturnType<typeof readTags>> | null = null;
-    if (i === 0) {
-      tags = firstTags;
-    } else {
-      try {
-        tags = await readTags(filePath);
-      } catch {
-        // duration will be null
-      }
-    }
-
-    let st;
-    try {
-      st = await stat(filePath);
-    } catch {
-      logger.warn('audiobook-scan', `Cannot stat file: ${filePath}`);
-      continue;
-    }
-
-    const chapterTitle = tags?.title || path.basename(filename, path.extname(filename));
-    const durationMs = tags?.durationMs ?? null;
-
-    if (durationMs != null) {
-      totalDurationMs += durationMs;
-    } else {
-      allDurationsKnown = false;
-    }
-
-    chapters.push({
-      filename,
-      position: chapters.length,
-      title: chapterTitle,
-      durationMs,
-      sizeBytes: st.size,
-      mtimeMs: Math.floor(st.mtimeMs),
-    });
+  for (const f of group.files) {
+    if (f.durationMs != null) totalDurationMs += f.durationMs;
+    else allDurationsKnown = false;
   }
-
   if (!allDurationsKnown) totalDurationMs = 0;
 
-  // Upsert audiobook
+  // Upsert audiobook (key is the stable grouping key)
   const { rows } = await db().query<{ id: number }>(
     `INSERT INTO audiobooks (path, title, author, narrator, language, cover_path, duration_ms)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -212,12 +310,15 @@ async function scanOneAudiobook(audiobookDir: string): Promise<{
        cover_path = EXCLUDED.cover_path, duration_ms = EXCLUDED.duration_ms,
        updated_at = now()
      RETURNING id`,
-    [audiobookDir, title, author, narrator, language, coverPath, totalDurationMs],
+    [group.key, group.title, group.author, group.narrator, group.language, coverPath, totalDurationMs],
   );
   const audiobookId = rows[0].id;
 
-  // Upsert chapters
-  for (const ch of chapters) {
+  // Upsert chapters (path = absolute file path)
+  for (let i = 0; i < group.files.length; i++) {
+    const f = group.files[i];
+    const chapterTitle = f.title || path.basename(f.filename, path.extname(f.filename));
+
     await db().query(
       `INSERT INTO audiobook_chapters (audiobook_id, path, title, position, duration_ms, size_bytes, mtime_ms)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -226,98 +327,66 @@ async function scanOneAudiobook(audiobookDir: string): Promise<{
          position = EXCLUDED.position,
          duration_ms = EXCLUDED.duration_ms, size_bytes = EXCLUDED.size_bytes,
          mtime_ms = EXCLUDED.mtime_ms`,
-      [audiobookId, ch.filename, ch.title, ch.position, ch.durationMs, ch.sizeBytes, ch.mtimeMs],
+      [audiobookId, f.absolutePath, chapterTitle, i, f.durationMs, f.sizeBytes, f.mtimeMs],
     );
   }
 
   // Remove stale chapters no longer on disk
-  const currentFilenames = chapters.map(ch => ch.filename);
+  const currentPaths = group.files.map(f => f.absolutePath);
   await db().query(
     `DELETE FROM audiobook_chapters WHERE audiobook_id = $1 AND path != ALL($2::text[])`,
-    [audiobookId, currentFilenames],
+    [audiobookId, currentPaths],
   );
 
-  return { chapterCount: chapters.length, totalDurationMs };
+  return { chapterCount: group.files.length, totalDurationMs };
 }
 
-// Recursively find directories that contain audio files (audiobook folders).
-// Supports any nesting depth (e.g., Author/Book/chapters or just Book/chapters).
-async function findAudiobookDirs(rootDir: string): Promise<string[]> {
-  const results: string[] = [];
-  const stack: string[] = [rootDir];
-
-  while (stack.length > 0) {
-    const dir = stack.pop()!;
-    let entries;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    let hasAudio = false;
-    const subdirs: string[] = [];
-
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        subdirs.push(path.join(dir, entry.name));
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
-        if (AUDIO_EXTS.has(ext)) hasAudio = true;
-      }
-    }
-
-    if (hasAudio) {
-      // This directory is an audiobook (contains audio files)
-      results.push(dir);
-      // Don't recurse into subdirs — chapter files are in this dir
-    } else {
-      // No audio here — recurse into subdirs (could be author/group folders)
-      stack.push(...subdirs);
-    }
-  }
-
-  return results;
-}
+// ── Main entry point ────────────────────────────────────────
 
 export async function scanAudiobooks(audiobookDirs: string[]): Promise<void> {
   const startedAt = Date.now();
-  logger.info('audiobook-scan', `Starting audiobook scan across ${audiobookDirs.length} director${audiobookDirs.length === 1 ? 'y' : 'ies'}`);
+  logger.info('audiobook-scan', `Starting smart audiobook scan across ${audiobookDirs.length} director${audiobookDirs.length === 1 ? 'y' : 'ies'}`);
 
-  let audiobookCount = 0;
+  // Step 1: Collect all audio files
+  const allFiles = await collectAllAudioFiles(audiobookDirs);
+  logger.info('audiobook-scan', `Found ${allFiles.length} audio files`);
+
+  if (allFiles.length === 0) {
+    await db().query(`DELETE FROM audiobooks`);
+    logger.info('audiobook-scan', 'No audio files found — cleared all audiobooks');
+    return;
+  }
+
+  // Step 2: Group into audiobooks
+  const groups = groupFilesIntoAudiobooks(allFiles);
+  logger.info('audiobook-scan', `Grouped into ${groups.length} audiobook${groups.length === 1 ? '' : 's'}`);
+
+  // Step 3 & 4: Process each group
   let totalChapters = 0;
   let totalDurationMs = 0;
-  const validPaths = new Set<string>();
+  const validKeys = new Set<string>();
 
-  for (const rootDir of audiobookDirs) {
-    // Recursively find all directories that contain audio files
-    const audiobookCandidates = await findAudiobookDirs(rootDir);
-
-    for (const audiobookDir of audiobookCandidates) {
-      try {
-        const result = await scanOneAudiobook(audiobookDir);
-        if (result) {
-          validPaths.add(audiobookDir);
-          audiobookCount++;
-          totalChapters += result.chapterCount;
-          totalDurationMs += result.totalDurationMs;
-        }
-      } catch (e) {
-        logger.error('audiobook-scan', `Failed to scan audiobook: ${audiobookDir}`, {
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
+  for (const group of groups) {
+    try {
+      const coverPath = await detectGroupCover(group);
+      const result = await upsertAudiobook(group, coverPath);
+      validKeys.add(group.key);
+      totalChapters += result.chapterCount;
+      totalDurationMs += result.totalDurationMs;
+    } catch (e) {
+      logger.error('audiobook-scan', `Failed to process audiobook "${group.title}"`, {
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
-  // Remove stale audiobooks no longer on disk
-  if (validPaths.size > 0) {
+  // Remove stale audiobooks no longer matched
+  if (validKeys.size > 0) {
     await db().query(
       `DELETE FROM audiobooks WHERE path != ALL($1::text[])`,
-      [Array.from(validPaths)],
+      [Array.from(validKeys)],
     );
   } else {
-    // If no valid audiobooks found at all, remove everything
     await db().query(`DELETE FROM audiobooks`);
   }
 
@@ -325,6 +394,6 @@ export async function scanAudiobooks(audiobookDirs: string[]): Promise<void> {
   const durationHrs = (totalDurationMs / 3_600_000).toFixed(1);
   logger.success(
     'audiobook-scan',
-    `Scan complete in ${elapsed}s — ${audiobookCount} audiobook${audiobookCount === 1 ? '' : 's'}, ${totalChapters} chapters, ${durationHrs}h total duration`,
+    `Scan complete in ${elapsed}s — ${groups.length} audiobook${groups.length === 1 ? '' : 's'}, ${totalChapters} chapters, ${durationHrs}h total duration`,
   );
 }
