@@ -307,10 +307,12 @@ export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
 
         const choice = data.choices?.[0];
         if (!choice) {
+          app.log.error(`OpenRouter empty choices: ${JSON.stringify(data)}`);
           return reply.code(502).send({ ok: false, error: 'Empty response from AI service' });
         }
 
         const msg = choice.message;
+        app.log.info(`[ai] Round ${rounds}: finish=${choice.finish_reason} tool_calls=${msg.tool_calls?.length ?? 0} content_len=${(msg.content || '').length}`);
 
         // If no tool calls, we have our final answer
         if (!msg.tool_calls || msg.tool_calls.length === 0) {
