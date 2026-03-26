@@ -29,16 +29,21 @@ interface AiChatBody {
 
 // Build a summary of the user's library for the system prompt
 async function buildLibraryContext(userId: string): Promise<string> {
-  const [trackCount, genres, artists, moods] = await Promise.all([
+  const [trackCount, genres, artistGenres, moods] = await Promise.all([
     db().query<{ count: string }>('SELECT count(*) FROM active_tracks'),
     db().query<{ genre: string; cnt: string }>(
       `SELECT genre, count(*) as cnt FROM track_genres
        GROUP BY genre ORDER BY cnt DESC LIMIT 20`
     ),
-    db().query<{ name: string; cnt: string }>(
-      `SELECT a.name, count(t.id) as cnt FROM artists a
-       JOIN active_tracks t ON t.artist = a.name
-       GROUP BY a.name ORDER BY cnt DESC LIMIT 30`
+    // Get artists with their genres for smarter recommendations
+    db().query<{ artist: string; genres: string; cnt: string }>(
+      `SELECT t.artist, 
+              string_agg(DISTINCT tg.genre, ', ') as genres,
+              count(DISTINCT t.id)::text as cnt
+       FROM active_tracks t
+       LEFT JOIN track_genres tg ON tg.track_id = t.id
+       WHERE t.artist IS NOT NULL
+       GROUP BY t.artist ORDER BY count(DISTINCT t.id) DESC LIMIT 30`
     ),
     db().query<{ mood: string; cnt: string }>(
       `SELECT mood, count(*) as cnt FROM active_tracks
@@ -49,14 +54,17 @@ async function buildLibraryContext(userId: string): Promise<string> {
 
   const total = trackCount.rows[0]?.count ?? '0';
   const topGenres = genres.rows.map(r => r.genre).join(', ') || 'unknown';
-  const topArtists = artists.rows.map(r => `${r.name} (${r.cnt} tracks)`).join(', ') || 'unknown';
+  const artistList = artistGenres.rows
+    .map(r => `${r.artist} (${r.cnt} tracks, ${r.genres || 'untagged'})`)
+    .join('\n  - ') || 'unknown';
   const topMoods = moods.rows.map(r => r.mood).join(', ') || 'none tagged';
 
   return `The user's music library has ${total} tracks.
-Top genres: ${topGenres}
-Artists in library: ${topArtists}
-Top moods: ${topMoods}
-IMPORTANT: Only these artists/tracks exist in the library. Search for these exact names.`;
+Genres: ${topGenres}
+Moods: ${topMoods}
+Artists in library:
+  - ${artistList}
+IMPORTANT: Only these artists exist in the library. You MUST use your world knowledge about each artist's actual musical style to match requests accurately.`;
 }
 
 const TOOL_DEFS = [
@@ -248,17 +256,20 @@ ${libraryContext}
 
 HOW TO HANDLE REQUESTS:
 1. The user's library is LOCAL — only the artists listed above are available.
-2. When the user describes a vibe, mood, genre, or category (e.g. "Polish hip hop for a night drive", "chill jazz", "90s rock workout"):
-   - Use YOUR WORLD KNOWLEDGE to identify which artists/songs from the library above fit that description.
-   - Consider the mood, energy, tempo, and cultural context of the request.
-   - Make MULTIPLE search_tracks calls for different matching artists to gather enough tracks.
-   - Example: "20 Polish rap for a night car ride" → you know Taco Hemingway and Bedoes are Polish rappers, so search for each separately.
-3. The search_tracks tool uses fuzzy matching — partial names and slight misspellings will still match.
-4. After finding tracks, ALWAYS call play_tracks (if user said "play") or queue_tracks (if "queue").
-5. If the user asks for a specific number of tracks (e.g. "20 songs"), try to get at least that many by searching multiple artists.
-6. When creating playlists, search for tracks first, then call create_playlist with the found track IDs.
-7. If you can't find enough tracks, tell the user what you found and suggest alternatives from the library.
-8. Keep responses concise. Tell the user what you're playing and why it fits their request.`;
+2. When the user requests a mood/vibe/genre (e.g. "romantic music", "chill night drive"):
+   - Use YOUR WORLD KNOWLEDGE about each artist's actual discography and musical style.
+   - Only select artists whose music GENUINELY fits the request.
+   - For example: Eminem is NOT romantic music. Metallica is NOT chill. Be accurate.
+   - If no artists in the library truly match the requested mood, be HONEST and say so.
+   - Suggest the closest match and explain why, e.g. "Your library is mostly rap and metal. The closest to romantic might be Dawid Podsiadło's pop tracks."
+3. You can also search by song title — some individual songs may fit even if the artist generally doesn't.
+   - Example: "Love The Way You Lie" by Eminem could work for an emotional playlist even though Eminem isn't typically "romantic".
+4. Make MULTIPLE search_tracks calls for different matching artists to gather enough tracks.
+5. After finding tracks, ALWAYS call play_tracks (if user said "play") or queue_tracks (if "queue").
+6. If the user asks for a specific number of tracks, try to get at least that many.
+7. When creating playlists, search for tracks first, then call create_playlist with the found track IDs.
+8. Keep responses concise. Tell the user what you're playing and why it fits their request.
+9. Be honest when the library doesn't have great matches — don't force bad recommendations.`;
 }
 
 export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
