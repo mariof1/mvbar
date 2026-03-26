@@ -5,6 +5,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 import { db } from './db.js';
+import { meili } from './meili.js';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODEL = 'openrouter/auto';
@@ -63,14 +64,13 @@ const TOOL_DEFS = [
     type: 'function' as const,
     function: {
       name: 'search_tracks',
-      description: 'Search the music library for tracks matching a query. Returns track IDs, titles, artists, albums, genres, and durations.',
+      description: 'Search the user\'s LOCAL music library using fuzzy matching. Handles partial names and misspellings. Search for specific artist names, song titles, or album names — not abstract concepts like "chill" or "Polish". Make multiple calls with different artist names to gather enough tracks.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Free-text search query (song title, artist, album, etc.)' },
-          genre: { type: 'string', description: 'Filter by genre' },
-          mood: { type: 'string', description: 'Filter by mood' },
-          artist: { type: 'string', description: 'Filter by artist name' },
+          query: { type: 'string', description: 'Artist name, song title, or album name to search for' },
+          genre: { type: 'string', description: 'Optional genre filter (exact match, e.g. "Rock", "Rap", "Electronic")' },
+          artist: { type: 'string', description: 'Optional artist name filter' },
           limit: { type: 'number', description: 'Max results (default 10, max 50)' },
         },
         required: ['query'],
@@ -129,42 +129,72 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
       const q = (args.query as string) || '';
       const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 50);
 
-      // Build SQL search against active_tracks (Meilisearch may not be available from API context)
+      // Use Meilisearch for fuzzy full-text search (handles typos, partial matches, etc.)
+      try {
+        const index = meili().index('tracks');
+
+        // Build filter array for Meilisearch
+        const filters: string[] = [];
+        if (args.genre) filters.push(`genre = "${(args.genre as string).replace(/"/g, '\\"')}"`);
+        if (args.artist) filters.push(`artist = "${(args.artist as string).replace(/"/g, '\\"')}"`);
+
+        const res = await index.search(q, {
+          limit,
+          filter: filters.length > 0 ? filters.join(' AND ') : undefined,
+          attributesToRetrieve: ['id', 'title', 'artist', 'album', 'genre', 'country', 'duration_ms'],
+        });
+
+        if (res.hits.length > 0) {
+          return { tracks: res.hits, source: 'meilisearch' };
+        }
+
+        // If filtered search returned nothing, retry without filters (broader match)
+        if (filters.length > 0) {
+          const broader = await index.search(q, {
+            limit,
+            attributesToRetrieve: ['id', 'title', 'artist', 'album', 'genre', 'country', 'duration_ms'],
+          });
+          if (broader.hits.length > 0) {
+            return { tracks: broader.hits, source: 'meilisearch_broad' };
+          }
+        }
+      } catch {
+        // Meilisearch unavailable, fall back to SQL
+      }
+
+      // SQL fallback with ILIKE for broader matching
       const conditions: string[] = [];
       const params: unknown[] = [];
       let idx = 1;
 
       if (q) {
-        conditions.push(`(lower(title) LIKE $${idx} OR lower(artist) LIKE $${idx} OR lower(album) LIKE $${idx})`);
-        params.push(`%${q.toLowerCase()}%`);
-        idx++;
-      }
-      if (args.genre) {
-        conditions.push(`lower(genre) LIKE $${idx}`);
-        params.push(`%${(args.genre as string).toLowerCase()}%`);
-        idx++;
-      }
-      if (args.mood) {
-        conditions.push(`lower(mood) LIKE $${idx}`);
-        params.push(`%${(args.mood as string).toLowerCase()}%`);
-        idx++;
+        // Split query into words for broader matching
+        const words = q.split(/\s+/).filter(w => w.length > 1);
+        if (words.length > 0) {
+          const wordConditions = words.map(() => {
+            const p = `$${idx++}`;
+            return `(title ILIKE ${p} OR artist ILIKE ${p} OR album ILIKE ${p} OR genre ILIKE ${p})`;
+          });
+          conditions.push(`(${wordConditions.join(' OR ')})`);
+          params.push(...words.map(w => `%${w}%`));
+        }
       }
       if (args.artist) {
-        conditions.push(`lower(artist) LIKE $${idx}`);
-        params.push(`%${(args.artist as string).toLowerCase()}%`);
+        conditions.push(`artist ILIKE $${idx}`);
+        params.push(`%${args.artist as string}%`);
         idx++;
       }
 
       const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
       const r = await db().query<{
-        id: number; title: string; artist: string; album: string; genre: string; mood: string; duration_ms: number;
+        id: number; title: string; artist: string; album: string; genre: string; duration_ms: number;
       }>(
-        `SELECT id, title, artist, album, genre, mood, duration_ms
+        `SELECT id, title, artist, album, genre, duration_ms
          FROM active_tracks ${where}
          ORDER BY random() LIMIT $${idx}`,
         [...params, limit]
       );
-      return { tracks: r.rows };
+      return { tracks: r.rows, source: 'sql' };
     }
 
     case 'play_tracks':
@@ -216,22 +246,19 @@ You help users discover, play, and organize their music library through natural 
 
 ${libraryContext}
 
-IMPORTANT search guidelines:
-- The search_tracks tool searches the user's LOCAL library only (not the internet).
-- The query field does full-text search on title, artist, and album fields.
-- The genre field filters by genre tag (e.g. "Rock", "Rap", "Electronic").
-- When the user asks for music by category (e.g. "Polish hip hop", "chill jazz", "90s rock"):
-  1. Use your knowledge to identify actual artist names or song titles that fit the category.
-  2. Search for those specific artists/titles — NOT abstract descriptions like "polish" or "chill".
-  3. You can make MULTIPLE search_tracks calls in parallel to find different artists.
-  4. Example: "play Polish hip hop" → search for "Taco Hemingway", "Bedoes", "Quebonafide", etc.
-- When a search returns 0 results, try searching for related artists or broader terms.
-- ALWAYS use play_tracks after finding tracks if the user asked to play/listen. Don't just list results.
-- When asked to queue songs, search first then use queue_tracks.
-- When asked to create a playlist, search for tracks and then use create_playlist.
-- Keep responses concise and musical. Use emoji sparingly.
-- You can combine multiple tool calls in a single response.
-- Always tell the user what you found and what you're doing.`;
+HOW TO HANDLE REQUESTS:
+1. The user's library is LOCAL — only the artists listed above are available.
+2. When the user describes a vibe, mood, genre, or category (e.g. "Polish hip hop for a night drive", "chill jazz", "90s rock workout"):
+   - Use YOUR WORLD KNOWLEDGE to identify which artists/songs from the library above fit that description.
+   - Consider the mood, energy, tempo, and cultural context of the request.
+   - Make MULTIPLE search_tracks calls for different matching artists to gather enough tracks.
+   - Example: "20 Polish rap for a night car ride" → you know Taco Hemingway and Bedoes are Polish rappers, so search for each separately.
+3. The search_tracks tool uses fuzzy matching — partial names and slight misspellings will still match.
+4. After finding tracks, ALWAYS call play_tracks (if user said "play") or queue_tracks (if "queue").
+5. If the user asks for a specific number of tracks (e.g. "20 songs"), try to get at least that many by searching multiple artists.
+6. When creating playlists, search for tracks first, then call create_playlist with the found track IDs.
+7. If you can't find enough tracks, tell the user what you found and suggest alternatives from the library.
+8. Keep responses concise. Tell the user what you're playing and why it fits their request.`;
 }
 
 export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
