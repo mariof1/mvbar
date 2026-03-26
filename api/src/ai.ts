@@ -8,7 +8,7 @@ import { db } from './db.js';
 import { meili } from './meili.js';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'openrouter/auto';
+const DEFAULT_MODEL = 'google/gemini-2.0-flash-001';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
