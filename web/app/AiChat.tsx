@@ -416,9 +416,18 @@ export default function AiChat({ isOpen, onClose, token, nowPlaying, onPlay, onA
                       <span className="text-sm mt-0.5 shrink-0">✨</span>
                       <div className="min-w-0">
                         <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
-                        {msg.toolResults?.map((tr, j) => (
-                          <ToolResultCards key={j} result={tr} onPlay={onPlay} onQueue={onAddToQueue} />
-                        ))}
+                        {msg.toolResults && (() => {
+                          const hasPlayAction = msg.toolResults.some(tr => tr.result?.action === 'play' || tr.result?.action === 'queue');
+                          return msg.toolResults
+                            .filter(tr => {
+                              // Skip search/mix results when play_tracks already shows the same tracks
+                              if (hasPlayAction && !tr.result?.action && tr.result?.tracks?.length > 0) return false;
+                              return true;
+                            })
+                            .map((tr, j) => (
+                              <ToolResultCards key={j} result={tr} onPlay={onPlay} onQueue={onAddToQueue} />
+                            ));
+                        })()}
                       </div>
                     </div>
                   )}

@@ -36,7 +36,7 @@ COPY web/package*.json ./
 # No cache mount - prevents serving wrong-arch SWC binaries in multi-platform builds
 RUN npm ci
 COPY web/ .
-RUN npm run build
+RUN --mount=type=cache,target=/src/web/.next/cache npm run build
 
 FROM alpine:3.20
 

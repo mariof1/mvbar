@@ -346,6 +346,16 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
       const minDurMs = args.min_duration_sec ? Number(args.min_duration_sec) * 1000 : null;
       const maxDurMs = args.max_duration_sec ? Number(args.max_duration_sec) * 1000 : null;
 
+      // Detect abstract concept queries that will produce bad text-match results
+      const abstractPatterns = /^(bass drop|guitar solo|heavy riff|sad melod|fast beat|slow tempo|hard hit|deep bass|chill vibe|epic drop|head bang|mosh pit|dance floor|club bang|car ride|night drive|workout|party|romantic|aggressive|energetic|melanchol|upbeat|downtempo|ambient|atmospheric|groovy|funky|soulful|dreamy|dark|intense|powerful|smooth|relaxing|motivat|inspir)/i;
+      if (!args.genre && !args.artist && abstractPatterns.test(q)) {
+        return {
+          tracks: [],
+          warning: `"${q}" is an abstract concept — text search will return wrong results. DO NOT ask the user what to do. Instead, IMMEDIATELY retry by searching with genre filter or artist names. Suggested genres for this concept: Dubstep, Drum and Bass, EDM, Trap, Techno, Electronic, Electro. Call search_tracks again NOW with genre="Electro" or genre="Techno" or search by artist names known for this style.`,
+          source: 'abstract_concept_rejected',
+        };
+      }
+
       try {
         const index = meili().index('tracks');
         const filters: string[] = [];
@@ -1190,6 +1200,24 @@ HOW TO HANDLE REQUESTS:
    - If no artists in the library truly match the requested mood, be HONEST and say so.
    - Suggest the closest match and explain why.
 3. You can also search by song title — some individual songs may fit even if the artist generally doesn't.
+
+CRITICAL: ABSTRACT MUSIC CONCEPTS vs TEXT SEARCH:
+5. The search_tracks tool does TEXT matching — it searches titles, artist names, album names, and genres.
+6. NEVER search for abstract musical concepts as text queries. These will match WRONG results:
+   - "bass drop" → finds songs with "bass" or "drop" in the title, NOT songs with actual bass drops
+   - "guitar solo" → finds songs with "guitar" in the name, NOT songs with solos
+   - "sad melody" → finds songs with "sad" in the title, NOT actually sad songs
+   - "fast beat" → finds songs with "fast" or "beat" in the name
+7. Instead, for abstract concepts, use YOUR WORLD KNOWLEDGE to:
+   - Identify GENRES that match (e.g. "bass drop" → search genres like "Dubstep", "Drum and Bass", "Trap", "EDM")
+   - Identify ARTISTS known for that style (e.g. bass drops → Skrillex, Excision, Bassnectar, Zeds Dead)
+   - Search by those artist names or genre filters, NOT by the concept words
+8. Examples of correct handling:
+   - "songs with bass drop" → search genre="Dubstep" or genre="Drum and Bass" or by known bass-heavy artists
+   - "acoustic chill" → search genre="Folk" or genre="Acoustic" or artists like Jack Johnson, Iron & Wine
+   - "epic orchestral" → search genre="Soundtrack" or genre="Classical" or artists like Hans Zimmer
+   - "groovy funk" → search genre="Funk" or artists like James Brown, Parliament
+   - "heavy riffs" → search genre="Metal" or genre="Hard Rock" or artists like Metallica, Black Sabbath
 
 CRITICAL: COUNTRY/NATIONALITY/LANGUAGE REQUESTS:
 4. When the user asks for "Polish rap", "French pop", "German metal", etc.:
