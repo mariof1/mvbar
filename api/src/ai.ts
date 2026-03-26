@@ -7,7 +7,7 @@ import fp from 'fastify-plugin';
 import { db } from './db.js';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'openrouter/auto';
+const DEFAULT_MODEL = 'google/gemini-2.0-flash-exp:free';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -314,7 +314,9 @@ export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
 
         // If no tool calls, we have our final answer
         if (!msg.tool_calls || msg.tool_calls.length === 0) {
-          finalResponse = msg.content || '';
+          finalResponse = msg.content || (toolResults.length > 0
+            ? 'Here are the results!'
+            : 'I couldn\'t generate a response. Please try rephrasing your request.');
           break;
         }
 
