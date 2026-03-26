@@ -128,6 +128,42 @@ const TOOL_DEFS = [
       },
     },
   },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'get_unplayed_tracks',
+      description: 'Get tracks the user has NEVER played. Great for discovering forgotten music in the library. Can filter by genre or artist.',
+      parameters: {
+        type: 'object',
+        properties: {
+          genre: { type: 'string', description: 'Optional genre filter (e.g. "Rock", "Rap")' },
+          artist: { type: 'string', description: 'Optional artist name filter' },
+          limit: { type: 'number', description: 'Max results (default 20, max 50)' },
+          order: { type: 'string', enum: ['random', 'newest'], description: 'Order results: "random" (default) for discovery, "newest" for recently added' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'get_listening_stats',
+      description: 'Get the user\'s listening statistics: most played tracks, recently played, least played, and skip data. Use this to understand user preferences or answer questions like "what do I listen to most?"',
+      parameters: {
+        type: 'object',
+        properties: {
+          stat_type: {
+            type: 'string',
+            enum: ['top_tracks', 'recently_played', 'least_played', 'top_artists', 'top_genres'],
+            description: 'Type of stats to retrieve',
+          },
+          limit: { type: 'number', description: 'Max results (default 20, max 50)' },
+        },
+        required: ['stat_type'],
+      },
+    },
+  },
 ];
 
 // Execute a tool call against the local database / search
@@ -243,6 +279,135 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
       return { action: 'created_playlist', playlist: { id: plId, name: plName, track_count: ids.length } };
     }
 
+    case 'get_unplayed_tracks': {
+      const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50);
+      const order = (args.order as string) === 'newest' ? 't.id DESC' : 'random()';
+
+      const conditions: string[] = [];
+      const params: unknown[] = [userId];
+      let idx = 2;
+
+      if (args.genre) {
+        conditions.push(`EXISTS (SELECT 1 FROM track_genres tg WHERE tg.track_id = t.id AND tg.genre ILIKE $${idx})`);
+        params.push(`%${args.genre as string}%`);
+        idx++;
+      }
+      if (args.artist) {
+        conditions.push(`t.artist ILIKE $${idx}`);
+        params.push(`%${args.artist as string}%`);
+        idx++;
+      }
+
+      const where = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '';
+
+      const r = await db().query<{
+        id: number; title: string; artist: string; album: string; genre: string; duration_ms: number;
+      }>(
+        `SELECT t.id, t.title, t.artist, t.album, t.genre, t.duration_ms
+         FROM active_tracks t
+         WHERE NOT EXISTS (
+           SELECT 1 FROM user_track_stats uts
+           WHERE uts.track_id = t.id AND uts.user_id = $1 AND uts.play_count > 0
+         )
+         ${where}
+         ORDER BY ${order} LIMIT $${idx}`,
+        [...params, limit]
+      );
+      return { tracks: r.rows, total_unplayed: r.rows.length };
+    }
+
+    case 'get_listening_stats': {
+      const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50);
+      const statType = args.stat_type as string;
+
+      switch (statType) {
+        case 'top_tracks': {
+          const r = await db().query<{
+            id: number; title: string; artist: string; album: string;
+            play_count: number; skip_count: number; last_played_at: string;
+          }>(
+            `SELECT t.id, t.title, t.artist, t.album,
+                    uts.play_count, uts.skip_count, uts.last_played_at
+             FROM user_track_stats uts
+             JOIN active_tracks t ON t.id = uts.track_id
+             WHERE uts.user_id = $1 AND uts.play_count > 0
+             ORDER BY uts.play_count DESC, uts.last_played_at DESC
+             LIMIT $2`,
+            [userId, limit]
+          );
+          return { stat_type: 'top_tracks', tracks: r.rows };
+        }
+
+        case 'recently_played': {
+          const r = await db().query<{
+            id: number; title: string; artist: string; album: string; played_at: string;
+          }>(
+            `SELECT t.id, t.title, t.artist, t.album, ph.played_at
+             FROM play_history ph
+             JOIN active_tracks t ON t.id = ph.track_id
+             WHERE ph.user_id = $1
+             ORDER BY ph.played_at DESC
+             LIMIT $2`,
+            [userId, limit]
+          );
+          return { stat_type: 'recently_played', tracks: r.rows };
+        }
+
+        case 'least_played': {
+          const r = await db().query<{
+            id: number; title: string; artist: string; album: string;
+            play_count: number; last_played_at: string;
+          }>(
+            `SELECT t.id, t.title, t.artist, t.album,
+                    COALESCE(uts.play_count, 0) as play_count,
+                    uts.last_played_at
+             FROM active_tracks t
+             LEFT JOIN user_track_stats uts ON uts.track_id = t.id AND uts.user_id = $1
+             ORDER BY COALESCE(uts.play_count, 0) ASC, random()
+             LIMIT $2`,
+            [userId, limit]
+          );
+          return { stat_type: 'least_played', tracks: r.rows };
+        }
+
+        case 'top_artists': {
+          const r = await db().query<{
+            artist: string; total_plays: string; track_count: string;
+          }>(
+            `SELECT t.artist, SUM(uts.play_count)::text as total_plays,
+                    COUNT(DISTINCT t.id)::text as track_count
+             FROM user_track_stats uts
+             JOIN active_tracks t ON t.id = uts.track_id
+             WHERE uts.user_id = $1 AND uts.play_count > 0 AND t.artist IS NOT NULL
+             GROUP BY t.artist
+             ORDER BY SUM(uts.play_count) DESC
+             LIMIT $2`,
+            [userId, limit]
+          );
+          return { stat_type: 'top_artists', artists: r.rows };
+        }
+
+        case 'top_genres': {
+          const r = await db().query<{
+            genre: string; total_plays: string;
+          }>(
+            `SELECT tg.genre, SUM(uts.play_count)::text as total_plays
+             FROM user_track_stats uts
+             JOIN track_genres tg ON tg.track_id = uts.track_id
+             WHERE uts.user_id = $1 AND uts.play_count > 0
+             GROUP BY tg.genre
+             ORDER BY SUM(uts.play_count) DESC
+             LIMIT $2`,
+            [userId, limit]
+          );
+          return { stat_type: 'top_genres', genres: r.rows };
+        }
+
+        default:
+          return { error: `Unknown stat_type: ${statType}` };
+      }
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -269,7 +434,23 @@ HOW TO HANDLE REQUESTS:
 6. If the user asks for a specific number of tracks, try to get at least that many.
 7. When creating playlists, search for tracks first, then call create_playlist with the found track IDs.
 8. Keep responses concise. Tell the user what you're playing and why it fits their request.
-9. Be honest when the library doesn't have great matches — don't force bad recommendations.`;
+9. Be honest when the library doesn't have great matches — don't force bad recommendations.
+
+LISTENING HISTORY & DISCOVERY:
+10. Use get_unplayed_tracks when user asks for "songs I haven't heard", "surprise me", "something new", or "tracks I haven't played".
+11. Use get_listening_stats to answer questions about habits: "what do I listen to most?", "my top artists", "recently played", etc.
+12. For "least played" or "rediscover" requests, use get_listening_stats with stat_type "least_played".
+
+CHARTS & EXTERNAL KNOWLEDGE:
+13. When the user asks for "top 50 in UK", "Polish chart hits", "Billboard top songs", or similar chart-based requests:
+    - Use YOUR WORLD KNOWLEDGE of popular music charts, famous artists, and hit songs from those regions/charts.
+    - Then cross-reference with the LOCAL library by searching for those artists/songs.
+    - Tell the user which chart hits you found in their library and which ones are missing.
+    - Example: If asked "play top UK hits", think of artists like Adele, Ed Sheeran, Coldplay, etc., then search the library for each.
+14. For country-specific requests (e.g. "Polish rap", "UK grime", "French pop"):
+    - Use your knowledge of artists from that country/scene.
+    - Search for those artists in the library.
+    - Be specific about what you found vs what's missing.`;
 }
 
 export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
