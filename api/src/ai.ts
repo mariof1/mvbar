@@ -50,7 +50,7 @@ async function buildLibraryContext(userId: string): Promise<string> {
        FROM active_tracks t
        LEFT JOIN track_genres tg ON tg.track_id = t.id
        WHERE t.artist IS NOT NULL
-       GROUP BY t.artist ORDER BY count(DISTINCT t.id) DESC LIMIT 30`
+       GROUP BY t.artist ORDER BY count(DISTINCT t.id) DESC LIMIT 80`
     ),
     db().query<{ mood: string; cnt: string }>(
       `SELECT mood, count(*) as cnt FROM active_tracks
@@ -89,14 +89,16 @@ const TOOL_DEFS = [
     type: 'function' as const,
     function: {
       name: 'search_tracks',
-      description: 'Search the user\'s LOCAL music library using fuzzy matching. Handles partial names and misspellings. Search for specific artist names, song titles, or album names — not abstract concepts like "chill" or "Polish". Make multiple calls with different artist names to gather enough tracks.',
+      description: 'Search the user\'s LOCAL music library using fuzzy matching. Handles partial names and misspellings. Search for specific artist names, song titles, or album names — NOT abstract concepts like "chill" or "Polish". For country/nationality requests, search by KNOWN ARTIST NAMES from that country. Make multiple calls with different artist names to gather enough tracks.',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'Artist name, song title, or album name to search for' },
           genre: { type: 'string', description: 'Optional genre filter (exact match, e.g. "Rock", "Rap", "Electronic")' },
           artist: { type: 'string', description: 'Optional artist name filter' },
-          limit: { type: 'number', description: 'Max results (default 10, max 50)' },
+          limit: { type: 'number', description: 'Max results (default 10, max 100)' },
+          min_duration_sec: { type: 'number', description: 'Optional minimum track duration in seconds' },
+          max_duration_sec: { type: 'number', description: 'Optional maximum track duration in seconds' },
         },
         required: ['query'],
       },
@@ -308,13 +310,17 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
   switch (name) {
     case 'search_tracks': {
       const q = (args.query as string) || '';
-      const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 50);
+      const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 100);
+      const minDurMs = args.min_duration_sec ? Number(args.min_duration_sec) * 1000 : null;
+      const maxDurMs = args.max_duration_sec ? Number(args.max_duration_sec) * 1000 : null;
 
       try {
         const index = meili().index('tracks');
         const filters: string[] = [];
         if (args.genre) filters.push(`genre = "${(args.genre as string).replace(/"/g, '\\"')}"`);
         if (args.artist) filters.push(`artist = "${(args.artist as string).replace(/"/g, '\\"')}"`);
+        if (minDurMs) filters.push(`duration_ms >= ${minDurMs}`);
+        if (maxDurMs) filters.push(`duration_ms <= ${maxDurMs}`);
 
         const res = await index.search(q, {
           limit,
@@ -326,9 +332,14 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
           return { tracks: res.hits, source: 'meilisearch' };
         }
 
-        if (filters.length > 0) {
+        // Retry without genre/artist filters but keep duration
+        if (args.genre || args.artist) {
+          const durFilters: string[] = [];
+          if (minDurMs) durFilters.push(`duration_ms >= ${minDurMs}`);
+          if (maxDurMs) durFilters.push(`duration_ms <= ${maxDurMs}`);
           const broader = await index.search(q, {
             limit,
+            filter: durFilters.length > 0 ? durFilters.join(' AND ') : undefined,
             attributesToRetrieve: ['id', 'title', 'artist', 'album', 'genre', 'country', 'duration_ms'],
           });
           if (broader.hits.length > 0) {
@@ -357,6 +368,16 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
       if (args.artist) {
         conditions.push(`artist ILIKE $${idx}`);
         params.push(`%${args.artist as string}%`);
+        idx++;
+      }
+      if (minDurMs) {
+        conditions.push(`duration_ms >= $${idx}`);
+        params.push(minDurMs);
+        idx++;
+      }
+      if (maxDurMs) {
+        conditions.push(`duration_ms <= $${idx}`);
+        params.push(maxDurMs);
         idx++;
       }
 
@@ -923,23 +944,34 @@ HOW TO HANDLE REQUESTS:
    - Suggest the closest match and explain why.
 3. You can also search by song title — some individual songs may fit even if the artist generally doesn't.
 
+CRITICAL: COUNTRY/NATIONALITY/LANGUAGE REQUESTS:
+4. When the user asks for "Polish rap", "French pop", "German metal", etc.:
+   - NEVER search for the nationality word (e.g. "polish", "french") as a text query. This returns wrong results like songs with "polish" in the title.
+   - Instead, use YOUR WORLD KNOWLEDGE to identify actual artists from that country who are in the library.
+   - Look at the artist list above and identify which artists are actually from that country.
+   - Make MULTIPLE search_tracks calls by ARTIST NAME (e.g. search for "Taco Hemingway", "Quebonafide", "Filipek", etc.)
+   - If the user asks for 100 tracks, make many search calls (10-15 different artists, ~10 tracks each) to gather enough.
+   - You can also combine: search by artist name WITH genre filter for better accuracy.
+
 CRITICAL AUTO-PLAY RULES:
-4. When the user says "play", "put on", "give me", "start", or any playback intent — you MUST call play_tracks after searching. NEVER just show search results without playing them.
-5. Default behavior: if the user's intent is clearly to listen to music (not just asking a question), ALWAYS auto-play. Don't ask for confirmation.
-6. After searching, IMMEDIATELY call play_tracks with ALL found track IDs. Do NOT stop at search results.
-7. Keep responses very concise — just say what you're playing. No need for lengthy explanations.
+5. When the user says "play", "put on", "give me", "start", or any playback intent — you MUST call play_tracks after searching. NEVER just show search results without playing them.
+6. Default behavior: if the user's intent is clearly to listen to music (not just asking a question), ALWAYS auto-play. Don't ask for confirmation.
+7. After searching, IMMEDIATELY call play_tracks with ALL found track IDs. Do NOT stop at search results.
+8. Keep responses very concise — just say what you're playing. No need for lengthy explanations.
 
 VARIETY AND DIVERSITY:
-8. When searching for a mood/genre/vibe, use ONE broad search_tracks call with a relevant genre or keyword, not multiple searches for the same artist.
-9. ALWAYS aim for artist diversity — never return 10 tracks from the same artist. Spread across different artists.
-10. For mood/vibe requests, search broadly (by genre, keyword, or use smart_mix/get_unplayed_tracks) rather than searching artist by artist.
-11. If a search returns too many tracks from one artist, pick 2-3 per artist max and combine.
-12. Shuffle/randomize results so the user gets variety each time.
+9. When searching for a mood/genre/vibe, use ONE broad search_tracks call with a relevant genre or keyword, not multiple searches for the same artist.
+10. ALWAYS aim for artist diversity — never return 10 tracks from the same artist. Spread across different artists.
+11. For mood/vibe requests, search broadly (by genre, keyword, or use smart_mix/get_unplayed_tracks) rather than searching artist by artist.
+12. If a search returns too many tracks from one artist, pick 2-3 per artist max and combine.
+13. Shuffle/randomize results so the user gets variety each time.
 
 PLAYLISTS & NUMBERS:
-13. If the user asks for a specific number of tracks, try to get at least that many.
-14. When creating playlists, search for tracks first, then call create_playlist with the found track IDs.
-15. Be honest when the library doesn't have great matches — don't force bad recommendations.
+14. If the user asks for a specific number of tracks (e.g. "100 songs"), make MULTIPLE search calls to gather enough tracks. Each search returns up to 100 results.
+15. When creating playlists, search for tracks first, then call create_playlist with the found track IDs. Deduplicate by track ID before creating.
+16. For large playlists (50+), make 5-15 search calls with different artist names or keywords to reach the target count.
+17. Be honest when the library doesn't have great matches — don't force bad recommendations.
+18. Use duration filters (min_duration_sec, max_duration_sec) when the user specifies track length requirements.
 
 PLAYBACK AWARENESS:
 10. If the user says "what's playing?", "who is this?", "play more like this", or "I love this" — use the CURRENTLY PLAYING info above.
@@ -1018,7 +1050,7 @@ export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
       let finalResponse = '';
       const toolResults: unknown[] = [];
       let rounds = 0;
-      const MAX_ROUNDS = 4;
+      const MAX_ROUNDS = 8;
 
       while (rounds < MAX_ROUNDS) {
         rounds++;

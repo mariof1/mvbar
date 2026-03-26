@@ -55,7 +55,7 @@ export async function ensureTracksIndex() {
     ],
     filterableAttributes: [
       'library_id', 'artist', 'album_artist', 'album', 'ext', 'genre', 'country', 'year', 'language',
-      'composer', 'mood', 'bpm', 'initial_key'
+      'composer', 'mood', 'bpm', 'initial_key', 'duration_ms'
     ],
     sortableAttributes: ['artist', 'album_artist', 'album', 'title', 'year', 'bpm'],
     typoTolerance: {
