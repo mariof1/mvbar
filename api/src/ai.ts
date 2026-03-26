@@ -150,6 +150,38 @@ const TOOL_DEFS = [
   {
     type: 'function' as const,
     function: {
+      name: 'create_smart_playlist',
+      description: 'Create a playlist by querying the library with multiple criteria in ONE call. Much more efficient than searching + creating separately. Use this when the user wants a playlist based on rules/filters.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Playlist name' },
+          count: { type: 'number', description: 'Number of tracks to include (default 50, max 500)' },
+          genres: { type: 'array', items: { type: 'string' }, description: 'Include tracks matching ANY of these genres (e.g. ["Rap", "Hip-Hop"])' },
+          exclude_genres: { type: 'array', items: { type: 'string' }, description: 'Exclude tracks matching ANY of these genres' },
+          artists: { type: 'array', items: { type: 'string' }, description: 'Include tracks by ANY of these artists (fuzzy match)' },
+          exclude_artists: { type: 'array', items: { type: 'string' }, description: 'Exclude tracks by these artists' },
+          min_duration_sec: { type: 'number', description: 'Minimum track duration in seconds' },
+          max_duration_sec: { type: 'number', description: 'Maximum track duration in seconds' },
+          min_year: { type: 'number', description: 'Minimum release year' },
+          max_year: { type: 'number', description: 'Maximum release year' },
+          moods: { type: 'array', items: { type: 'string' }, description: 'Include tracks matching ANY of these moods' },
+          min_bpm: { type: 'number', description: 'Minimum BPM' },
+          max_bpm: { type: 'number', description: 'Maximum BPM' },
+          played_status: { type: 'string', enum: ['any', 'never_played', 'played', 'favorites'], description: 'Filter by play history (default: any)' },
+          min_play_count: { type: 'number', description: 'Minimum play count' },
+          max_play_count: { type: 'number', description: 'Maximum play count' },
+          added_within_days: { type: 'number', description: 'Only tracks added within the last N days' },
+          sort_by: { type: 'string', enum: ['random', 'newest', 'oldest', 'most_played', 'least_played', 'title', 'artist'], description: 'Sort order (default: random)' },
+          max_per_artist: { type: 'number', description: 'Maximum tracks per artist for diversity (default: unlimited)' },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
       name: 'get_unplayed_tracks',
       description: 'Get tracks the user has NEVER played. Great for discovering forgotten music in the library.',
       parameters: {
@@ -427,6 +459,221 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
       }
 
       return { action: 'created_playlist', playlist: { id: plId, name: plName, track_count: ids.length } };
+    }
+
+    case 'create_smart_playlist': {
+      const plName = (args.name as string) || 'Smart Playlist';
+      const count = Math.min(Math.max(Number(args.count) || 50, 1), 500);
+      const maxPerArtist = args.max_per_artist ? Math.max(Number(args.max_per_artist), 1) : null;
+
+      const conditions: string[] = [];
+      const joins: string[] = [];
+      const params: unknown[] = [];
+      let idx = 1;
+      let userIdParam = ''; // will hold the $N for userId, set lazily
+
+      const getUserIdParam = () => {
+        if (!userIdParam) {
+          userIdParam = `$${idx++}`;
+          params.push(userId);
+        }
+        return userIdParam;
+      };
+
+      // Genre filters
+      if (args.genres && Array.isArray(args.genres) && (args.genres as string[]).length > 0) {
+        const genreList = (args.genres as string[]);
+        const genreConds = genreList.map(() => `tg.genre ILIKE $${idx++}`);
+        conditions.push(`EXISTS (SELECT 1 FROM track_genres tg WHERE tg.track_id = t.id AND (${genreConds.join(' OR ')}))`);
+        params.push(...genreList.map(g => `%${g}%`));
+      }
+      if (args.exclude_genres && Array.isArray(args.exclude_genres) && (args.exclude_genres as string[]).length > 0) {
+        const exGenres = (args.exclude_genres as string[]);
+        const exConds = exGenres.map(() => `tg2.genre ILIKE $${idx++}`);
+        conditions.push(`NOT EXISTS (SELECT 1 FROM track_genres tg2 WHERE tg2.track_id = t.id AND (${exConds.join(' OR ')}))`);
+        params.push(...exGenres.map(g => `%${g}%`));
+      }
+
+      // Artist filters (fuzzy)
+      if (args.artists && Array.isArray(args.artists) && (args.artists as string[]).length > 0) {
+        const artistList = (args.artists as string[]);
+        const artistConds = artistList.map(() => `t.artist ILIKE $${idx++}`);
+        conditions.push(`(${artistConds.join(' OR ')})`);
+        params.push(...artistList.map(a => `%${a}%`));
+      }
+      if (args.exclude_artists && Array.isArray(args.exclude_artists) && (args.exclude_artists as string[]).length > 0) {
+        const exArtists = (args.exclude_artists as string[]);
+        const exConds = exArtists.map(() => `t.artist NOT ILIKE $${idx++}`);
+        conditions.push(`(${exConds.join(' AND ')})`);
+        params.push(...exArtists.map(a => `%${a}%`));
+      }
+
+      // Duration
+      if (args.min_duration_sec) {
+        conditions.push(`t.duration_ms >= $${idx++}`);
+        params.push(Number(args.min_duration_sec) * 1000);
+      }
+      if (args.max_duration_sec) {
+        conditions.push(`t.duration_ms <= $${idx++}`);
+        params.push(Number(args.max_duration_sec) * 1000);
+      }
+
+      // Year
+      if (args.min_year) {
+        conditions.push(`t.year >= $${idx++}`);
+        params.push(Number(args.min_year));
+      }
+      if (args.max_year) {
+        conditions.push(`t.year <= $${idx++}`);
+        params.push(Number(args.max_year));
+      }
+
+      // Mood
+      if (args.moods && Array.isArray(args.moods) && (args.moods as string[]).length > 0) {
+        const moodList = (args.moods as string[]);
+        const moodConds = moodList.map(() => `t.mood ILIKE $${idx++}`);
+        conditions.push(`(${moodConds.join(' OR ')})`);
+        params.push(...moodList.map(m => `%${m}%`));
+      }
+
+      // BPM
+      if (args.min_bpm) {
+        conditions.push(`t.bpm >= $${idx++}`);
+        params.push(Number(args.min_bpm));
+      }
+      if (args.max_bpm) {
+        conditions.push(`t.bpm <= $${idx++}`);
+        params.push(Number(args.max_bpm));
+      }
+
+      // Play status
+      const playedStatus = args.played_status as string;
+      if (playedStatus === 'never_played') {
+        joins.push(`LEFT JOIN user_track_stats uts ON uts.track_id = t.id AND uts.user_id = ${getUserIdParam()}`);
+        conditions.push('uts.track_id IS NULL');
+      } else if (playedStatus === 'played') {
+        joins.push(`JOIN user_track_stats uts ON uts.track_id = t.id AND uts.user_id = ${getUserIdParam()}`);
+        conditions.push('uts.play_count > 0');
+      } else if (playedStatus === 'favorites') {
+        joins.push(`JOIN favorite_tracks ft ON ft.track_id = t.id AND ft.user_id = ${getUserIdParam()}`);
+      } else {
+        // For play count filters without a status
+        if (args.min_play_count || args.max_play_count) {
+          joins.push(`LEFT JOIN user_track_stats uts ON uts.track_id = t.id AND uts.user_id = ${getUserIdParam()}`);
+        }
+      }
+
+      if (args.min_play_count) {
+        conditions.push(`COALESCE(uts.play_count, 0) >= $${idx++}`);
+        params.push(Number(args.min_play_count));
+      }
+      if (args.max_play_count) {
+        conditions.push(`COALESCE(uts.play_count, 0) <= $${idx++}`);
+        params.push(Number(args.max_play_count));
+      }
+
+      // Recently added
+      if (args.added_within_days) {
+        conditions.push(`t.created_at >= NOW() - INTERVAL '1 day' * $${idx++}`);
+        params.push(Number(args.added_within_days));
+      }
+
+      // Sort
+      let orderBy = 'random()';
+      switch (args.sort_by) {
+        case 'newest': orderBy = 't.id DESC'; break;
+        case 'oldest': orderBy = 't.id ASC'; break;
+        case 'most_played': {
+          if (!joins.some(j => j.includes('user_track_stats'))) {
+            joins.push(`LEFT JOIN user_track_stats uts ON uts.track_id = t.id AND uts.user_id = ${getUserIdParam()}`);
+          }
+          orderBy = 'COALESCE(uts.play_count, 0) DESC';
+          break;
+        }
+        case 'least_played': {
+          if (!joins.some(j => j.includes('user_track_stats'))) {
+            joins.push(`LEFT JOIN user_track_stats uts ON uts.track_id = t.id AND uts.user_id = ${getUserIdParam()}`);
+          }
+          orderBy = 'COALESCE(uts.play_count, 0) ASC';
+          break;
+        }
+        case 'title': orderBy = 't.title ASC'; break;
+        case 'artist': orderBy = 't.artist ASC'; break;
+      }
+
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      // If max_per_artist is set, use a window function to limit per artist
+      let query: string;
+      const fetchLimit = maxPerArtist ? count * 3 : count; // fetch extra when deduplicating
+      if (maxPerArtist) {
+        query = `
+          SELECT id, title, artist, album, duration_ms, year FROM (
+            SELECT t.id, t.title, t.artist, t.album, t.duration_ms, t.year,
+                   ROW_NUMBER() OVER (PARTITION BY t.artist ORDER BY ${orderBy === 'random()' ? 'random()' : orderBy}) as rn
+            FROM active_tracks t
+            ${joins.join('\n')}
+            ${where}
+          ) sub
+          WHERE rn <= $${idx++}
+          ORDER BY ${orderBy === 'random()' ? 'random()' : 'id'}
+          LIMIT $${idx++}`;
+        params.push(maxPerArtist, count);
+      } else {
+        query = `
+          SELECT t.id, t.title, t.artist, t.album, t.duration_ms, t.year
+          FROM active_tracks t
+          ${joins.join('\n')}
+          ${where}
+          ORDER BY ${orderBy}
+          LIMIT $${idx++}`;
+        params.push(count);
+      }
+
+      const tracks = await db().query<{
+        id: number; title: string; artist: string; album: string; duration_ms: number; year: number;
+      }>(query, params);
+
+      if (tracks.rows.length === 0) {
+        return { error: 'No tracks matched the criteria. Try broadening your filters.' };
+      }
+
+      // Create the playlist
+      const plR = await db().query<{ id: number }>(
+        'INSERT INTO playlists(user_id, name) VALUES ($1, $2) RETURNING id',
+        [userId, plName]
+      );
+      const plId = plR.rows[0]!.id;
+
+      for (let i = 0; i < tracks.rows.length; i++) {
+        await db().query(
+          'INSERT INTO playlist_items(playlist_id, track_id, position) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [plId, tracks.rows[i].id, i]
+        );
+      }
+
+      const artistCounts: Record<string, number> = {};
+      for (const t of tracks.rows) {
+        artistCounts[t.artist] = (artistCounts[t.artist] || 0) + 1;
+      }
+
+      return {
+        action: 'created_playlist',
+        playlist: { id: plId, name: plName, track_count: tracks.rows.length },
+        criteria_summary: {
+          genres: args.genres || null,
+          artists: args.artists ? (args.artists as string[]).length : null,
+          duration: args.min_duration_sec || args.max_duration_sec
+            ? `${args.min_duration_sec || 0}s - ${args.max_duration_sec || '∞'}s`
+            : null,
+          year_range: args.min_year || args.max_year
+            ? `${args.min_year || '?'} - ${args.max_year || '?'}`
+            : null,
+          played_status: args.played_status || null,
+          sort: args.sort_by || 'random',
+          unique_artists: Object.keys(artistCounts).length,
+        },
+      };
     }
 
     case 'get_unplayed_tracks': {
@@ -972,6 +1219,16 @@ PLAYLISTS & NUMBERS:
 16. For large playlists (50+), make 5-15 search calls with different artist names or keywords to reach the target count.
 17. Be honest when the library doesn't have great matches — don't force bad recommendations.
 18. Use duration filters (min_duration_sec, max_duration_sec) when the user specifies track length requirements.
+
+SMART PLAYLISTS:
+19. PREFER create_smart_playlist over manual search+create_playlist when the user wants criteria-based playlists.
+20. create_smart_playlist can filter by: genres, artists, duration, year, mood, BPM, play history, and more — all in one call.
+21. Use max_per_artist to ensure diversity (e.g. max_per_artist=3 means no more than 3 songs per artist).
+22. For "polish rap playlist" — use artists filter with known Polish rap artists AND genres filter with ["Rap", "Hip-Hop"].
+23. For "songs I haven't heard" — use played_status="never_played".
+24. For "my most played favorites" — use played_status="favorites" and sort_by="most_played".
+25. For "new additions this week" — use added_within_days=7.
+26. You can combine many criteria: e.g. genres=["Rock"], min_year=1990, max_year=1999, played_status="never_played", max_per_artist=2.
 
 PLAYBACK AWARENESS:
 10. If the user says "what's playing?", "who is this?", "play more like this", or "I love this" — use the CURRENTLY PLAYING info above.
