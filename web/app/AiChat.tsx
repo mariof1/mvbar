@@ -236,15 +236,19 @@ export default function AiChat({ isOpen, onClose, token, nowPlaying, onPlay, onA
     }
   }, [isOpen]);
 
-  const executeActions = useCallback((toolResults: AiToolResult[]) => {
+  const executeActions = useCallback((toolResults: AiToolResult[], userText: string) => {
+    let playedSomething = false;
+
     for (const tr of toolResults) {
       const tracks = tr.result?.tracks?.map(t => ({ id: t.id, title: t.title || null, artist: t.artist || null })) || [];
       const action = tr.result?.action;
 
       if (action === 'play' && tracks.length > 0 && onPlay) {
         onPlay(tracks);
+        playedSomething = true;
       } else if (action === 'queue' && tracks.length > 0 && onAddToQueue) {
         for (const t of tracks) onAddToQueue([t]);
+        playedSomething = true;
       } else if (action === 'playback_next' && onNext) {
         onNext();
       } else if (action === 'playback_prev' && onPrev) {
@@ -255,6 +259,28 @@ export default function AiChat({ isOpen, onClose, token, nowPlaying, onPlay, onA
         onClearQueue();
       } else if (action === 'favorite_toggled' && onRefreshFavorites) {
         onRefreshFavorites();
+      }
+    }
+
+    // Auto-play fallback: if AI returned tracks but didn't explicitly call play_tracks,
+    // and the user's message sounds like a play intent, auto-play them
+    if (!playedSomething && onPlay) {
+      const playIntent = /\b(play|put on|start|give me|listen|queue|shuffle|spin|blast|drop)\b/i.test(userText);
+      if (playIntent) {
+        const allTracks: Array<{ id: number; title: string | null; artist: string | null }> = [];
+        const seenIds = new Set<number>();
+        for (const tr of toolResults) {
+          const tracks = tr.result?.tracks || [];
+          for (const t of tracks) {
+            if (!seenIds.has(t.id)) {
+              seenIds.add(t.id);
+              allTracks.push({ id: t.id, title: t.title || null, artist: t.artist || null });
+            }
+          }
+        }
+        if (allTracks.length > 0) {
+          onPlay(allTracks);
+        }
       }
     }
   }, [onPlay, onAddToQueue, onNext, onPrev, onShuffle, onClearQueue, onRefreshFavorites]);
@@ -284,7 +310,7 @@ export default function AiChat({ isOpen, onClose, token, nowPlaying, onPlay, onA
           toolResults: res.toolResults,
         };
         setMessages(prev => [...prev, assistantMsg]);
-        executeActions(res.toolResults);
+        executeActions(res.toolResults, text);
       } else {
         setMessages(prev => [...prev, {
           role: 'assistant',
