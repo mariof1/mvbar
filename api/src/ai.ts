@@ -7,7 +7,7 @@ import fp from 'fastify-plugin';
 import { db } from './db.js';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'google/gemini-2.0-flash-exp:free';
+const DEFAULT_MODEL = 'openrouter/auto';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
