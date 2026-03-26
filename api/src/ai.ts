@@ -346,14 +346,12 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
       const minDurMs = args.min_duration_sec ? Number(args.min_duration_sec) * 1000 : null;
       const maxDurMs = args.max_duration_sec ? Number(args.max_duration_sec) * 1000 : null;
 
-      // Detect abstract concept queries that will produce bad text-match results
+      // For abstract/vibe queries without genre/artist filters, add a genre suggestion hint
+      // but still allow the search to proceed (the user's library might have matching titles)
+      let abstractHint = '';
       const abstractPatterns = /^(bass drop|guitar solo|heavy riff|sad melod|fast beat|slow tempo|hard hit|deep bass|chill vibe|epic drop|head bang|mosh pit|dance floor|club bang|car ride|night drive|workout|party|romantic|aggressive|energetic|melanchol|upbeat|downtempo|ambient|atmospheric|groovy|funky|soulful|dreamy|dark|intense|powerful|smooth|relaxing|motivat|inspir)/i;
       if (!args.genre && !args.artist && abstractPatterns.test(q)) {
-        return {
-          tracks: [],
-          warning: `"${q}" is an abstract concept — text search will return wrong results. DO NOT ask the user what to do. Instead, IMMEDIATELY retry by searching with genre filter or artist names. Suggested genres for this concept: Dubstep, Drum and Bass, EDM, Trap, Techno, Electronic, Electro. Call search_tracks again NOW with genre="Electro" or genre="Techno" or search by artist names known for this style.`,
-          source: 'abstract_concept_rejected',
-        };
+        abstractHint = `NOTE: "${q}" is a vibe/concept. These results are TEXT matches only (titles/artists containing these words). For better results, retry with a genre filter or search by artist names known for this style.`;
       }
 
       try {
@@ -371,7 +369,7 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
         });
 
         if (res.hits.length > 0) {
-          return { tracks: res.hits, source: 'meilisearch' };
+          return { tracks: res.hits, source: 'meilisearch', ...(abstractHint && { hint: abstractHint }) };
         }
 
         // Retry without genre/artist filters but keep duration
@@ -385,7 +383,7 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
             attributesToRetrieve: ['id', 'title', 'artist', 'album', 'genre', 'country', 'duration_ms'],
           });
           if (broader.hits.length > 0) {
-            return { tracks: broader.hits, source: 'meilisearch_broad' };
+            return { tracks: broader.hits, source: 'meilisearch_broad', ...(abstractHint && { hint: abstractHint }) };
           }
         }
       } catch {
@@ -432,7 +430,7 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
          ORDER BY random() LIMIT $${idx}`,
         [...params, limit]
       );
-      return { tracks: r.rows, source: 'sql' };
+      return { tracks: r.rows, source: 'sql', ...(abstractHint && { hint: abstractHint }) };
     }
 
     case 'play_tracks':
@@ -1410,6 +1408,7 @@ export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
           }
 
           const result = await executeTool(tc.function.name, args, req.user.userId);
+          app.log.info(`[ai] tool=${tc.function.name} args=${JSON.stringify(args).slice(0, 200)} result_keys=${Object.keys(result as Record<string, unknown>).join(',')}`);
           toolResults.push({ tool: tc.function.name, args, result });
 
           messages.push({
