@@ -606,8 +606,16 @@ export interface AiToolResult {
   args: Record<string, unknown>;
   result: {
     tracks?: Array<{ id: number; title: string; artist: string; album: string; duration_ms: number; genre?: string; mood?: string }>;
-    action?: 'play' | 'queue' | 'created_playlist';
+    action?: 'play' | 'queue' | 'created_playlist' | 'favorite_toggled' | 'tracks_added' | 'tracks_removed'
+      | 'playback_next' | 'playback_prev' | 'playback_shuffle' | 'playback_clear_queue';
+    favorite_action?: 'add' | 'remove';
     playlist?: { id: number; name: string; track_count: number };
+    playlists?: Array<{ id: number; name: string; track_count: string }>;
+    library?: { tracks: string; artists: string; albums: string; genres: string; total_size: string; last_scan: string };
+    recently_added?: Array<{ id: number; title: string; artist: string; album: string }>;
+    breakdown?: { favorites: number; new_tracks: number };
+    saved?: boolean;
+    fact?: string;
     error?: string;
   };
 }
@@ -619,9 +627,16 @@ export interface AiChatResponse {
   error?: string;
 }
 
-export async function sendAiChat(token: string, messages: AiChatMessage[]): Promise<AiChatResponse> {
+export interface AiNowPlaying {
+  id: number;
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
+}
+
+export async function sendAiChat(token: string, messages: AiChatMessage[], nowPlaying?: AiNowPlaying | null): Promise<AiChatResponse> {
   return (await apiFetch('/ai/chat', {
     method: 'POST',
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, nowPlaying }),
   }, token)) as AiChatResponse;
 }

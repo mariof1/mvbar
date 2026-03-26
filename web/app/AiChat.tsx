@@ -1,15 +1,21 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { sendAiChat, AiChatMessage, AiToolResult } from './apiClient';
+import { sendAiChat, AiChatMessage, AiToolResult, AiNowPlaying } from './apiClient';
 import { usePreferences } from './preferencesStore';
 
 interface AiChatProps {
   isOpen: boolean;
   onClose: () => void;
   token: string;
+  nowPlaying?: AiNowPlaying | null;
   onPlay?: (tracks: Array<{ id: number; title: string | null; artist: string | null }>) => void;
   onAddToQueue?: (tracks: Array<{ id: number; title: string | null; artist: string | null }>) => void;
+  onNext?: () => void;
+  onPrev?: () => void;
+  onShuffle?: () => void;
+  onClearQueue?: () => void;
+  onRefreshFavorites?: () => void;
 }
 
 interface DisplayMessage {
@@ -58,12 +64,20 @@ function TrackCard({ track, onPlay, onQueue }: {
             className="p-1.5 rounded-md bg-slate-600/50 hover:bg-slate-600 text-slate-300 transition-colors"
             title="Add to queue"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
             </svg>
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function ActionBadge({ text, icon }: { text: string; icon: string }) {
+  return (
+    <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs">
+      <span>{icon}</span> {text}
     </div>
   );
 }
@@ -74,49 +88,118 @@ function ToolResultCards({ result, onPlay, onQueue }: {
   onQueue?: (tracks: Array<{ id: number; title: string | null; artist: string | null }>) => void;
 }) {
   const tracks = result.result?.tracks || [];
+  const action = result.result?.action;
+
+  // Non-track action badges
+  if (action === 'favorite_toggled') {
+    const favAction = result.result?.favorite_action;
+    return <ActionBadge icon={favAction === 'add' ? '❤️' : '💔'} text={favAction === 'add' ? 'Added to favorites' : 'Removed from favorites'} />;
+  }
+  if (action === 'tracks_added') return <ActionBadge icon="📋" text="Tracks added to playlist" />;
+  if (action === 'tracks_removed') return <ActionBadge icon="🗑️" text="Tracks removed from playlist" />;
+  if (action?.startsWith('playback_')) {
+    const labels: Record<string, string> = { playback_next: '⏭️ Skipped to next', playback_prev: '⏮️ Went back', playback_shuffle: '🔀 Queue shuffled', playback_clear_queue: '🧹 Queue cleared' };
+    return <ActionBadge icon="" text={labels[action] || action} />;
+  }
+  if (result.result?.saved) return <ActionBadge icon="🧠" text={`Remembered: "${result.result.fact}"`} />;
+
+  // Library info card
+  if (result.result?.library) {
+    const lib = result.result.library;
+    return (
+      <div className="mt-2 p-3 rounded-lg bg-slate-700/50 text-sm space-y-1">
+        <div className="text-white font-medium">📚 Library Stats</div>
+        <div className="text-slate-300 grid grid-cols-2 gap-1 text-xs">
+          <span>🎵 {lib.tracks} tracks</span>
+          <span>🎤 {lib.artists} artists</span>
+          <span>💿 {lib.albums} albums</span>
+          <span>🎸 {lib.genres} genres</span>
+          <span>💾 {lib.total_size}</span>
+          <span>🔄 Last scan: {lib.last_scan ? new Date(lib.last_scan).toLocaleDateString() : 'never'}</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Playlist list card
+  if (result.result?.playlists) {
+    return (
+      <div className="mt-2 space-y-1">
+        {result.result.playlists.map(pl => (
+          <div key={pl.id} className="p-2 rounded-lg bg-slate-700/50 text-sm">
+            <span className="text-white">📋 {pl.name}</span>
+            <span className="text-slate-400 text-xs ml-2">({pl.track_count} tracks)</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Smart mix breakdown
+  if (result.result?.breakdown && tracks.length > 0) {
+    const bd = result.result.breakdown;
+    const mappedTracks = tracks.map(t => ({ id: t.id, title: t.title || null, artist: t.artist || null }));
+    return (
+      <div className="mt-2 space-y-1">
+        <div className="text-xs text-slate-400 mb-1">
+          🎲 Smart Mix: {bd.favorites} favorites + {bd.new_tracks} new discoveries
+        </div>
+        {tracks.length > 1 && (
+          <div className="flex gap-2 mb-2">
+            {onPlay && (
+              <button onClick={() => onPlay(mappedTracks)} className="px-3 py-1.5 text-xs rounded-md bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 transition-colors flex items-center gap-1">
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                Play Mix ({tracks.length})
+              </button>
+            )}
+            {onQueue && (
+              <button onClick={() => onQueue(mappedTracks)} className="px-3 py-1.5 text-xs rounded-md bg-slate-600/50 hover:bg-slate-600 text-slate-300 transition-colors flex items-center gap-1">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+                Queue Mix
+              </button>
+            )}
+          </div>
+        )}
+        {tracks.map(t => (
+          <TrackCard key={t.id} track={t}
+            onPlay={onPlay ? () => onPlay([{ id: t.id, title: t.title || null, artist: t.artist || null }]) : undefined}
+            onQueue={onQueue ? () => onQueue([{ id: t.id, title: t.title || null, artist: t.artist || null }]) : undefined}
+          />
+        ))}
+      </div>
+    );
+  }
+
   if (tracks.length === 0 && !result.result?.playlist) return null;
 
   const mappedTracks = tracks.map(t => ({ id: t.id, title: t.title || null, artist: t.artist || null }));
 
   return (
     <div className="mt-2 space-y-1">
-      {/* Bulk actions */}
       {tracks.length > 1 && (
         <div className="flex gap-2 mb-2">
-          {(result.result?.action === 'play' || result.tool === 'search_tracks') && onPlay && (
-            <button
-              onClick={() => onPlay(mappedTracks)}
-              className="px-3 py-1.5 text-xs rounded-md bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 transition-colors flex items-center gap-1"
-            >
+          {(action === 'play' || result.tool === 'search_tracks' || result.tool === 'get_favorites' || result.tool === 'get_unplayed_tracks') && onPlay && (
+            <button onClick={() => onPlay(mappedTracks)} className="px-3 py-1.5 text-xs rounded-md bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 transition-colors flex items-center gap-1">
               <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
               Play All ({tracks.length})
             </button>
           )}
           {onQueue && (
-            <button
-              onClick={() => onQueue(mappedTracks)}
-              className="px-3 py-1.5 text-xs rounded-md bg-slate-600/50 hover:bg-slate-600 text-slate-300 transition-colors flex items-center gap-1"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
+            <button onClick={() => onQueue(mappedTracks)} className="px-3 py-1.5 text-xs rounded-md bg-slate-600/50 hover:bg-slate-600 text-slate-300 transition-colors flex items-center gap-1">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
               Queue All
             </button>
           )}
         </div>
       )}
 
-      {/* Track list */}
       {tracks.map(t => (
-        <TrackCard
-          key={t.id}
-          track={t}
+        <TrackCard key={t.id} track={t}
           onPlay={onPlay ? () => onPlay([{ id: t.id, title: t.title || null, artist: t.artist || null }]) : undefined}
           onQueue={onQueue ? () => onQueue([{ id: t.id, title: t.title || null, artist: t.artist || null }]) : undefined}
         />
       ))}
 
-      {/* Playlist created */}
       {result.result?.playlist && (
         <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30 text-green-400 text-sm">
           ✓ Playlist &quot;{result.result.playlist.name}&quot; created with {result.result.playlist.track_count} tracks
@@ -126,7 +209,7 @@ function ToolResultCards({ result, onPlay, onQueue }: {
   );
 }
 
-export default function AiChat({ isOpen, onClose, token, onPlay, onAddToQueue }: AiChatProps) {
+export default function AiChat({ isOpen, onClose, token, nowPlaying, onPlay, onAddToQueue, onNext, onPrev, onShuffle, onClearQueue, onRefreshFavorites }: AiChatProps) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -134,27 +217,47 @@ export default function AiChat({ isOpen, onClose, token, onPlay, onAddToQueue }:
   const scrollRef = useRef<HTMLDivElement>(null);
   const { openrouterConfigured } = usePreferences();
 
-  // Auto-scroll to bottom
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, loading]);
 
-  // Focus input when opened
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [isOpen]);
 
-  // Lock body scroll when open
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = 'hidden';
       return () => { document.body.style.overflow = ''; };
     }
   }, [isOpen]);
+
+  const executeActions = useCallback((toolResults: AiToolResult[]) => {
+    for (const tr of toolResults) {
+      const tracks = tr.result?.tracks?.map(t => ({ id: t.id, title: t.title || null, artist: t.artist || null })) || [];
+      const action = tr.result?.action;
+
+      if (action === 'play' && tracks.length > 0 && onPlay) {
+        onPlay(tracks);
+      } else if (action === 'queue' && tracks.length > 0 && onAddToQueue) {
+        for (const t of tracks) onAddToQueue([t]);
+      } else if (action === 'playback_next' && onNext) {
+        onNext();
+      } else if (action === 'playback_prev' && onPrev) {
+        onPrev();
+      } else if (action === 'playback_shuffle' && onShuffle) {
+        onShuffle();
+      } else if (action === 'playback_clear_queue' && onClearQueue) {
+        onClearQueue();
+      } else if (action === 'favorite_toggled' && onRefreshFavorites) {
+        onRefreshFavorites();
+      }
+    }
+  }, [onPlay, onAddToQueue, onNext, onPrev, onShuffle, onClearQueue, onRefreshFavorites]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -172,7 +275,7 @@ export default function AiChat({ isOpen, onClose, token, onPlay, onAddToQueue }:
         content: m.content,
       }));
 
-      const res = await sendAiChat(token, chatHistory);
+      const res = await sendAiChat(token, chatHistory, nowPlaying);
 
       if (res.ok) {
         const assistantMsg: DisplayMessage = {
@@ -181,16 +284,7 @@ export default function AiChat({ isOpen, onClose, token, onPlay, onAddToQueue }:
           toolResults: res.toolResults,
         };
         setMessages(prev => [...prev, assistantMsg]);
-
-        // Auto-execute play/queue actions
-        for (const tr of res.toolResults) {
-          const tracks = tr.result?.tracks?.map(t => ({ id: t.id, title: t.title || null, artist: t.artist || null })) || [];
-          if (tr.result?.action === 'play' && tracks.length > 0 && onPlay) {
-            onPlay(tracks);
-          } else if (tr.result?.action === 'queue' && tracks.length > 0 && onAddToQueue) {
-            for (const t of tracks) onAddToQueue([t]);
-          }
-        }
+        executeActions(res.toolResults);
       } else {
         setMessages(prev => [...prev, {
           role: 'assistant',
@@ -205,7 +299,7 @@ export default function AiChat({ isOpen, onClose, token, onPlay, onAddToQueue }:
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, token, onPlay, onAddToQueue]);
+  }, [input, loading, messages, token, nowPlaying, executeActions]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -216,18 +310,25 @@ export default function AiChat({ isOpen, onClose, token, onPlay, onAddToQueue }:
 
   if (!isOpen) return null;
 
+  const suggestions = nowPlaying
+    ? ['Play more like this', 'I love this song', 'What\'s playing?', 'Surprise me']
+    : ['Play something chill', 'My top tracks this week', 'Surprise me with a mix', 'What\'s in my library?'];
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      {/* Backdrop */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
-      {/* Modal */}
       <div className="relative w-full max-w-2xl h-[80vh] max-h-[700px] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/50">
           <div className="flex items-center gap-2">
             <span className="text-lg">✨</span>
             <h2 className="text-white font-semibold">AI Music Assistant</h2>
+            {nowPlaying && (
+              <span className="text-xs text-slate-400 truncate max-w-[200px]">
+                🎵 {nowPlaying.artist} – {nowPlaying.title}
+              </span>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -263,10 +364,10 @@ export default function AiChat({ isOpen, onClose, token, onPlay, onAddToQueue }:
               <div className="text-4xl">✨</div>
               <div className="text-white font-medium">What would you like to listen to?</div>
               <div className="text-slate-400 text-sm max-w-sm">
-                Try things like &quot;Play some jazz&quot;, &quot;Queue chill songs&quot;, or &quot;Create a workout playlist&quot;.
+                I know your library, your listening history, and what&apos;s playing. Try asking me anything!
               </div>
               <div className="flex flex-wrap gap-2 justify-center mt-2">
-                {['Play something chill', 'Find some rock music', 'Create a dinner party playlist'].map(s => (
+                {suggestions.map(s => (
                   <button
                     key={s}
                     onClick={() => { setInput(s); setTimeout(() => inputRef.current?.focus(), 0); }}
@@ -325,7 +426,7 @@ export default function AiChat({ isOpen, onClose, token, onPlay, onAddToQueue }:
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask about your music..."
+                placeholder={nowPlaying ? `Ask about "${nowPlaying.title}" or anything else...` : 'Ask about your music...'}
                 disabled={loading}
                 className="flex-1 px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
               />

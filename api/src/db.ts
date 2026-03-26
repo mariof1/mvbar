@@ -624,6 +624,17 @@ export async function initDb() {
 
   await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS openrouter_api_key text`);
 
+  // AI conversation memory — stores facts the AI learns about each user
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ai_memory (
+      id bigserial PRIMARY KEY,
+      user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      fact text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS ai_memory_user_idx ON ai_memory(user_id);
+  `);
+
   // ========================================================================
   // POPULATE ASCII NAMES FOR ARTISTS (one-time migration - runs in background)
   // ========================================================================

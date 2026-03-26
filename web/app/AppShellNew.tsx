@@ -1883,6 +1883,7 @@ export function AppShellNew() {
         isOpen={aiChatOpen}
         onClose={() => setAiChatOpen(false)}
         token={token!}
+        nowPlaying={nowPlaying ? { id: nowPlaying.id, title: nowPlaying.title, artist: nowPlaying.artist, album: nowPlaying.album } : null}
         onPlay={(tracks) => {
           if (tracks.length > 0) {
             setQueueAndPlay(tracks.map(t => ({ id: t.id, title: t.title, artist: t.artist })), 0);
@@ -1893,6 +1894,21 @@ export function AppShellNew() {
             addToQueue({ id: t.id, title: t.title, artist: t.artist });
           }
         }}
+        onNext={next}
+        onPrev={prev}
+        onShuffle={() => {
+          // Fisher-Yates shuffle of the queue (keep current track at index 0)
+          if (queue.length <= 1) return;
+          const current = queue[index];
+          const rest = queue.filter((_, i) => i !== index);
+          for (let i = rest.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [rest[i], rest[j]] = [rest[j], rest[i]];
+          }
+          setQueueAndPlay([current, ...rest], 0);
+        }}
+        onClearQueue={clearQueue}
+        onRefreshFavorites={() => refreshFavs(token!)}
       />
 
       <ToastContainer />
