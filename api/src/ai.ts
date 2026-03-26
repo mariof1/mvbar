@@ -48,13 +48,14 @@ async function buildLibraryContext(userId: string): Promise<string> {
 
   const total = trackCount.rows[0]?.count ?? '0';
   const topGenres = genres.rows.map(r => r.genre).join(', ') || 'unknown';
-  const topArtists = artists.rows.map(r => r.name).join(', ') || 'unknown';
+  const topArtists = artists.rows.map(r => `${r.name} (${r.cnt} tracks)`).join(', ') || 'unknown';
   const topMoods = moods.rows.map(r => r.mood).join(', ') || 'none tagged';
 
   return `The user's music library has ${total} tracks.
 Top genres: ${topGenres}
-Top artists: ${topArtists}
-Top moods: ${topMoods}`;
+Artists in library: ${topArtists}
+Top moods: ${topMoods}
+IMPORTANT: Only these artists/tracks exist in the library. Search for these exact names.`;
 }
 
 const TOOL_DEFS = [
@@ -215,12 +216,20 @@ You help users discover, play, and organize their music library through natural 
 
 ${libraryContext}
 
-Guidelines:
-- When the user asks to play or listen to something, use search_tracks to find matches, then use play_tracks to play them.
+IMPORTANT search guidelines:
+- The search_tracks tool searches the user's LOCAL library only (not the internet).
+- The query field does full-text search on title, artist, and album fields.
+- The genre field filters by genre tag (e.g. "Rock", "Rap", "Electronic").
+- When the user asks for music by category (e.g. "Polish hip hop", "chill jazz", "90s rock"):
+  1. Use your knowledge to identify actual artist names or song titles that fit the category.
+  2. Search for those specific artists/titles — NOT abstract descriptions like "polish" or "chill".
+  3. You can make MULTIPLE search_tracks calls in parallel to find different artists.
+  4. Example: "play Polish hip hop" → search for "Taco Hemingway", "Bedoes", "Quebonafide", etc.
+- When a search returns 0 results, try searching for related artists or broader terms.
+- ALWAYS use play_tracks after finding tracks if the user asked to play/listen. Don't just list results.
 - When asked to queue songs, search first then use queue_tracks.
 - When asked to create a playlist, search for tracks and then use create_playlist.
 - Keep responses concise and musical. Use emoji sparingly.
-- If a search returns no results, suggest alternatives based on what's in the library.
 - You can combine multiple tool calls in a single response.
 - Always tell the user what you found and what you're doing.`;
 }
