@@ -9,6 +9,7 @@ import { UserManagementPanel } from './UserManagementPanel';
 import { LibraryManagementPanel } from './LibraryManagementPanel';
 import { Admin } from './Admin';
 import { SearchModal } from './SearchModal';
+import AiChat from './AiChat';
 import { ToastContainer } from './Toast';
 import { ConfirmModal } from './ConfirmModal';
 import { Tracks } from './Tracks';
@@ -1371,6 +1372,7 @@ export function AppShellNew() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [aiChatOpen, setAiChatOpen] = useState(false);
   const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
   const nowPlaying = isOpen ? queue[index] ?? null : null;
 
@@ -1439,6 +1441,10 @@ export function AppShellNew() {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setSearchOpen((v) => !v);
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
+        e.preventDefault();
+        setAiChatOpen((v) => !v);
       }
     };
     document.addEventListener('keydown', handler);
@@ -1694,6 +1700,13 @@ export function AppShellNew() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </button>
+          <button
+            onClick={() => setAiChatOpen(true)}
+            className="p-2 -mr-2 rounded-lg hover:bg-white/10 transition-colors"
+            aria-label="AI Assistant"
+          >
+            <span className="text-lg leading-none">✨</span>
+          </button>
         </div>
       </header>
 
@@ -1726,6 +1739,14 @@ export function AppShellNew() {
               </svg>
               <span className="flex-1 text-left text-sm">Search...</span>
               <kbd className="text-[11px] bg-white/10 group-hover:bg-white/15 px-1.5 py-0.5 rounded font-mono border border-white/10">⌘K</kbd>
+            </button>
+            <button
+              onClick={() => setAiChatOpen(true)}
+              className="flex items-center gap-2 px-3 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-slate-400 hover:text-white transition-all group"
+              title="AI Assistant (Ctrl+J)"
+            >
+              <span className="text-sm">✨</span>
+              <kbd className="text-[11px] bg-white/10 group-hover:bg-white/15 px-1.5 py-0.5 rounded font-mono border border-white/10">⌘J</kbd>
             </button>
           </header>
 
@@ -1855,6 +1876,23 @@ export function AppShellNew() {
         onClose={() => setSearchOpen(false)}
         onPlay={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
         onAddToQueue={(t) => addToQueue({ id: t.id, title: t.title, artist: t.artist })}
+      />
+
+      {/* AI Chat Modal */}
+      <AiChat
+        isOpen={aiChatOpen}
+        onClose={() => setAiChatOpen(false)}
+        token={token!}
+        onPlay={(tracks) => {
+          if (tracks.length > 0) {
+            setQueueAndPlay(tracks.map(t => ({ id: t.id, title: t.title, artist: t.artist })), 0);
+          }
+        }}
+        onAddToQueue={(tracks) => {
+          for (const t of tracks) {
+            addToQueue({ id: t.id, title: t.title, artist: t.artist });
+          }
+        }}
       />
 
       <ToastContainer />

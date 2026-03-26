@@ -622,6 +622,8 @@ export async function initDb() {
     );
   `);
 
+  await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS openrouter_api_key text`);
+
   // ========================================================================
   // POPULATE ASCII NAMES FOR ARTISTS (one-time migration - runs in background)
   // ========================================================================

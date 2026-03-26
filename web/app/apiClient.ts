@@ -591,3 +591,37 @@ export type ScanProgress = {
 export async function getScanProgress(token: string) {
   return (await apiFetch('/scan/progress', { method: 'GET' }, token)) as ScanProgress;
 }
+
+// =========================================================================
+// AI Chat
+// =========================================================================
+
+export interface AiChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface AiToolResult {
+  tool: string;
+  args: Record<string, unknown>;
+  result: {
+    tracks?: Array<{ id: number; title: string; artist: string; album: string; duration_ms: number; genre?: string; mood?: string }>;
+    action?: 'play' | 'queue' | 'created_playlist';
+    playlist?: { id: number; name: string; track_count: number };
+    error?: string;
+  };
+}
+
+export interface AiChatResponse {
+  ok: boolean;
+  response: string;
+  toolResults: AiToolResult[];
+  error?: string;
+}
+
+export async function sendAiChat(token: string, messages: AiChatMessage[]): Promise<AiChatResponse> {
+  return (await apiFetch('/ai/chat', {
+    method: 'POST',
+    body: JSON.stringify({ messages }),
+  }, token)) as AiChatResponse;
+}

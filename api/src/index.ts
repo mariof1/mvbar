@@ -23,6 +23,7 @@ import { subsonicPlugin } from './subsonic.js';
 import { podcastsPlugin } from './podcasts.js';
 import { audiobooksPlugin } from './audiobooks.js';
 import { preferencesPlugin } from './preferences.js';
+import { aiPlugin } from './ai.js';
 import googleAuthPlugin, { startAvatarSyncScheduler } from './googleAuth.js';
 import { initDb } from './db.js';
 import logger from './logger.js';
@@ -109,6 +110,7 @@ await app.register(subsonicPlugin);
 await app.register(podcastsPlugin);
 await app.register(audiobooksPlugin);
 await app.register(preferencesPlugin);
+await app.register(aiPlugin);
 
 const host = '0.0.0.0';
 await app.listen({ port: config.port, host });

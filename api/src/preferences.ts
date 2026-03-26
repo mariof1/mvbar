@@ -22,45 +22,52 @@ export const preferencesPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/preferences', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
 
-    const r = await db().query<UserPreferences>(
-      'SELECT auto_continue, prefer_hls FROM user_preferences WHERE user_id = $1',
+    const r = await db().query<UserPreferences & { openrouter_api_key?: string }>(
+      'SELECT auto_continue, prefer_hls, openrouter_api_key FROM user_preferences WHERE user_id = $1',
       [req.user.userId]
     );
 
     if (r.rows.length === 0) {
-      return { ok: true, preferences: DEFAULT_PREFS, lastfmEnabled: isLastfmEnabled() };
+      return { ok: true, preferences: DEFAULT_PREFS, lastfmEnabled: isLastfmEnabled(), openrouterConfigured: false };
     }
 
-    return { ok: true, preferences: r.rows[0], lastfmEnabled: isLastfmEnabled() };
+    const { openrouter_api_key, ...prefs } = r.rows[0];
+    return {
+      ok: true,
+      preferences: prefs,
+      lastfmEnabled: isLastfmEnabled(),
+      openrouterConfigured: !!openrouter_api_key,
+    };
   });
 
   // Update user preferences (upsert)
   app.patch('/api/preferences', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
 
-    const body = req.body as Partial<UserPreferences>;
+    const body = req.body as Partial<UserPreferences> & { openrouter_api_key?: string };
     
     // Get current preferences first
-    const current = await db().query<UserPreferences>(
-      'SELECT auto_continue, prefer_hls FROM user_preferences WHERE user_id = $1',
+    const current = await db().query<UserPreferences & { openrouter_api_key?: string }>(
+      'SELECT auto_continue, prefer_hls, openrouter_api_key FROM user_preferences WHERE user_id = $1',
       [req.user.userId]
     );
     
-    const existing = current.rows[0] || DEFAULT_PREFS;
+    const existing = current.rows[0] || { ...DEFAULT_PREFS, openrouter_api_key: null };
     const newPrefs = {
       auto_continue: typeof body.auto_continue === 'boolean' ? body.auto_continue : existing.auto_continue,
       prefer_hls: typeof body.prefer_hls === 'boolean' ? body.prefer_hls : existing.prefer_hls,
     };
+    const newKey = typeof body.openrouter_api_key === 'string' ? body.openrouter_api_key : existing.openrouter_api_key;
 
     await db().query(
-      `INSERT INTO user_preferences (user_id, auto_continue, prefer_hls, updated_at)
-       VALUES ($1, $2, $3, now())
+      `INSERT INTO user_preferences (user_id, auto_continue, prefer_hls, openrouter_api_key, updated_at)
+       VALUES ($1, $2, $3, $4, now())
        ON CONFLICT (user_id) DO UPDATE SET 
-         auto_continue = $2, prefer_hls = $3, updated_at = now()`,
-      [req.user.userId, newPrefs.auto_continue, newPrefs.prefer_hls]
+         auto_continue = $2, prefer_hls = $3, openrouter_api_key = $4, updated_at = now()`,
+      [req.user.userId, newPrefs.auto_continue, newPrefs.prefer_hls, newKey || null]
     );
 
-    return { ok: true, preferences: newPrefs };
+    return { ok: true, preferences: newPrefs, openrouterConfigured: !!newKey };
   });
 
   // Get similar tracks for auto-continue feature
