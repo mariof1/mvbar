@@ -599,7 +599,8 @@ async function executeTool(name: string, args: Record<string, unknown>, userId: 
 
     case 'smart_mix': {
       const count = Math.min(Math.max(Number(args.count) || 20, 1), 50);
-      const ratio = Math.min(Math.max(Number(args.favorites_ratio) ?? 0.5, 0), 1);
+      const rawRatio = Number(args.favorites_ratio);
+      const ratio = Math.min(Math.max(Number.isNaN(rawRatio) ? 0.5 : rawRatio, 0), 1);
       const favCount = Math.round(count * ratio);
       const newCount = count - favCount;
 
