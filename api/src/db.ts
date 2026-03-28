@@ -207,6 +207,8 @@ export async function initDb() {
   await pool.query('alter table tracks add column if not exists art_mime text');
   await pool.query('alter table tracks add column if not exists art_hash text');
   await pool.query('alter table tracks add column if not exists lyrics_path text');
+  await pool.query('alter table tracks add column if not exists embedded_lyrics text');
+  await pool.query('alter table tracks add column if not exists embedded_lyrics_synced boolean default false');
   await pool.query('alter table tracks add column if not exists album_artist text');
   await pool.query('alter table tracks add column if not exists genre text');
   await pool.query('alter table tracks add column if not exists country text');
@@ -450,7 +452,8 @@ export async function initDb() {
            initial_key, composer, conductor, publisher, copyright, comment, mood, grouping,
            isrc, release_date, original_year, compilation,
            title_sort, artist_sort, album_sort, album_artist_sort,
-           musicbrainz_track_id, musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id
+           musicbrainz_track_id, musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id,
+           embedded_lyrics, embedded_lyrics_synced
     from tracks where deleted_at is null
   `);
 

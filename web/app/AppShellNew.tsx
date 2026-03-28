@@ -201,10 +201,12 @@ function parseLrcLyrics(lrc: string): LyricLine[] | null {
   return lines.length > 0 ? lines.sort((a, b) => a.time - b.time) : null;
 }
 
-// Lyrics overlay component with synced highlighting
+// Lyrics overlay component with synced highlighting and plain text fallback
 function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [parsedLines, setParsedLines] = useState<LyricLine[] | null>(null);
+  const [plainLyrics, setPlainLyrics] = useState<string | null>(null);
+  const [lyricsType, setLyricsType] = useState<'synced' | 'unsynced' | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const activeLineRef = useRef<HTMLDivElement>(null);
 
@@ -212,18 +214,42 @@ function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: (
     let cancelled = false;
     (async () => {
       setLoading(true);
+      setParsedLines(null);
+      setPlainLyrics(null);
+      setLyricsType(null);
       try {
         const res = await fetch(`/api/lyrics/${props.trackId}`);
         if (cancelled) return;
         if (res.status === 204 || !res.ok) {
-          setParsedLines(null);
+          // No lyrics
         } else {
-          const text = await res.text();
-          setParsedLines(parseLrcLyrics(text));
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const data = await res.json() as { lyrics: string; type: 'synced' | 'unsynced' };
+            if (data.type === 'synced') {
+              setLyricsType('synced');
+              setParsedLines(parseLrcLyrics(data.lyrics));
+            } else {
+              setLyricsType('unsynced');
+              setPlainLyrics(data.lyrics);
+            }
+          } else {
+            // Legacy: plain text (synced .lrc)
+            const text = await res.text();
+            const parsed = parseLrcLyrics(text);
+            if (parsed) {
+              setLyricsType('synced');
+              setParsedLines(parsed);
+            } else {
+              setLyricsType('unsynced');
+              setPlainLyrics(text);
+            }
+          }
         }
       } catch {
         if (!cancelled) {
           setParsedLines(null);
+          setPlainLyrics(null);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -273,7 +299,7 @@ function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: (
           <div className="flex items-center justify-center py-12">
             <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
           </div>
-        ) : parsedLines ? (
+        ) : parsedLines && lyricsType === 'synced' ? (
           <div className="space-y-3 py-4">
             {parsedLines.map((line, i) => (
               <div
@@ -291,8 +317,16 @@ function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: (
               </div>
             ))}
           </div>
+        ) : plainLyrics && lyricsType === 'unsynced' ? (
+          <div className="py-4 space-y-2">
+            {plainLyrics.split('\n').map((line, i) => (
+              <p key={i} className={`text-center text-lg ${line.trim() ? 'text-white/80' : 'h-4'}`}>
+                {line.trim() || '\u00A0'}
+              </p>
+            ))}
+          </div>
         ) : (
-          <p className="text-white/60 text-center py-12">No synced lyrics available for this track.</p>
+          <p className="text-white/60 text-center py-12">No lyrics available for this track.</p>
         )}
       </div>
     </div>
