@@ -1084,8 +1084,6 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
         const shuffled = seededShuffle(lovedAlbumsR.rows, albumSeed);
 
         for (const album of shuffled.slice(0, 2)) {
-          // Find tracks from same artist or same genre, excluding the loved album
-          const genreFilter = album.genre ? `and lower(tg.genre) = lower($3)` : '';
           const becauseR = await db().query<TrackData>(
             `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at,
                     coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
