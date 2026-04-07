@@ -252,31 +252,87 @@ export async function findSimilarLocalTracks(
   const similar = await getSimilarTracks(artistName, trackName, 100);
   if (similar.length === 0) return [];
 
-  // Build query to find matching local tracks
-  const results: { id: number; title: string; artist: string; match: number }[] = [];
-  
-  for (const s of similar) {
-    if (results.length >= limit) break;
-    
-    // Try to find this track in our library
-    const r = await db().query<{ id: number; title: string; artist: string }>(
-      `SELECT id, title, artist FROM active_tracks 
-       WHERE lower(title) = lower($1) 
-         AND lower(artist) LIKE '%' || lower($2) || '%'
-         ${excludeTrackIds.length > 0 ? `AND id != ALL($3)` : ''}
-       LIMIT 1`,
-      excludeTrackIds.length > 0 ? [s.name, s.artist, excludeTrackIds] : [s.name, s.artist]
-    );
-    
-    if (r.rows.length > 0) {
-      results.push({
-        id: r.rows[0].id,
-        title: r.rows[0].title,
-        artist: r.rows[0].artist,
-        match: s.match
-      });
+  // Batch lookup: build (title, artist) pairs and query all at once
+  const pairs = similar.slice(0, 50);
+  if (pairs.length === 0) return [];
+
+  // Build a VALUES clause for batch matching
+  const values: string[] = [];
+  const params: (string | number[])[] = [];
+  let paramIdx = 1;
+  for (const s of pairs) {
+    values.push(`(lower($${paramIdx}), lower($${paramIdx + 1}))`);
+    params.push(s.name, s.artist);
+    paramIdx += 2;
+  }
+
+  const excludeClause = excludeTrackIds.length > 0
+    ? `AND t.id != ALL($${paramIdx})`
+    : '';
+  if (excludeTrackIds.length > 0) params.push(excludeTrackIds as any);
+
+  const r = await db().query<{ id: number; title: string; artist: string; matched_title: string; matched_artist: string }>(
+    `SELECT DISTINCT ON (t.id) t.id, t.title, t.artist, lower(t.title) as matched_title, lower(t.artist) as matched_artist
+     FROM active_tracks t
+     WHERE (lower(t.title), lower(t.artist)) IN (${values.join(',')})
+       ${excludeClause}`,
+    params
+  );
+
+  // Also try partial artist match for tracks not found with exact match
+  const foundTitles = new Set(r.rows.map(row => row.matched_title));
+  const missingPairs = pairs.filter(s => !foundTitles.has(s.name.toLowerCase()));
+
+  let partialResults: typeof r.rows = [];
+  if (missingPairs.length > 0 && missingPairs.length <= 20) {
+    const partialValues: string[] = [];
+    const partialParams: (string | number[])[] = [];
+    let pIdx = 1;
+    for (const s of missingPairs.slice(0, 20)) {
+      partialValues.push(`(lower(t.title) = lower($${pIdx}) AND lower(t.artist) LIKE '%' || lower($${pIdx + 1}) || '%')`);
+      partialParams.push(s.name, s.artist);
+      pIdx += 2;
     }
+    const pExclude = excludeTrackIds.length > 0 ? `AND t.id != ALL($${pIdx})` : '';
+    if (excludeTrackIds.length > 0) partialParams.push(excludeTrackIds as any);
+
+    const pr = await db().query<{ id: number; title: string; artist: string; matched_title: string; matched_artist: string }>(
+      `SELECT DISTINCT ON (t.id) t.id, t.title, t.artist, lower(t.title) as matched_title, lower(t.artist) as matched_artist
+       FROM active_tracks t
+       WHERE (${partialValues.join(' OR ')}) ${pExclude}
+       LIMIT ${limit}`,
+      partialParams
+    );
+    partialResults = pr.rows;
+  }
+
+  // Merge results and map back to match scores
+  const allRows = [...r.rows, ...partialResults];
+  const seenIds = new Set<number>();
+  const results: { id: number; title: string; artist: string; match: number }[] = [];
+
+  // Create lookup for match scores
+  const matchScoreLookup = new Map<string, number>();
+  for (const s of pairs) {
+    matchScoreLookup.set(`${s.name.toLowerCase()}::${s.artist.toLowerCase()}`, s.match);
+  }
+
+  for (const row of allRows) {
+    if (seenIds.has(row.id) || results.length >= limit) continue;
+    seenIds.add(row.id);
+    
+    // Find best match score
+    let matchScore = 0;
+    for (const s of pairs) {
+      if (row.matched_title === s.name.toLowerCase() &&
+          row.matched_artist.includes(s.artist.toLowerCase())) {
+        matchScore = s.match;
+        break;
+      }
+    }
+    
+    results.push({ id: row.id, title: row.title, artist: row.artist, match: matchScore });
   }
   
-  return results;
+  return results.sort((a, b) => b.match - a.match);
 }
