@@ -1339,8 +1339,7 @@ function DeviceLogsTab({ token }: { token: string }) {
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const res = await apiFetch('/api/admin/device-logs', { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json();
+      const data = await apiFetch('/admin/device-logs', { method: 'GET' }, token);
       if (data.ok) setLogs(data.logs);
     } catch { /* */ }
     setLoading(false);
@@ -1358,10 +1357,9 @@ function DeviceLogsTab({ token }: { token: string }) {
     setSelectedLog(name);
     setLoadingContent(true);
     try {
-      const res = await apiFetch(`/api/admin/device-logs/${encodeURIComponent(name)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
+      const data = await apiFetch(`/admin/device-logs/${encodeURIComponent(name)}`, {
+        method: 'GET',
+      }, token);
       if (data.ok) setLogContent(data.content);
       else setLogContent('Failed to load log');
     } catch {
@@ -1372,20 +1370,18 @@ function DeviceLogsTab({ token }: { token: string }) {
 
   const deleteLog = async (name: string) => {
     if (!await showConfirm({ title: 'Delete Log', message: `Delete log "${name}"?`, confirmLabel: 'Delete', danger: true })) return;
-    await apiFetch(`/api/admin/device-logs/${encodeURIComponent(name)}`, {
+    await apiFetch(`/admin/device-logs/${encodeURIComponent(name)}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    }, token);
     if (selectedLog === name) { setSelectedLog(null); setLogContent(''); }
     fetchLogs();
   };
 
   const deleteAll = async () => {
     if (!await showConfirm({ title: 'Delete All Logs', message: `Delete ALL ${logs.length} device logs?`, confirmLabel: 'Delete All', danger: true })) return;
-    await apiFetch('/api/admin/device-logs', {
+    await apiFetch('/admin/device-logs', {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    }, token);
     setSelectedLog(null);
     setLogContent('');
     fetchLogs();
