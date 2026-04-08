@@ -22,7 +22,7 @@ import { useAuth } from './store';
 import { showConfirm } from './ConfirmModal';
 import { useScanProgress, useLibraryUpdates } from './useWebSocket';
 
-type Tab = 'library' | 'users' | 'settings';
+type Tab = 'library' | 'users' | 'settings' | 'device-logs';
 
 export function Admin() {
   const token = useAuth((s) => s.token);
@@ -58,6 +58,11 @@ export function Admin() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           )},
+          { id: 'device-logs' as Tab, label: 'Device Logs', icon: (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+            </svg>
+          )},
         ].map((tab) => (
           <button
             key={tab.id}
@@ -78,6 +83,7 @@ export function Admin() {
       {activeTab === 'library' && <LibraryTab token={token} clear={clear} />}
       {activeTab === 'users' && <UsersTab token={token} clear={clear} currentUserId={user?.id} />}
       {activeTab === 'settings' && <SettingsTab token={token} />}
+      {activeTab === 'device-logs' && <DeviceLogsTab token={token} />}
     </div>
   );
 }
@@ -1306,6 +1312,189 @@ function SettingsTab({ token }: { token: string }) {
         ) : (
           <p className="text-sm text-slate-500">No IPs whitelisted</p>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ============ Device Logs Tab ============
+
+interface DeviceLog {
+  name: string;
+  size: number;
+  createdAt: string;
+  device: string;
+  appVersion: string | null;
+}
+
+function DeviceLogsTab({ token }: { token: string }) {
+  const [logs, setLogs] = useState<DeviceLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedLog, setSelectedLog] = useState<string | null>(null);
+  const [logContent, setLogContent] = useState('');
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [filter, setFilter] = useState('');
+  const [uploadUrl, setUploadUrl] = useState('');
+
+  const fetchLogs = async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/admin/device-logs', { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      if (data.ok) setLogs(data.logs);
+    } catch { /* */ }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchLogs(); }, []);
+
+  useEffect(() => {
+    const proto = window.location.protocol;
+    const host = window.location.host;
+    setUploadUrl(`${proto}//${host}/api/logs/upload`);
+  }, []);
+
+  const viewLog = async (name: string) => {
+    setSelectedLog(name);
+    setLoadingContent(true);
+    try {
+      const res = await apiFetch(`/api/admin/device-logs/${encodeURIComponent(name)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.ok) setLogContent(data.content);
+      else setLogContent('Failed to load log');
+    } catch {
+      setLogContent('Failed to load log');
+    }
+    setLoadingContent(false);
+  };
+
+  const deleteLog = async (name: string) => {
+    if (!await showConfirm({ title: 'Delete Log', message: `Delete log "${name}"?`, confirmLabel: 'Delete', danger: true })) return;
+    await apiFetch(`/api/admin/device-logs/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (selectedLog === name) { setSelectedLog(null); setLogContent(''); }
+    fetchLogs();
+  };
+
+  const deleteAll = async () => {
+    if (!await showConfirm({ title: 'Delete All Logs', message: `Delete ALL ${logs.length} device logs?`, confirmLabel: 'Delete All', danger: true })) return;
+    await apiFetch('/api/admin/device-logs', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    setSelectedLog(null);
+    setLogContent('');
+    fetchLogs();
+  };
+
+  const filteredLogs = filter
+    ? logs.filter(l => l.name.toLowerCase().includes(filter.toLowerCase()) || l.device.toLowerCase().includes(filter.toLowerCase()))
+    : logs;
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Upload URL info */}
+      <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+        <h3 className="text-sm font-medium text-slate-300 mb-2">📱 Android Upload Endpoint</h3>
+        <div className="flex items-center gap-2">
+          <code className="text-xs bg-slate-900/50 px-3 py-1.5 rounded-lg text-cyan-400 flex-1 overflow-x-auto">{uploadUrl}</code>
+          <button
+            onClick={() => { navigator.clipboard.writeText(uploadUrl); }}
+            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-xs rounded-lg text-slate-300"
+          >Copy</button>
+        </div>
+        <p className="text-xs text-slate-500 mt-2">POST raw log text • Headers: X-Device, X-App-Version (optional)</p>
+      </div>
+
+      {/* Controls */}
+      <div className="flex items-center gap-3">
+        <input
+          type="text"
+          placeholder="Filter logs..."
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 flex-1 focus:outline-none focus:border-cyan-500"
+        />
+        <button onClick={fetchLogs} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300">
+          Refresh
+        </button>
+        {logs.length > 0 && (
+          <button onClick={deleteAll} className="px-3 py-2 bg-red-900/50 hover:bg-red-800/50 rounded-lg text-sm text-red-400">
+            Delete All
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Log list */}
+        <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden max-h-[600px] overflow-y-auto">
+          {loading ? (
+            <p className="p-4 text-sm text-slate-500">Loading...</p>
+          ) : filteredLogs.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500">No device logs{filter ? ' matching filter' : ''}</p>
+          ) : (
+            <div className="divide-y divide-slate-700/50">
+              {filteredLogs.map((log) => (
+                <div
+                  key={log.name}
+                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors ${
+                    selectedLog === log.name ? 'bg-cyan-900/20' : 'hover:bg-slate-700/30'
+                  }`}
+                  onClick={() => viewLog(log.name)}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-slate-200 truncate">{log.device}</p>
+                    <p className="text-xs text-slate-500">
+                      {log.createdAt} • {formatSize(log.size)}
+                      {log.appVersion && ` • v${log.appVersion}`}
+                    </p>
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteLog(log.name); }}
+                    className="text-slate-600 hover:text-red-400 transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Log content viewer */}
+        <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+          {selectedLog ? (
+            <div className="flex flex-col h-full max-h-[600px]">
+              <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50">
+                <span className="text-sm text-slate-300 truncate">{selectedLog}</span>
+                <button onClick={() => { setSelectedLog(null); setLogContent(''); }} className="text-slate-500 hover:text-slate-300">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <pre className="p-4 text-xs text-slate-300 overflow-auto flex-1 whitespace-pre-wrap font-mono leading-5">
+                {loadingContent ? 'Loading...' : logContent}
+              </pre>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-48 text-sm text-slate-500">
+              Select a log to view its contents
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -60,6 +60,7 @@ services:
       - caddy_data:/data/caddy
       - caddy_config:/config/caddy
       - cache:/data/cache
+      - device_logs:/data/device-logs
       - hls:/hls
       - podcasts:/podcasts
       - audiobooks:/audiobooks
@@ -77,6 +78,7 @@ volumes:
   caddy_data:
   caddy_config:
   cache:
+  device_logs:
   hls:
   podcasts:
   audiobooks:
