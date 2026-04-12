@@ -70,29 +70,19 @@ export async function ensureTracksIndex() {
   });
 }
 
-export async function indexAllTracks() {
-  const r = await db().query<{
-    id: number;
-    library_id: number;
-    path: string;
-    ext: string;
-    title: string | null;
-    artist: string | null;
-    album_artist: string | null;
-    album: string | null;
-    duration_ms: number | null;
-    genre: string | null;
-    country: string | null;
-    year: number | null;
-    language: string | null;
-    composer: string | null;
-    mood: string | null;
-    bpm: number | null;
-    initial_key: string | null;
-  }>(`SELECT id, library_id, path, ext, title, artist, album_artist, album, duration_ms, genre, country, year, language, composer, mood, bpm, initial_key FROM active_tracks`);
-  
-  // Add ASCII-folded fields for international search
-  const docs: TrackDoc[] = r.rows.map(row => ({
+const TRACK_COLS = `id, library_id, path, ext, title, artist, album_artist, album, duration_ms, genre, country, year, language, composer, mood, bpm, initial_key`;
+
+type TrackRow = {
+  id: number; library_id: number; path: string; ext: string;
+  title: string | null; artist: string | null; album_artist: string | null;
+  album: string | null; duration_ms: number | null; genre: string | null;
+  country: string | null; year: number | null; language: string | null;
+  composer: string | null; mood: string | null; bpm: number | null;
+  initial_key: string | null;
+};
+
+function rowToDoc(row: TrackRow): TrackDoc {
+  return {
     ...row,
     title_ascii: row.title ? asciiFold(row.title) : null,
     artist_ascii: row.artist ? asciiFold(row.artist) : null,
@@ -102,7 +92,51 @@ export async function indexAllTracks() {
     artist_clean: row.artist ? stripPunctuation(asciiFold(row.artist)) : null,
     album_artist_clean: row.album_artist ? stripPunctuation(asciiFold(row.album_artist)) : null,
     album_clean: row.album ? stripPunctuation(asciiFold(row.album)) : null,
-  }));
+  };
+}
+
+/**
+ * Incremental index: only upsert the given track IDs and remove deleted ones.
+ * Falls back to full re-index when changedIds is empty or not provided.
+ */
+export async function indexChangedTracks(
+  changedIds: number[],
+  deletedIds: number[]
+): Promise<{ indexed: number; deleted: number }> {
+  const client = meili();
+  const index = client.index('tracks');
+
+  let indexed = 0;
+  if (changedIds.length > 0) {
+    const r = await db().query<TrackRow>(
+      `SELECT ${TRACK_COLS} FROM active_tracks WHERE id = ANY($1)`,
+      [changedIds]
+    );
+    const docs = r.rows.map(rowToDoc);
+    if (docs.length > 0) {
+      await index.addDocuments(docs);
+      indexed = docs.length;
+    }
+  }
+
+  let deleted = 0;
+  if (deletedIds.length > 0) {
+    await index.deleteDocuments(deletedIds);
+    deleted = deletedIds.length;
+  }
+
+  return { indexed, deleted };
+}
+
+/**
+ * Full re-index of all tracks. Used for force scans or initial index.
+ */
+export async function indexAllTracks() {
+  const r = await db().query<TrackRow>(
+    `SELECT ${TRACK_COLS} FROM active_tracks`
+  );
+
+  const docs: TrackDoc[] = r.rows.map(rowToDoc);
   
   const client = meili();
   const index = client.index('tracks');
@@ -118,7 +152,6 @@ export async function indexAllTracks() {
   }
 
   // Prune stale documents only when the indexed count exceeds what the DB has.
-  // Avoids the expensive fetch-all-IDs loop on normal scans.
   const stats = await index.getStats();
   if (stats.numberOfDocuments > docs.length) {
     const currentIds = new Set(docs.map(d => d.id));

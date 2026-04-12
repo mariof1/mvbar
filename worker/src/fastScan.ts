@@ -1013,10 +1013,15 @@ export async function runFastScan(
     getPublisher().set('scan:progress', JSON.stringify(progress));
     publishUpdate('scan:progress', progress);
   }
-  logger.info('search', 'Updating search index...');
-  await ensureTracksIndex();
-  await indexAllTracks();
-  logger.success('search', 'Search index updated');
+  const hasChanges = filesToProcess.length > 0 || orphanPaths.length > 0 || filesToRestore.length > 0;
+  if (hasChanges || forceFullScan) {
+    logger.info('search', 'Updating search index...');
+    await ensureTracksIndex();
+    await indexAllTracks();
+    logger.success('search', 'Search index updated');
+  } else {
+    logger.info('search', 'No changes detected, skipping search re-index');
+  }
   
   if (shouldCancel()) cancelNow('before_artist_artwork');
 

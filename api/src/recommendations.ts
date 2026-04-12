@@ -1,7 +1,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
 import crypto from 'crypto';
-import { db } from './db.js';
+import { db, redis } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
 import { findSimilarLocalArtists, isLastfmEnabled } from './lastfm.js';
 import { fetchRecommendations as fetchLBRecommendations, lookupRecording, getUserLBConfig } from './listenbrainz.js';
@@ -297,6 +297,21 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const userId = req.user.userId;
     const allowed = await allowedLibrariesForUser(userId, req.user.role);
+
+    // ========================================================================
+    // REDIS CACHE – serve cached response for 5 minutes per user
+    // ========================================================================
+    const RECO_CACHE_TTL = 300;
+    const cacheKey = `reco:${userId}:${(allowed ?? []).sort().join(',')}`;
+    try {
+      const cached = await redis().get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        parsed._cached = true;
+        return parsed;
+      }
+    } catch { /* Redis unavailable → compute fresh */ }
+
     const now = Date.now();
     const timeContext = getTimeContext();
     const buckets: Bucket[] = [];
@@ -1289,11 +1304,18 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // RETURN
     // ========================================================================
 
-    return {
+    const result = {
       ok: true,
       generatedAt: new Date().toISOString(),
       lastfmEnabled: isLastfmEnabled(),
       buckets
     };
+
+    // Cache the computed result
+    try {
+      await redis().set(cacheKey, JSON.stringify(result), 'EX', RECO_CACHE_TTL);
+    } catch { /* Redis unavailable → skip caching */ }
+
+    return result;
   });
 });
