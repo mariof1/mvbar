@@ -8,6 +8,7 @@ import path from 'path';
 import https from 'https';
 import { db } from './db.js';
 import { config } from './config.js';
+import { notifyAdmins } from './telegram.js';
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
@@ -211,6 +212,7 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
             };
 
             fastify.log.info(`Created new Google user (pending approval): ${email}`);
+            notifyAdmins('user_pending', `New Google sign-in awaiting approval:\n• Email: ${email}`);
           }
         } else if (refreshToken) {
           // Update refresh token for existing user (Google returns new one occasionally)
@@ -326,6 +328,7 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
       }
 
       fastify.log.info(`Admin approved user: ${result.rows[0].email}`);
+      notifyAdmins('user_approved', `User approved:\n• Email: ${result.rows[0].email}`);
       return { success: true };
     }
   );
@@ -352,6 +355,7 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
       }
 
       fastify.log.info(`Admin rejected user: ${result.rows[0].email}`);
+      notifyAdmins('user_approved', `User rejected:\n• Email: ${result.rows[0].email}`);
       return { success: true };
     }
   );
@@ -613,6 +617,7 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
               avatar_path: null,
             };
             fastify.log.info(`Mobile: Created new Google user (pending approval): ${email}`);
+            notifyAdmins('user_pending', `New Google sign-in awaiting approval (mobile):\n• Email: ${email}`);
           }
         }
 

@@ -4,6 +4,7 @@ import { audit } from './db.js';
 import { mkdir, readdir, readFile, writeFile, unlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 import logger from './logger.js';
+import { notifyAdmins } from './telegram.js';
 
 const LOG_DIR = process.env.DEVICE_LOG_DIR || '/data/device-logs';
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB per log
@@ -47,6 +48,7 @@ export const deviceLogsPlugin: FastifyPluginAsync = fp(async (app) => {
     try {
       await writeFile(filepath, body, 'utf-8');
       logger.info('device-logs', `Saved ${filename} (${body.length} bytes)`);
+      notifyAdmins('device_log_upload', `New device log uploaded:\n• Device: ${device}${appVersion ? `\n• Version: ${appVersion}` : ''}\n• Size: ${body.length} bytes`);
       return { ok: true, file: filename };
     } catch (err) {
       logger.error('device-logs', `Upload failed: ${err}`);

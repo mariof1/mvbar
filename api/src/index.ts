@@ -24,6 +24,7 @@ import { podcastsPlugin } from './podcasts.js';
 import { audiobooksPlugin } from './audiobooks.js';
 import { preferencesPlugin } from './preferences.js';
 import { deviceLogsPlugin } from './deviceLogs.js';
+import { telegramPlugin } from './telegram.js';
 import googleAuthPlugin, { startAvatarSyncScheduler } from './googleAuth.js';
 import { initDb } from './db.js';
 import logger from './logger.js';
@@ -111,6 +112,7 @@ await app.register(podcastsPlugin);
 await app.register(audiobooksPlugin);
 await app.register(preferencesPlugin);
 await app.register(deviceLogsPlugin);
+await app.register(telegramPlugin);
 
 const host = '0.0.0.0';
 await app.listen({ port: config.port, host });

@@ -7,6 +7,7 @@ import { audit } from './db.js';
 import * as users from './userRepo.js';
 import { db } from './db.js';
 import cookie from '@fastify/cookie';
+import { notifyAdmins } from './telegram.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -140,12 +141,14 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
       if (next.count >= 8) next.lockedUntil = now + 15 * 60_000;
       store.failedLoginsByKey.set(key, next);
       await audit('login_failed', { email, ip });
+      notifyAdmins('user_failed_login', `Failed login attempt:\n• Email: ${email}\n• IP: ${ip}`);
       return reply.code(401).send({ ok: false, error: 'invalid_credentials' });
     }
 
     store.failedLoginsByKey.delete(key);
     const token = signToken(user.id, user.role, user.session_version);
     await audit('login_ok', { email, ip });
+    notifyAdmins('user_login', `User logged in:\n• Email: ${email}\n• IP: ${ip}`);
 
     // Save password for Subsonic token auth
     await db().query('UPDATE users SET subsonic_password = $1 WHERE id = $2', [password, user.id]);
