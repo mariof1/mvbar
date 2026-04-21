@@ -97,7 +97,9 @@ export const telegramPlugin: FastifyPluginAsync = fp(async (app) => {
     if (channel !== 'library:updates') return;
     try {
       const data = JSON.parse(message);
-      if (data.event === 'scan:complete') {
+      if (data.event === 'scan:started') {
+        notifyAdmins('scan_started', `Library scan started${data.force ? ' (full rescan)' : ''}.`);
+      } else if (data.event === 'scan:complete') {
         const stats = data.stats || data;
         const added = stats.added ?? stats.inserted ?? 0;
         const updated = stats.updated ?? 0;

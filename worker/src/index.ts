@@ -80,6 +80,13 @@ async function periodicRescan(force: boolean = false) {
     return;
   }
   scanInProgress = true;
+  const publisher = new Redis(REDIS_URL);
+  try {
+    publisher.publish(
+      'library:updates',
+      JSON.stringify({ event: 'scan:started', force, ts: Date.now() })
+    );
+  } catch { /* ignore */ }
   try {
     for (const dir of musicDirs) {
       if (cancelRequested) break;
@@ -102,6 +109,7 @@ async function periodicRescan(force: boolean = false) {
   } finally {
     scanInProgress = false;
     cancelRequested = false;
+    try { publisher.disconnect(); } catch { /* */ }
   }
 }
 

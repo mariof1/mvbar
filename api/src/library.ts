@@ -4,7 +4,6 @@ import { audit, db, redis } from './db.js';
 import * as scans from './scanRepo.js';
 import { allowedLibrariesForUser } from './access.js';
 import { store } from './store.js';
-import { notifyAdmins } from './telegram.js';
 import { access, constants } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -410,7 +409,6 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     const force = qs.force === 'true';
     const jobId = await scans.enqueueScan(req.user.userId, force);
     await audit('scan_enqueued', { jobId, by: req.user.userId, force });
-    notifyAdmins('scan_started', `Library scan enqueued (job #${jobId}, force=${force})`);
     return { ok: true, jobId };
   });
 
@@ -423,7 +421,6 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     const force = forceQs || forceBody;
     await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: req.user.userId, force }));
     await audit('rescan_triggered', { by: req.user.userId, force });
-    notifyAdmins('scan_started', `Library scan ${force ? '(full)' : ''} started by ${req.user.userId.slice(0, 8)}`.trim());
     return { ok: true, message: force ? 'Force full scan triggered' : 'Rescan triggered' };
   });
 
