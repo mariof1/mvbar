@@ -27,6 +27,10 @@ function nativeValues(m: IAudioMetadata, names: string[]) {
       const pushVal = (x: unknown) => {
         if (typeof x === 'string') out.push(x);
         else if (typeof x === 'number') out.push(String(x));
+        // Handle USLT/SYLT objects: { language, description, text }
+        else if (x && typeof x === 'object' && 'text' in (x as Record<string, unknown>) && typeof (x as Record<string, unknown>).text === 'string') {
+          out.push((x as Record<string, string>).text);
+        }
       };
       if (Array.isArray(val)) val.forEach(pushVal);
       else pushVal(val);
@@ -50,6 +54,10 @@ export type TagResult = {
   // Artwork
   artMime: string | null;
   artData: Uint8Array | null;
+  
+  // Lyrics (embedded in audio file tags)
+  embeddedLyrics: string | null;
+  embeddedLyricsSynced: boolean;
   
   // Multi-value artist fields
   artists: string[];
@@ -248,6 +256,45 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const country = classified.countries.length ? classified.countries.join('; ') : null;
   const language = classified.languages.length ? classified.languages.join('; ') : null;
 
+  // === Embedded lyrics extraction ===
+  // Priority: synced (SYLT) > unsynced (USLT/LYRICS/UNSYNCEDLYRICS)
+  let embeddedLyrics: string | null = null;
+  let embeddedLyricsSynced = false;
+
+  // Check music-metadata common lyrics first
+  const commonLyrics = (commonAny.lyrics ?? []) as Array<string | { text?: string }>;
+  for (const lyr of commonLyrics) {
+    const text = typeof lyr === 'string' ? lyr : lyr?.text;
+    if (text && text.trim()) {
+      embeddedLyrics = text.trim();
+      // Check if it looks synced (has LRC timestamps)
+      embeddedLyricsSynced = /\[\d{2}:\d{2}/.test(embeddedLyrics);
+      if (embeddedLyricsSynced) break; // Prefer synced
+    }
+  }
+
+  // Check native tags for lyrics (USLT, SYLT, UNSYNCEDLYRICS, LYRICS)
+  if (!embeddedLyricsSynced) {
+    const lyricsNative = nativeValues(m, [
+      'USLT', 'uslt',
+      'SYLT', 'sylt',
+      'LYRICS', 'lyrics',
+      'UNSYNCEDLYRICS', 'unsyncedlyrics',
+      'TXXX:LYRICS', 'TXXX:lyrics',
+      'TXXX:UNSYNCEDLYRICS', 'TXXX:unsyncedlyrics',
+    ]);
+    for (const val of lyricsNative) {
+      if (val && val.trim() && val.trim().length > 10) {
+        const isSynced = /\[\d{2}:\d{2}/.test(val);
+        if (isSynced || !embeddedLyrics) {
+          embeddedLyrics = val.trim();
+          embeddedLyricsSynced = isSynced;
+          if (isSynced) break;
+        }
+      }
+    }
+  }
+
   const pic = pickBestPicture(m.common.picture);
   const artMime = pic ? mimeFromFormat(pic.format) : null;
   const artData = pic && artMime ? pic.data : null;
@@ -371,6 +418,7 @@ export async function readTags(filePath: string): Promise<TagResult> {
 
   return {
     title, artist, album, albumartist, genre, country, language, year, durationMs, artMime, artData,
+    embeddedLyrics, embeddedLyricsSynced,
     artists, albumartists, composers, conductors,
     trackNumber, trackTotal, discNumber, discTotal,
     bpm, initialKey, composer, conductor, publisher, copyright, comment, mood, grouping,

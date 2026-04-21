@@ -10,6 +10,7 @@ import { LibraryManagementPanel } from './LibraryManagementPanel';
 import { Admin } from './Admin';
 import { SearchModal } from './SearchModal';
 import { ToastContainer } from './Toast';
+import { ConfirmModal } from './ConfirmModal';
 import { Tracks } from './Tracks';
 import { Playlists } from './Playlists';
 import { BrowseNew } from './BrowseNew';
@@ -17,6 +18,7 @@ import { Favorites } from './Favorites';
 import { History } from './History';
 import { Recommendations } from './Recommendations';
 import { Podcasts, PodcastPlayer } from './Podcasts';
+import { Audiobooks, AudiobookPlayer } from './Audiobooks';
 import { Settings } from './Settings';
 import { RecentlyAdded } from './RecentlyAdded';
 import { useAuth } from './store';
@@ -27,7 +29,7 @@ import { useRouter, useRoute, initRouter, getTabFromRoute, type Route } from './
 import { NavigationHeader } from './NavigationHeader';
 import { usePreferences } from './preferencesStore';
 import { getHlsStatus, logout, recordPlay, recordSkip, requestHlsTranscode, scrobbleToListenBrainz, nowPlayingListenBrainz, prefetchLyrics, listPlaylists, addTrackToPlaylist, apiFetch } from './apiClient';
-import { useWebSocket } from './useWebSocket';
+import { useWebSocket, useAdminPending } from './useWebSocket';
 
 // Icons as simple SVG components
 const Icons = {
@@ -64,6 +66,11 @@ const Icons = {
   Podcast: () => (
     <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
+    </svg>
+  ),
+  Audiobook: () => (
+    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
     </svg>
   ),
   Playlist: () => (
@@ -194,10 +201,12 @@ function parseLrcLyrics(lrc: string): LyricLine[] | null {
   return lines.length > 0 ? lines.sort((a, b) => a.time - b.time) : null;
 }
 
-// Lyrics overlay component with synced highlighting
+// Lyrics overlay component with synced highlighting and plain text fallback
 function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [parsedLines, setParsedLines] = useState<LyricLine[] | null>(null);
+  const [plainLyrics, setPlainLyrics] = useState<string | null>(null);
+  const [lyricsType, setLyricsType] = useState<'synced' | 'unsynced' | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const activeLineRef = useRef<HTMLDivElement>(null);
 
@@ -205,18 +214,42 @@ function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: (
     let cancelled = false;
     (async () => {
       setLoading(true);
+      setParsedLines(null);
+      setPlainLyrics(null);
+      setLyricsType(null);
       try {
         const res = await fetch(`/api/lyrics/${props.trackId}`);
         if (cancelled) return;
         if (res.status === 204 || !res.ok) {
-          setParsedLines(null);
+          // No lyrics
         } else {
-          const text = await res.text();
-          setParsedLines(parseLrcLyrics(text));
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const data = await res.json() as { lyrics: string; type: 'synced' | 'unsynced' };
+            if (data.type === 'synced') {
+              setLyricsType('synced');
+              setParsedLines(parseLrcLyrics(data.lyrics));
+            } else {
+              setLyricsType('unsynced');
+              setPlainLyrics(data.lyrics);
+            }
+          } else {
+            // Legacy: plain text (synced .lrc)
+            const text = await res.text();
+            const parsed = parseLrcLyrics(text);
+            if (parsed) {
+              setLyricsType('synced');
+              setParsedLines(parsed);
+            } else {
+              setLyricsType('unsynced');
+              setPlainLyrics(text);
+            }
+          }
         }
       } catch {
         if (!cancelled) {
           setParsedLines(null);
+          setPlainLyrics(null);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -266,7 +299,7 @@ function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: (
           <div className="flex items-center justify-center py-12">
             <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
           </div>
-        ) : parsedLines ? (
+        ) : parsedLines && lyricsType === 'synced' ? (
           <div className="space-y-3 py-4">
             {parsedLines.map((line, i) => (
               <div
@@ -284,8 +317,16 @@ function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: (
               </div>
             ))}
           </div>
+        ) : plainLyrics && lyricsType === 'unsynced' ? (
+          <div className="py-4 space-y-2">
+            {plainLyrics.split('\n').map((line, i) => (
+              <p key={i} className={`text-center text-lg ${line.trim() ? 'text-white/80' : 'h-4'}`}>
+                {line.trim() || '\u00A0'}
+              </p>
+            ))}
+          </div>
         ) : (
-          <p className="text-white/60 text-center py-12">No synced lyrics available for this track.</p>
+          <p className="text-white/60 text-center py-12">No lyrics available for this track.</p>
         )}
       </div>
     </div>
@@ -303,6 +344,21 @@ function GlobalPodcastPlayer() {
     <PodcastPlayer
       episode={podcastEpisode}
       onClose={() => setPodcastEpisode(null)}
+    />
+  );
+}
+
+// Global Audiobook Player wrapper that uses the store
+function GlobalAudiobookPlayer() {
+  const audiobookChapter = useUi((s) => s.audiobookChapter);
+  const setAudiobookChapter = useUi((s) => s.setAudiobookChapter);
+  
+  if (!audiobookChapter) return null;
+  
+  return (
+    <AudiobookPlayer
+      chapter={audiobookChapter}
+      onClose={() => setAudiobookChapter(null)}
     />
   );
 }
@@ -1125,6 +1181,7 @@ function MobileSidebar(props: {
   onClose: () => void;
   hasMusicPlayer: boolean;
   hasPodcastPlayer: boolean;
+  hasAudiobookPlayer: boolean;
 }) {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const touchStartedInsideRef = useRef(false);
@@ -1197,10 +1254,11 @@ function MobileSidebar(props: {
   // Music player bar: ~72px on mobile, ~80px on desktop
   // Use 72px as it needs to just clear the player bar
   const getBottomClass = () => {
-    if (props.hasMusicPlayer && props.hasPodcastPlayer) {
-      return 'bottom-36'; // 144px for both stacked
-    } else if (props.hasMusicPlayer || props.hasPodcastPlayer) {
-      return 'bottom-[72px]'; // Match player bar height
+    const playerCount = [props.hasMusicPlayer, props.hasPodcastPlayer, props.hasAudiobookPlayer].filter(Boolean).length;
+    if (playerCount >= 2) {
+      return 'bottom-36';
+    } else if (playerCount === 1) {
+      return 'bottom-[72px]';
     }
     return 'bottom-0';
   };
@@ -1241,6 +1299,7 @@ function MobileSidebar(props: {
             <NavItem icon={<Icons.Heart />} label="Favorites" active={props.tab === 'favorites'} onClick={() => handleNavClick('favorites')} />
             <NavItem icon={<Icons.Clock />} label="History" active={props.tab === 'history'} onClick={() => handleNavClick('history')} />
             <NavItem icon={<Icons.Podcast />} label="Podcasts" active={props.tab === 'podcasts'} onClick={() => handleNavClick('podcasts')} />
+            <NavItem icon={<Icons.Audiobook />} label="Audiobooks" active={props.tab === 'audiobooks'} onClick={() => handleNavClick('audiobooks')} />
             <NavItem icon={<Icons.Settings />} label="Settings" active={props.tab === 'settings'} onClick={() => handleNavClick('settings')} />
           </nav>
 
@@ -1302,6 +1361,7 @@ function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boo
         <NavItem icon={<Icons.Heart />} label="Favorites" active={props.tab === 'favorites'} onClick={() => props.setTab('favorites')} />
         <NavItem icon={<Icons.Clock />} label="History" active={props.tab === 'history'} onClick={() => props.setTab('history')} />
         <NavItem icon={<Icons.Podcast />} label="Podcasts" active={props.tab === 'podcasts'} onClick={() => props.setTab('podcasts')} />
+        <NavItem icon={<Icons.Audiobook />} label="Audiobooks" active={props.tab === 'audiobooks'} onClick={() => props.setTab('audiobooks')} />
       </nav>
 
       <div className="mt-auto">
@@ -1356,12 +1416,23 @@ export function AppShellNew() {
   // Podcast player state
   const podcastEpisode = useUi((s) => s.podcastEpisode);
 
+  // Audiobook player state
+  const audiobookChapter = useUi((s) => s.audiobookChapter);
+
   // User preferences
   const preferences = usePreferences((s) => s.preferences);
   const loadPreferences = usePreferences((s) => s.load);
 
   // Initialize WebSocket connection for live updates
   useWebSocket(isAdmin);
+
+  // Admin: pending users badge
+  const pendingCount = useAdminPending((s) => s.count);
+  const refreshPending = useAdminPending((s) => s.refresh);
+  const requestGotoUsers = useAdminPending((s) => s.requestGotoUsers);
+  useEffect(() => {
+    if (isAdmin && token) refreshPending(token);
+  }, [isAdmin, token, refreshPending]);
 
   // Load preferences on mount
   useEffect(() => {
@@ -1395,6 +1466,7 @@ export function AppShellNew() {
       case 'favorites': navigate({ type: 'favorites' }); break;
       case 'history': navigate({ type: 'history' }); break;
       case 'podcasts': navigate({ type: 'podcasts' }); break;
+      case 'audiobooks': navigate({ type: 'audiobooks' }); break;
       case 'settings': navigate({ type: 'settings' }); break;
       case 'admin': navigate({ type: 'admin' }); break;
       default: navigate({ type: 'for-you' });
@@ -1402,6 +1474,11 @@ export function AppShellNew() {
   }, [navigate]);
 
   useEffect(() => { initRouter(); }, []);
+
+  const handleBellClick = useCallback(() => {
+    requestGotoUsers();
+    navigate({ type: 'admin' });
+  }, [navigate, requestGotoUsers]);
 
   // Global Ctrl+K / Cmd+K keyboard shortcut for search
   useEffect(() => {
@@ -1627,6 +1704,7 @@ export function AppShellNew() {
         onClose={() => setMobileSidebarOpen(false)}
         hasMusicPlayer={!!(isOpen && nowPlaying)}
         hasPodcastPlayer={!!podcastEpisode}
+        hasAudiobookPlayer={!!audiobookChapter}
       />
 
       {/* Sticky Mobile Header */}
@@ -1650,6 +1728,7 @@ export function AppShellNew() {
             {tab === 'favorites' && 'Favorites'}
             {tab === 'history' && 'Recently Played'}
             {tab === 'podcasts' && 'Podcasts'}
+            {tab === 'audiobooks' && 'Audiobooks'}
             {tab === 'settings' && 'Settings'}
             {tab === 'admin' && 'Admin'}
           </h2>
@@ -1662,6 +1741,23 @@ export function AppShellNew() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </button>
+          {isAdmin && (
+            <button
+              onClick={handleBellClick}
+              className="relative p-2 rounded-lg hover:bg-white/10 transition-colors"
+              aria-label={`Pending approvals${pendingCount ? ` (${pendingCount})` : ''}`}
+              title={pendingCount ? `${pendingCount} user${pendingCount === 1 ? '' : 's'} pending approval` : 'No pending approvals'}
+            >
+              <svg className="w-5 h-5 text-white/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 11-6 0" />
+              </svg>
+              {pendingCount > 0 && (
+                <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                  {pendingCount > 99 ? '99+' : pendingCount}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </header>
 
@@ -1680,20 +1776,40 @@ export function AppShellNew() {
                 {tab === 'favorites' && 'Favorites'}
                 {tab === 'history' && 'Recently Played'}
                 {tab === 'podcasts' && 'Podcasts'}
+                {tab === 'audiobooks' && 'Audiobooks'}
                 {tab === 'settings' && 'Settings'}
                 {tab === 'admin' && 'Admin'}
               </h2>
             </div>
-            <button
-              onClick={() => setSearchOpen(true)}
-              className="flex items-center gap-3 px-4 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-slate-400 hover:text-white transition-all w-72 group"
-            >
-              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <span className="flex-1 text-left text-sm">Search...</span>
-              <kbd className="text-[11px] bg-white/10 group-hover:bg-white/15 px-1.5 py-0.5 rounded font-mono border border-white/10">⌘K</kbd>
-            </button>
+            <div className="flex items-center gap-3">
+              {isAdmin && (
+                <button
+                  onClick={handleBellClick}
+                  className="relative p-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-slate-400 hover:text-white transition-all"
+                  aria-label={`Pending approvals${pendingCount ? ` (${pendingCount})` : ''}`}
+                  title={pendingCount ? `${pendingCount} user${pendingCount === 1 ? '' : 's'} pending approval` : 'No pending approvals'}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 11-6 0" />
+                  </svg>
+                  {pendingCount > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center ring-2 ring-slate-900">
+                      {pendingCount > 99 ? '99+' : pendingCount}
+                    </span>
+                  )}
+                </button>
+              )}
+              <button
+                onClick={() => setSearchOpen(true)}
+                className="flex items-center gap-3 px-4 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-slate-400 hover:text-white transition-all w-72 group"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <span className="flex-1 text-left text-sm">Search...</span>
+                <kbd className="text-[11px] bg-white/10 group-hover:bg-white/15 px-1.5 py-0.5 rounded font-mono border border-white/10">⌘K</kbd>
+              </button>
+            </div>
           </header>
 
           {/* Content Area */}
@@ -1735,6 +1851,8 @@ export function AppShellNew() {
             )}
 
             {tab === 'podcasts' && <Podcasts />}
+
+            {tab === 'audiobooks' && <Audiobooks />}
 
             {tab === 'for-you' && <Recommendations />}
 
@@ -1823,6 +1941,7 @@ export function AppShellNew() {
       />
 
       <ToastContainer />
+      <ConfirmModal />
 
       {/* Lyrics Overlay */}
       {showLyrics && nowPlaying && (
@@ -1835,6 +1954,9 @@ export function AppShellNew() {
 
       {/* Global Podcast Player - persists across tab changes */}
       <GlobalPodcastPlayer />
+
+      {/* Global Audiobook Player - persists across tab changes */}
+      <GlobalAudiobookPlayer />
     </div>
   );
 }

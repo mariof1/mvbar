@@ -19,9 +19,10 @@ import {
   type ScanProgress,
 } from './apiClient';
 import { useAuth } from './store';
-import { useScanProgress, useLibraryUpdates } from './useWebSocket';
+import { showConfirm } from './ConfirmModal';
+import { useScanProgress, useLibraryUpdates, useAdminPending } from './useWebSocket';
 
-type Tab = 'library' | 'users' | 'settings';
+type Tab = 'library' | 'users' | 'settings' | 'device-logs' | 'notifications';
 
 export function Admin() {
   const token = useAuth((s) => s.token);
@@ -30,13 +31,17 @@ export function Admin() {
   const isAdmin = user?.role === 'admin';
 
   const [activeTab, setActiveTab] = useState<Tab>('library');
+  const gotoUsersRequested = useAdminPending((s) => s.gotoUsersRequested);
+  useEffect(() => {
+    if (gotoUsersRequested > 0) setActiveTab('users');
+  }, [gotoUsersRequested]);
 
   if (!token || !isAdmin) return null;
 
   return (
     <div className="space-y-6">
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-slate-700/50 pb-4">
+      <div className="flex gap-2 border-b border-slate-700/50 pb-4 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
         {[
           { id: 'library' as Tab, label: 'Library', icon: (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -57,11 +62,21 @@ export function Admin() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           )},
+          { id: 'device-logs' as Tab, label: 'Device Logs', icon: (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+            </svg>
+          )},
+          { id: 'notifications' as Tab, label: 'Notifications', icon: (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            </svg>
+          )},
         ].map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap shrink-0 ${
               activeTab === tab.id
                 ? 'bg-cyan-500 text-white'
                 : 'bg-slate-800/50 text-slate-300 hover:bg-slate-700/50'
@@ -77,6 +92,8 @@ export function Admin() {
       {activeTab === 'library' && <LibraryTab token={token} clear={clear} />}
       {activeTab === 'users' && <UsersTab token={token} clear={clear} currentUserId={user?.id} />}
       {activeTab === 'settings' && <SettingsTab token={token} />}
+      {activeTab === 'device-logs' && <DeviceLogsTab token={token} />}
+      {activeTab === 'notifications' && <NotificationsTab token={token} />}
     </div>
   );
 }
@@ -658,7 +675,8 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
   }
 
   async function rejectUser(userId: string) {
-    if (!confirm('Reject this user? They will not be able to access the app.')) return;
+    const ok = await showConfirm({ title: 'Reject User', message: 'Reject this user? They will not be able to access the app.', confirmLabel: 'Reject', danger: true });
+    if (!ok) return;
     try {
       await apiFetch(`/admin/users/${userId}/reject`, { method: 'POST' }, token);
       setNotice('User rejected');
@@ -760,7 +778,7 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
 
   async function deleteUser() {
     if (!selectedUser) return;
-    const ok = confirm(`Delete user ${selectedUser.email}? This cannot be undone.`);
+    const ok = await showConfirm({ title: 'Delete User', message: `Delete user ${selectedUser.email}? This cannot be undone.`, confirmLabel: 'Delete', danger: true });
     if (!ok) return;
 
     setLoading(true);
@@ -1303,6 +1321,376 @@ function SettingsTab({ token }: { token: string }) {
           </div>
         ) : (
           <p className="text-sm text-slate-500">No IPs whitelisted</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============ Device Logs Tab ============
+
+interface DeviceLog {
+  name: string;
+  size: number;
+  createdAt: string;
+  device: string;
+  appVersion: string | null;
+}
+
+function DeviceLogsTab({ token }: { token: string }) {
+  const [logs, setLogs] = useState<DeviceLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedLog, setSelectedLog] = useState<string | null>(null);
+  const [logContent, setLogContent] = useState('');
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [filter, setFilter] = useState('');
+  const [uploadUrl, setUploadUrl] = useState('');
+
+  const fetchLogs = async () => {
+    setLoading(true);
+    try {
+      const data = await apiFetch('/admin/device-logs', { method: 'GET' }, token);
+      if (data.ok) setLogs(data.logs);
+    } catch { /* */ }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchLogs(); }, []);
+
+  useEffect(() => {
+    const proto = window.location.protocol;
+    const host = window.location.host;
+    setUploadUrl(`${proto}//${host}/api/logs/upload`);
+  }, []);
+
+  const viewLog = async (name: string) => {
+    setSelectedLog(name);
+    setLoadingContent(true);
+    try {
+      const data = await apiFetch(`/admin/device-logs/${encodeURIComponent(name)}`, {
+        method: 'GET',
+      }, token);
+      if (data.ok) setLogContent(data.content);
+      else setLogContent('Failed to load log');
+    } catch {
+      setLogContent('Failed to load log');
+    }
+    setLoadingContent(false);
+  };
+
+  const deleteLog = async (name: string) => {
+    if (!await showConfirm({ title: 'Delete Log', message: `Delete log "${name}"?`, confirmLabel: 'Delete', danger: true })) return;
+    await apiFetch(`/admin/device-logs/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }, token);
+    if (selectedLog === name) { setSelectedLog(null); setLogContent(''); }
+    fetchLogs();
+  };
+
+  const deleteAll = async () => {
+    if (!await showConfirm({ title: 'Delete All Logs', message: `Delete ALL ${logs.length} device logs?`, confirmLabel: 'Delete All', danger: true })) return;
+    await apiFetch('/admin/device-logs', {
+      method: 'DELETE',
+    }, token);
+    setSelectedLog(null);
+    setLogContent('');
+    fetchLogs();
+  };
+
+  const filteredLogs = filter
+    ? logs.filter(l => l.name.toLowerCase().includes(filter.toLowerCase()) || l.device.toLowerCase().includes(filter.toLowerCase()))
+    : logs;
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Upload URL info */}
+      <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+        <h3 className="text-sm font-medium text-slate-300 mb-2">📱 Android Upload Endpoint</h3>
+        <div className="flex items-center gap-2">
+          <code className="text-xs bg-slate-900/50 px-3 py-1.5 rounded-lg text-cyan-400 flex-1 overflow-x-auto">{uploadUrl}</code>
+          <button
+            onClick={() => { navigator.clipboard.writeText(uploadUrl); }}
+            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-xs rounded-lg text-slate-300"
+          >Copy</button>
+        </div>
+        <p className="text-xs text-slate-500 mt-2">POST raw log text • Headers: X-Device, X-App-Version (optional)</p>
+      </div>
+
+      {/* Controls */}
+      <div className="flex items-center gap-3">
+        <input
+          type="text"
+          placeholder="Filter logs..."
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 flex-1 focus:outline-none focus:border-cyan-500"
+        />
+        <button onClick={fetchLogs} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300">
+          Refresh
+        </button>
+        {logs.length > 0 && (
+          <button onClick={deleteAll} className="px-3 py-2 bg-red-900/50 hover:bg-red-800/50 rounded-lg text-sm text-red-400">
+            Delete All
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Log list */}
+        <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden max-h-[600px] overflow-y-auto">
+          {loading ? (
+            <p className="p-4 text-sm text-slate-500">Loading...</p>
+          ) : filteredLogs.length === 0 ? (
+            <p className="p-4 text-sm text-slate-500">No device logs{filter ? ' matching filter' : ''}</p>
+          ) : (
+            <div className="divide-y divide-slate-700/50">
+              {filteredLogs.map((log) => (
+                <div
+                  key={log.name}
+                  className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors ${
+                    selectedLog === log.name ? 'bg-cyan-900/20' : 'hover:bg-slate-700/30'
+                  }`}
+                  onClick={() => viewLog(log.name)}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-slate-200 truncate">{log.device}</p>
+                    <p className="text-xs text-slate-500">
+                      {log.createdAt} • {formatSize(log.size)}
+                      {log.appVersion && ` • v${log.appVersion}`}
+                    </p>
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteLog(log.name); }}
+                    className="text-slate-600 hover:text-red-400 transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Log content viewer */}
+        <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
+          {selectedLog ? (
+            <div className="flex flex-col h-full max-h-[600px]">
+              <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50">
+                <span className="text-sm text-slate-300 truncate">{selectedLog}</span>
+                <button onClick={() => { setSelectedLog(null); setLogContent(''); }} className="text-slate-500 hover:text-slate-300">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <pre className="p-4 text-xs text-slate-300 overflow-auto flex-1 whitespace-pre-wrap font-mono leading-5">
+                {loadingContent ? 'Loading...' : logContent}
+              </pre>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-48 text-sm text-slate-500">
+              Select a log to view its contents
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ Notifications (Telegram) Tab ============
+
+const EVENT_LABELS: Record<string, string> = {
+  user_pending: 'New Google login awaiting approval',
+  user_login: 'Successful user login',
+  user_failed_login: 'Failed login attempt',
+  scan_started: 'Music scan started',
+  scan_finished: 'Music scan finished',
+  user_approved: 'User approved or rejected',
+  device_log_upload: 'New device log uploaded',
+};
+
+function NotificationsTab({ token }: { token: string }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [availableEvents, setAvailableEvents] = useState<string[]>([]);
+  const [botTokenInput, setBotTokenInput] = useState('');
+  const [botTokenMasked, setBotTokenMasked] = useState('');
+  const [hasBotToken, setHasBotToken] = useState(false);
+  const [chatId, setChatId] = useState('');
+  const [enabled, setEnabled] = useState(false);
+  const [events, setEvents] = useState<Record<string, boolean>>({});
+  const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const data = await apiFetch('/telegram/settings', { method: 'GET' }, token);
+      if (data.ok) {
+        setAvailableEvents(data.availableEvents || []);
+        setBotTokenMasked(data.settings.botTokenMasked || '');
+        setHasBotToken(!!data.settings.hasBotToken);
+        setChatId(data.settings.chatId || '');
+        setEnabled(!!data.settings.enabled);
+        setEvents(data.settings.events || {});
+      }
+    } catch { /* */ }
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function save() {
+    setSaving(true);
+    setStatus(null);
+    try {
+      const body: any = { chatId, enabled, events };
+      if (botTokenInput.trim()) body.botToken = botTokenInput.trim();
+      await apiFetch('/telegram/settings', { method: 'PUT', body: JSON.stringify(body) }, token);
+      setBotTokenInput('');
+      await load();
+      setStatus({ ok: true, msg: 'Settings saved' });
+    } catch {
+      setStatus({ ok: false, msg: 'Failed to save settings' });
+    }
+    setSaving(false);
+  }
+
+  async function clearToken() {
+    if (!await showConfirm({ title: 'Clear Bot Token', message: 'Remove the saved Telegram bot token?', confirmLabel: 'Clear', danger: true })) return;
+    try {
+      await apiFetch('/telegram/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ clearBotToken: true, chatId, enabled, events }),
+      }, token);
+      await load();
+    } catch { /* */ }
+  }
+
+  async function sendTest() {
+    setTesting(true);
+    setStatus(null);
+    try {
+      await apiFetch('/telegram/test', { method: 'POST' }, token);
+      setStatus({ ok: true, msg: 'Test message sent — check your Telegram' });
+    } catch (err: any) {
+      setStatus({ ok: false, msg: err?.data?.error || 'Failed to send test message' });
+    }
+    setTesting(false);
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="w-8 h-8 border-3 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      {/* Instructions */}
+      <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
+        <h3 className="text-sm font-medium text-slate-300 mb-2">📱 Setup Instructions</h3>
+        <ol className="text-xs text-slate-400 space-y-1 list-decimal list-inside">
+          <li>Create a Telegram bot by messaging <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline">@BotFather</a> and running <code className="text-cyan-400">/newbot</code></li>
+          <li>Copy the bot token and paste it below</li>
+          <li>Start a chat with your new bot and send any message</li>
+          <li>Get your chat ID: visit <code className="text-cyan-400">https://api.telegram.org/bot&lt;YOUR_TOKEN&gt;/getUpdates</code> and find the <code className="text-cyan-400">chat.id</code> field</li>
+          <li>Paste the chat ID, enable notifications, save, and send a test message</li>
+        </ol>
+      </div>
+
+      {/* Bot credentials */}
+      <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50 space-y-4">
+        <h3 className="text-sm font-semibold text-slate-200">Bot Credentials</h3>
+
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Bot Token</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="password"
+              placeholder={hasBotToken ? `Current: ${botTokenMasked} — leave blank to keep` : 'Paste bot token here'}
+              value={botTokenInput}
+              onChange={(e) => setBotTokenInput(e.target.value)}
+              className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 flex-1 focus:outline-none focus:border-cyan-500"
+            />
+            {hasBotToken && (
+              <button onClick={clearToken} className="px-3 py-2 bg-red-900/30 hover:bg-red-800/50 rounded-lg text-xs text-red-400">
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Chat ID</label>
+          <input
+            type="text"
+            placeholder="e.g. 123456789 or -1001234567890 for group/channel"
+            value={chatId}
+            onChange={(e) => setChatId(e.target.value)}
+            className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 w-full focus:outline-none focus:border-cyan-500"
+          />
+        </div>
+
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+            className="w-4 h-4 accent-cyan-500"
+          />
+          <span className="text-sm text-slate-300">Enable Telegram notifications</span>
+        </label>
+      </div>
+
+      {/* Event subscriptions */}
+      <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50 space-y-3">
+        <h3 className="text-sm font-semibold text-slate-200">Notify me about</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {availableEvents.map((ev) => (
+            <label key={ev} className="flex items-center gap-2 cursor-pointer px-3 py-2 rounded-lg hover:bg-slate-700/30">
+              <input
+                type="checkbox"
+                checked={events[ev] !== false}
+                onChange={(e) => setEvents({ ...events, [ev]: e.target.checked })}
+                className="w-4 h-4 accent-cyan-500"
+              />
+              <span className="text-sm text-slate-300">{EVENT_LABELS[ev] || ev}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={save}
+          disabled={saving}
+          className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:opacity-50 rounded-lg text-sm font-medium text-white"
+        >
+          {saving ? 'Saving…' : 'Save Settings'}
+        </button>
+        <button
+          onClick={sendTest}
+          disabled={testing || !hasBotToken || !chatId}
+          className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm text-slate-300"
+          title={!hasBotToken || !chatId ? 'Save bot token and chat ID first' : ''}
+        >
+          {testing ? 'Sending…' : 'Send Test Message'}
+        </button>
+        {status && (
+          <span className={`text-sm ${status.ok ? 'text-emerald-400' : 'text-red-400'}`}>{status.msg}</span>
         )}
       </div>
     </div>

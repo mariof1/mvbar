@@ -54,7 +54,30 @@ export async function runScan(mountPath: string, musicDir: string, jobId: number
         const lst = await stat(lyricsAbs);
         if (lst.isFile()) lyricsPath = lyricsRel;
       } catch {
-        // no lyrics
+        // no .lrc file, check for .txt sidecar
+        const txtRel = `${baseNoExtRel}.txt`;
+        const txtAbs = path.join(LYRICS_DIR, txtRel);
+        try {
+          const tst = await stat(txtAbs);
+          if (tst.isFile()) lyricsPath = txtRel;
+        } catch {
+          // no lyrics sidecar files
+        }
+      }
+
+      // Also check for sidecar files alongside the audio file itself (in music dir)
+      if (!lyricsPath) {
+        const baseNoExtAbs = full.replace(/\.[^./\\]+$/, '');
+        for (const sidecarExt of ['.lrc', '.txt']) {
+          try {
+            const sst = await stat(baseNoExtAbs + sidecarExt);
+            if (sst.isFile()) {
+              // Store as special prefix so the API knows it's relative to the music dir
+              lyricsPath = `music:${path.relative(musicDir, baseNoExtAbs + sidecarExt)}`;
+              break;
+            }
+          } catch { /* no sidecar */ }
+        }
       }
 
       const existing = await repo.getTrackByPath(mountPath, rel);
@@ -76,6 +99,8 @@ export async function runScan(mountPath: string, musicDir: string, jobId: number
         durationMs: number | null;
         artMime: string | null;
         artData: Uint8Array | null;
+        embeddedLyrics: string | null;
+        embeddedLyricsSynced: boolean;
         artists: string[];
         albumartists: string[];
       } = {
@@ -90,6 +115,8 @@ export async function runScan(mountPath: string, musicDir: string, jobId: number
         durationMs: null,
         artMime: null,
         artData: null,
+        embeddedLyrics: null,
+        embeddedLyricsSynced: false,
         artists: [],
         albumartists: []
       };
@@ -135,6 +162,8 @@ export async function runScan(mountPath: string, musicDir: string, jobId: number
           artMime: art?.mime ?? null,
           artHash: art?.hash ?? null,
           lyricsPath,
+          embeddedLyrics: tags.embeddedLyrics,
+          embeddedLyricsSynced: tags.embeddedLyricsSynced,
           artists: tags.artists,
           albumArtists: tags.albumartists
         });

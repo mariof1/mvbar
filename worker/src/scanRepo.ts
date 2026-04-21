@@ -112,6 +112,8 @@ export async function upsertTrack(params: {
   artMime?: string | null;
   artHash?: string | null;
   lyricsPath?: string | null;
+  embeddedLyrics?: string | null;
+  embeddedLyricsSynced?: boolean;
   artists?: string[];
   albumArtists?: string[];
 }) {
@@ -136,12 +138,14 @@ export async function upsertTrack(params: {
       const artMime = cleanOpt(params.artMime);
       const artHash = cleanOpt(params.artHash);
       const lyricsPath = cleanOpt(params.lyricsPath);
+      const embeddedLyrics = params.embeddedLyrics ?? null;
+      const embeddedLyricsSynced = params.embeddedLyricsSynced ?? false;
 
       // Upsert track
       const trackRes = await client.query<{ id: number }>(
         refreshMeta
-          ? `insert into tracks(library_id, path, mtime_ms, birthtime_ms, size_bytes, ext, title, artist, album, genre, country, language, year, duration_ms, last_seen_job_id, art_path, art_mime, art_hash, lyrics_path, created_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, to_timestamp($4::double precision / 1000.0))
+          ? `insert into tracks(library_id, path, mtime_ms, birthtime_ms, size_bytes, ext, title, artist, album, genre, country, language, year, duration_ms, last_seen_job_id, art_path, art_mime, art_hash, lyrics_path, embedded_lyrics, embedded_lyrics_synced, created_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, to_timestamp($4::double precision / 1000.0))
          on conflict (library_id, path) do update set
            mtime_ms=excluded.mtime_ms,
            size_bytes=excluded.size_bytes,
@@ -159,10 +163,12 @@ export async function upsertTrack(params: {
            art_mime=excluded.art_mime,
            art_hash=excluded.art_hash,
            lyrics_path=excluded.lyrics_path,
+           embedded_lyrics=excluded.embedded_lyrics,
+           embedded_lyrics_synced=excluded.embedded_lyrics_synced,
            updated_at=now()
          returning id`
-          : `insert into tracks(library_id, path, mtime_ms, birthtime_ms, size_bytes, ext, title, artist, album, genre, country, language, year, duration_ms, last_seen_job_id, art_path, art_mime, art_hash, lyrics_path, created_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, to_timestamp($4::double precision / 1000.0))
+          : `insert into tracks(library_id, path, mtime_ms, birthtime_ms, size_bytes, ext, title, artist, album, genre, country, language, year, duration_ms, last_seen_job_id, art_path, art_mime, art_hash, lyrics_path, embedded_lyrics, embedded_lyrics_synced, created_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, to_timestamp($4::double precision / 1000.0))
          on conflict (library_id, path) do update set
            mtime_ms=excluded.mtime_ms,
            size_bytes=excluded.size_bytes,
@@ -180,6 +186,8 @@ export async function upsertTrack(params: {
            art_mime=excluded.art_mime,
            art_hash=excluded.art_hash,
            lyrics_path=excluded.lyrics_path,
+           embedded_lyrics=excluded.embedded_lyrics,
+           embedded_lyrics_synced=excluded.embedded_lyrics_synced,
            updated_at=now()
          returning id`,
         [
@@ -201,7 +209,9 @@ export async function upsertTrack(params: {
           artPath,
           artMime,
           artHash,
-          lyricsPath
+          lyricsPath,
+          embeddedLyrics,
+          embeddedLyricsSynced
         ]
       );
 

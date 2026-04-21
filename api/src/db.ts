@@ -207,6 +207,8 @@ export async function initDb() {
   await pool.query('alter table tracks add column if not exists art_mime text');
   await pool.query('alter table tracks add column if not exists art_hash text');
   await pool.query('alter table tracks add column if not exists lyrics_path text');
+  await pool.query('alter table tracks add column if not exists embedded_lyrics text');
+  await pool.query('alter table tracks add column if not exists embedded_lyrics_synced boolean default false');
   await pool.query('alter table tracks add column if not exists album_artist text');
   await pool.query('alter table tracks add column if not exists genre text');
   await pool.query('alter table tracks add column if not exists country text');
@@ -450,7 +452,8 @@ export async function initDb() {
            initial_key, composer, conductor, publisher, copyright, comment, mood, grouping,
            isrc, release_date, original_year, compilation,
            title_sort, artist_sort, album_sort, album_artist_sort,
-           musicbrainz_track_id, musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id
+           musicbrainz_track_id, musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id,
+           embedded_lyrics, embedded_lyrics_synced
     from tracks where deleted_at is null
   `);
 
@@ -553,6 +556,61 @@ export async function initDb() {
     );
   `);
   await pool.query('create index if not exists user_episode_progress_user_idx on user_episode_progress(user_id)');
+
+  // ========================================================================
+  // AUDIOBOOKS
+  // ========================================================================
+
+  await pool.query(`
+    create table if not exists audiobooks (
+      id bigserial primary key,
+      library_id bigint references libraries(id) on delete set null,
+      path text not null unique,
+      title text not null,
+      author text,
+      narrator text,
+      description text,
+      language text,
+      cover_path text,
+      duration_ms bigint not null default 0,
+      metadata_locked boolean not null default false,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+  `);
+  await pool.query(`ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS metadata_locked boolean NOT NULL DEFAULT false`);
+  await pool.query(`ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS language text`);
+
+  await pool.query(`
+    create table if not exists audiobook_chapters (
+      id bigserial primary key,
+      audiobook_id bigint not null references audiobooks(id) on delete cascade,
+      path text not null,
+      title text not null,
+      position integer not null,
+      duration_ms integer,
+      size_bytes bigint,
+      mtime_ms bigint,
+      metadata_locked boolean not null default false,
+      created_at timestamptz not null default now(),
+      unique(audiobook_id, path)
+    );
+  `);
+  await pool.query(`ALTER TABLE audiobook_chapters ADD COLUMN IF NOT EXISTS metadata_locked boolean NOT NULL DEFAULT false`);
+  await pool.query('create index if not exists audiobook_chapters_book_idx on audiobook_chapters(audiobook_id, position)');
+
+  await pool.query(`
+    create table if not exists user_audiobook_progress (
+      user_id text not null references users(id) on delete cascade,
+      audiobook_id bigint not null references audiobooks(id) on delete cascade,
+      chapter_id bigint not null references audiobook_chapters(id) on delete cascade,
+      position_ms integer not null default 0,
+      finished boolean not null default false,
+      updated_at timestamptz not null default now(),
+      primary key (user_id, audiobook_id)
+    );
+  `);
+  await pool.query('create index if not exists user_audiobook_progress_user_idx on user_audiobook_progress(user_id)');
 
   // ========================================================================
   // USER PREFERENCES

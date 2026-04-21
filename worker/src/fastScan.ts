@@ -5,7 +5,7 @@ import Redis from 'ioredis';
 import { db, audit } from './db.js';
 import { readTags } from './metadata.js';
 import { writeArt } from './art.js';
-import { indexAllTracks, ensureTracksIndex } from './indexer.js';
+import { indexAllTracks, indexChangedTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
 import { asciiFold } from './tagRules.js';
 import { detectTempoBpm, type OnsetMethod } from './tempoDetector.js';
@@ -1013,10 +1013,33 @@ export async function runFastScan(
     getPublisher().set('scan:progress', JSON.stringify(progress));
     publishUpdate('scan:progress', progress);
   }
-  logger.info('search', 'Updating search index...');
-  await ensureTracksIndex();
-  await indexAllTracks();
-  logger.success('search', 'Search index updated');
+  const hasChanges = filesToProcess.length > 0 || orphanPaths.length > 0 || filesToRestore.length > 0;
+  if (forceFullScan) {
+    logger.info('search', 'Full search re-index...');
+    await ensureTracksIndex();
+    await indexAllTracks();
+    logger.success('search', 'Search index updated (full)');
+  } else if (hasChanges) {
+    // Incremental index: only re-index tracks that were processed
+    const processedPaths = filesToProcess.map(f => f.relPath);
+    const idResult = await db().query<{ id: number }>(
+      'SELECT id FROM tracks WHERE library_id = $1 AND path = ANY($2) AND deleted_at IS NULL',
+      [libraryId, processedPaths]
+    );
+    const changedIds = idResult.rows.map(r => r.id);
+    const orphanIdResult = orphanPaths.length > 0
+      ? await db().query<{ id: number }>(
+          'SELECT id FROM tracks WHERE library_id = $1 AND path = ANY($2)',
+          [libraryId, orphanPaths]
+        )
+      : { rows: [] };
+    const deletedIds = orphanIdResult.rows.map(r => r.id);
+    await ensureTracksIndex();
+    const result = await indexChangedTracks(changedIds, deletedIds);
+    logger.success('search', `Search index updated (incremental: ${result.indexed} indexed, ${result.deleted} removed)`);
+  } else {
+    logger.info('search', 'No changes detected, skipping search re-index');
+  }
   
   if (shouldCancel()) cancelNow('before_artist_artwork');
 

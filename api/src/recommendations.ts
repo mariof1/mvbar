@@ -1,7 +1,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
 import crypto from 'crypto';
-import { db } from './db.js';
+import { db, redis } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
 import { findSimilarLocalArtists, isLastfmEnabled } from './lastfm.js';
 import { fetchRecommendations as fetchLBRecommendations, lookupRecording, getUserLBConfig } from './listenbrainz.js';
@@ -157,6 +157,7 @@ interface ScoringOptions {
   now: number;
   recentlyPlayedIds: Set<number>;
   favoriteIds: Set<number>;
+  likedGenreFamilies?: Set<string>;  // genre families the user listens to
 }
 
 function scoreTrack(track: TrackData, opts: ScoringOptions): number {
@@ -218,6 +219,18 @@ function scoreTrack(track: TrackData, opts: ScoringOptions): number {
     const daysInLibrary = (now - new Date(track.updated_at).getTime()) / 86400000;
     if (daysInLibrary <= 7) score += 10;
     else if (daysInLibrary <= 30) score += 5;
+  }
+
+  // Genre affinity — bonus for tracks in user's preferred genre families
+  if (opts.likedGenreFamilies && opts.likedGenreFamilies.size > 0 && track.genre) {
+    const trackGenres = track.genre.toLowerCase().split(/[;,/]/).map(g => g.trim());
+    for (const g of trackGenres) {
+      const fam = tokenToFamily.get(g);
+      if (fam && opts.likedGenreFamilies.has(fam.key)) {
+        score += 6;
+        break;
+      }
+    }
   }
   
   return Math.max(-50, Math.min(100, score));
@@ -284,6 +297,21 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const userId = req.user.userId;
     const allowed = await allowedLibrariesForUser(userId, req.user.role);
+
+    // ========================================================================
+    // REDIS CACHE – serve cached response for 5 minutes per user
+    // ========================================================================
+    const RECO_CACHE_TTL = 300;
+    const cacheKey = `reco:${userId}:${(allowed ?? []).sort().join(',')}`;
+    try {
+      const cached = await redis().get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        parsed._cached = true;
+        return parsed;
+      }
+    } catch { /* Redis unavailable → compute fresh */ }
+
     const now = Date.now();
     const timeContext = getTimeContext();
     const buckets: Bucket[] = [];
@@ -359,6 +387,14 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
        group by tg.genre order by plays desc limit 30`,
       [userId]
     );
+
+    // Build liked genre families for affinity scoring
+    const likedGenreFamilies = new Set<string>();
+    for (const g of topGenresR.rows.slice(0, 15)) {
+      const fam = tokenToFamily.get(g.genre.toLowerCase());
+      if (fam) likedGenreFamilies.add(fam.key);
+    }
+    scoringOpts.likedGenreFamilies = likedGenreFamilies;
 
     // Top genre + country combos (for "Polish Hip-Hop" style buckets)
     const genreCountryR = await db().query<{ genre: string; country: string; plays: number }>(
@@ -670,35 +706,40 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // ========================================================================
 
     if (isLastfmEnabled() && topArtistsR.rows.length >= 3) {
-      // Pick top artist with most plays
-      const topArtist = topArtistsR.rows[0];
-      const similarLocal = await findSimilarLocalArtists(topArtist.artist, 10);
-      
-      if (similarLocal.length >= 2) {
-        const similarNames = similarLocal.map(s => s.name.toLowerCase());
-        const similarR = await db().query<TrackData>(
-          `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                  coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
-                  s.last_played_at, false as is_favorite, null as updated_at
-           from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
-           where lower(t.artist) = any($2) ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
-           order by coalesce(s.play_count, 0) desc limit 150`,
-          allowed ? [userId, similarNames, allowed] : [userId, similarNames]
-        );
+      // Rotate through top artists daily — pick 2-3 different artists each day
+      const artistPool = topArtistsR.rows.slice(0, 8);
+      const artistSeed = dailySeed(userId, 'similar_artists');
+      const shuffledArtists = seededShuffle(artistPool, artistSeed);
+      const artistsToUse = shuffledArtists.slice(0, 3);
 
-        if (similarR.rows.length >= 10) {
-          // Prefer unplayed
-          const scored = similarR.rows.map(t => ({
-            ...t,
-            score: t.play_count === 0 ? 20 : 10 - Math.min(t.play_count, 5)
-          }));
-          const diverse = diversify(scored, { maxPerArtist: 3, limit: 50 });
-          await addBucket(
-            'similar_to_top',
-            `Similar to ${topArtist.artist}`,
-            diverse,
-            'Similar artists you might like'
+      for (const topArtist of artistsToUse) {
+        const similarLocal = await findSimilarLocalArtists(topArtist.artist, 10);
+        
+        if (similarLocal.length >= 2) {
+          const similarNames = similarLocal.map(s => s.name.toLowerCase());
+          const similarR = await db().query<TrackData>(
+            `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
+                    coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
+                    s.last_played_at, false as is_favorite, null as updated_at
+             from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
+             where lower(t.artist) = any($2) ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
+             order by coalesce(s.play_count, 0) desc limit 150`,
+            allowed ? [userId, similarNames, allowed] : [userId, similarNames]
           );
+
+          if (similarR.rows.length >= 10) {
+            const scored = similarR.rows.map(t => ({
+              ...t,
+              score: t.play_count === 0 ? 20 : 10 - Math.min(t.play_count, 5)
+            }));
+            const diverse = diversify(scored, { maxPerArtist: 3, limit: 50, seed: dailySeed(userId, 'similar', topArtist.artist) });
+            await addBucket(
+              `similar_to_${topArtist.artist.toLowerCase().replace(/\W/g, '_').slice(0, 30)}`,
+              `Similar to ${topArtist.artist}`,
+              diverse,
+              'Artists you might like'
+            );
+          }
         }
       }
     }
@@ -708,7 +749,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // ========================================================================
 
     const usedFamilyCountryCombos = new Set<string>();
-    for (const gc of genreCountryR.rows.slice(0, 5)) {
+    for (const gc of genreCountryR.rows.slice(0, 8)) {
       // Map genre to family for nicer label and deduplication
       const family = tokenToFamily.get(gc.genre.toLowerCase());
       const familyKey = family?.key || gc.genre.toLowerCase();
@@ -937,16 +978,16 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
                 s.last_played_at, false as is_favorite
          from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
          where lower(t.artist) = any($2) and (s.play_count is null or s.play_count < 2)
-           and t.updated_at > now() - interval '90 days'
+           and coalesce(t.birthtime_ms, extract(epoch from t.created_at) * 1000) > extract(epoch from (now() - interval '90 days')) * 1000
            ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
-         order by t.updated_at desc limit 100`,
+         order by coalesce(t.birthtime_ms, extract(epoch from t.created_at) * 1000) desc limit 150`,
         allowed ? [userId, artistNames, allowed] : [userId, artistNames]
       );
 
       if (newFromR.rows.length >= 5) {
         const diverse = diversify(
           newFromR.rows.map(t => ({ ...t, score: 10 })),
-          { maxPerArtist: 4, limit: 50 }
+          { maxPerArtist: 3, limit: 50 }
         );
         await addBucket('new_from_artists', 'New From Artists You Love', diverse, 'Fresh tracks from your favorites');
       }
@@ -958,7 +999,15 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
 
     if (topGenresR.rows.length > 0) {
       const likedGenres = new Set(topGenresR.rows.slice(0, 10).map(g => g.genre.toLowerCase()));
+      const topArtistNames = new Set(topArtistsR.rows.slice(0, 15).map(a => a.artist.toLowerCase()));
       
+      // Use genre family matching for broader coverage, plus artist affinity
+      const likedFamilyKeys = new Set<string>();
+      for (const g of topGenresR.rows.slice(0, 15)) {
+        const fam = tokenToFamily.get(g.genre.toLowerCase());
+        if (fam) likedFamilyKeys.add(fam.key);
+      }
+
       const discoverR = await db().query<TrackData & { genres: string[] }>(
         `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at,
                 0 as play_count, 0 as skip_count, null::timestamptz as last_played_at, false as is_favorite,
@@ -967,18 +1016,28 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
          left join user_track_stats s on s.track_id = t.id and s.user_id = $1
          where (s.play_count is null or s.play_count = 0)
            ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
-         group by t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at limit 300`,
+         group by t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at
+         order by t.updated_at desc nulls last limit 500`,
         allowed ? [userId, allowed] : [userId]
       );
 
-      // Score by genre match
+      // Score by genre match (exact + family), artist affinity, and freshness
       const scored = discoverR.rows.map(t => {
         let genreScore = 0;
         for (const g of (t.genres || [])) {
-          if (likedGenres.has(g.toLowerCase())) genreScore += 5;
+          const gl = g.toLowerCase();
+          if (likedGenres.has(gl)) {
+            genreScore += 5;  // exact genre match
+          } else {
+            const fam = tokenToFamily.get(gl);
+            if (fam && likedFamilyKeys.has(fam.key)) genreScore += 2;  // same genre family
+          }
         }
+        // Bonus for tracks by artists similar to user's top artists
+        const artistBonus = topArtistNames.has((t.artist || '').toLowerCase()) ? 0 : 0;
+        // Artist "adjacent" bonus — same album as a played track's artist gets a small boost
         const freshness = t.updated_at ? Math.max(0, 30 - (now - new Date(t.updated_at).getTime()) / 86400000) : 0;
-        return { ...t, score: genreScore + freshness * 0.3 };
+        return { ...t, score: genreScore + freshness * 0.5 + artistBonus };
       }).filter(t => t.score > 0);
 
       if (scored.length >= 10) {
@@ -1012,6 +1071,67 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
           { maxPerArtist: 4, limit: 50, seed }
         );
         await addBucket('deep_cuts', 'Deep Cuts', diverse, 'Hidden gems from artists you love');
+      }
+    }
+
+    // ========================================================================
+    // BUCKET: BECAUSE YOU LIKE [ALBUM]
+    // ========================================================================
+
+    {
+      // Find albums the user has played heavily or favorited
+      const lovedAlbumsR = await db().query<{ album: string; artist: string; genre: string | null; plays: number }>(
+        `select t.album, t.artist, min(tg.genre) as genre, sum(s.play_count)::int as plays
+         from user_track_stats s
+         join active_tracks t on t.id = s.track_id
+         left join track_genres tg on tg.track_id = t.id
+         where s.user_id = $1 and t.album is not null and t.album != '' and s.play_count >= 2
+           ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
+         group by t.album, t.artist
+         having count(*) >= 3
+         order by plays desc limit 10`,
+        allowed ? [userId, allowed] : [userId]
+      );
+
+      if (lovedAlbumsR.rows.length >= 2) {
+        // Pick 1-2 albums with daily rotation
+        const albumSeed = dailySeed(userId, 'because_album');
+        const shuffled = seededShuffle(lovedAlbumsR.rows, albumSeed);
+
+        for (const album of shuffled.slice(0, 2)) {
+          const becauseR = await db().query<TrackData>(
+            `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at,
+                    coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
+                    s.last_played_at, false as is_favorite
+             from active_tracks t
+             left join track_genres tg on tg.track_id = t.id
+             left join user_track_stats s on s.track_id = t.id and s.user_id = $1
+             where t.album is distinct from $2
+               and (lower(t.artist) = lower($4) ${album.genre ? `or lower(tg.genre) = lower($3)` : ''})
+               ${allowed ? `and t.library_id = any($5::bigint[])` : ''}
+             group by t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at,
+                      s.play_count, s.skip_count, s.last_played_at
+             order by coalesce(s.play_count, 0) desc limit 100`,
+            allowed
+              ? [userId, album.album, album.genre || '', album.artist, allowed]
+              : [userId, album.album, album.genre || '', album.artist]
+          );
+
+          if (becauseR.rows.length >= 8) {
+            const scored = becauseR.rows.map(t => ({
+              ...t,
+              score: scoreTrack(t, { ...scoringOpts, purpose: 'discovery' }) +
+                     (t.artist?.toLowerCase() === album.artist.toLowerCase() ? 10 : 0)
+            }));
+            const diverse = diversify(scored, { maxPerArtist: 2, limit: 30, seed: albumSeed });
+            await addBucket(
+              `because_${album.album.toLowerCase().replace(/\W/g, '_').slice(0, 25)}`,
+              `Because You Like "${album.album}"`,
+              diverse,
+              `More like ${album.artist}`
+            );
+          }
+        }
       }
     }
 
@@ -1072,7 +1192,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
             : null;
 
       const moodR = await db().query<TrackData>(
-        `select distinct t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.bpm,
+        `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.bpm,
                 coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                 s.last_played_at,
                 case when f.track_id is not null then true else false end as is_favorite,
@@ -1081,9 +1201,11 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
          join track_genres tg on tg.track_id = t.id
          left join user_track_stats s on s.track_id = t.id and s.user_id = $1
          left join favorite_tracks f on f.track_id = t.id and f.user_id = $1
-         where lower(tg.genre) = any($2) and coalesce(s.play_count, 0) > 0
+         where lower(tg.genre) = any($2)
            ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
-         limit 250`,
+         group by t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.bpm,
+                  s.play_count, s.skip_count, s.last_played_at, f.track_id
+         order by coalesce(s.play_count, 0) desc, random() limit 300`,
         allowed ? [userId, moodGenres.slice(0, 30), allowed] : [userId, moodGenres.slice(0, 30)]
       );
 
@@ -1139,30 +1261,61 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // BUCKET: JUMP BACK IN
     // ========================================================================
 
-    const jumpBackR = await db().query<TrackData>(
-      `select distinct on (t.album) t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-              0 as play_count, 0 as skip_count, ph.played_at as last_played_at,
-              false as is_favorite, null::timestamptz as updated_at
-       from play_history ph join active_tracks t on t.id = ph.track_id
-       where ph.user_id = $1 and t.album is not null and ph.played_at > now() - interval '7 days'
-         ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
-       order by t.album, ph.played_at desc`,
+    const jumpBackR = await db().query<TrackData & { total_in_album: number; played_in_album: number }>(
+      `with recent_albums as (
+        select distinct t.album, t.artist
+        from play_history ph join active_tracks t on t.id = ph.track_id
+        where ph.user_id = $1 and t.album is not null and t.album != ''
+          and ph.played_at > now() - interval '14 days'
+          ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
+      ),
+      album_progress as (
+        select ra.album, ra.artist,
+               count(distinct t.id) as total_in_album,
+               count(distinct case when s.play_count > 0 then t.id end) as played_in_album
+        from recent_albums ra
+        join active_tracks t on t.album = ra.album and t.artist = ra.artist
+        left join user_track_stats s on s.track_id = t.id and s.user_id = $1
+        group by ra.album, ra.artist
+        having count(distinct t.id) > count(distinct case when s.play_count > 0 then t.id end)
+           and count(distinct t.id) >= 3
+      )
+      select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
+             0 as play_count, 0 as skip_count, null::timestamptz as last_played_at,
+             false as is_favorite, null::timestamptz as updated_at,
+             ap.total_in_album::int, ap.played_in_album::int
+      from album_progress ap
+      join active_tracks t on t.album = ap.album and t.artist = ap.artist
+      left join user_track_stats s on s.track_id = t.id and s.user_id = $1
+      where (s.play_count is null or s.play_count = 0)
+      order by ap.total_in_album - ap.played_in_album desc, t.track_number nulls last`,
       allowed ? [userId, allowed] : [userId]
     );
 
-    if (jumpBackR.rows.length >= 4) {
-      await addBucket('jump_back_in', 'Jump Back In', jumpBackR.rows.slice(0, 20), 'Continue where you left off');
+    if (jumpBackR.rows.length >= 3) {
+      const diverse = diversify(
+        jumpBackR.rows.map(t => ({ ...t, score: 10 })),
+        { maxPerAlbum: 3, maxPerArtist: 6, limit: 20 }
+      );
+      await addBucket('jump_back_in', 'Jump Back In', diverse, 'Albums you haven\'t finished');
     }
 
     // ========================================================================
     // RETURN
     // ========================================================================
 
-    return {
+    const result = {
       ok: true,
       generatedAt: new Date().toISOString(),
       lastfmEnabled: isLastfmEnabled(),
       buckets
     };
+
+    // Cache the computed result
+    try {
+      await redis().set(cacheKey, JSON.stringify(result), 'EX', RECO_CACHE_TTL);
+    } catch { /* Redis unavailable → skip caching */ }
+
+    return result;
   });
 });

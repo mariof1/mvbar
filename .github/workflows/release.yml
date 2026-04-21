@@ -49,9 +49,9 @@ jobs:
     name: Lint & Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -96,7 +96,7 @@ jobs:
       version: ${{ steps.bump.outputs.version }}
       tag: ${{ steps.bump.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -167,7 +167,7 @@ jobs:
     needs: check
     if: inputs.build_type == 'dev'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up QEMU
         if: contains(inputs.platforms, 'arm64')
@@ -196,7 +196,8 @@ jobs:
             GIT_COMMIT=${{ github.sha }}
             GIT_BRANCH=${{ github.ref_name }}
             BUILD_DATE=${{ github.run_started_at }}
-          no-cache: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ===========================================
   # DOCKER BUILD - RELEASE
@@ -207,7 +208,7 @@ jobs:
     needs: version
     if: inputs.build_type == 'release'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.version.outputs.tag }}
 
@@ -248,7 +249,8 @@ jobs:
             GIT_COMMIT=${{ github.sha }}
             GIT_BRANCH=${{ github.ref_name }}
             BUILD_DATE=${{ github.run_started_at }}
-          no-cache: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Update Docker Hub description
         uses: peter-evans/dockerhub-description@v4

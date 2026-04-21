@@ -3,7 +3,7 @@ set -e
 
 mkdir -p /data/redis /meili_data /data/caddy /config/caddy \
   /data/cache/lyrics /data/cache/art /data/cache/avatars \
-  /hls /podcasts /run/postgresql
+  /hls /podcasts /audiobooks /data/cache/audiobook-art /run/postgresql
 chown -R postgres:postgres /run/postgresql || true
 
 migrate_cache_dir() {
@@ -79,5 +79,13 @@ SQL
 fi
 
 chown -R postgres:postgres /var/lib/postgresql/data
+
+# Allow external connections to Postgres (for tools like DBeaver)
+if ! grep -q "listen_addresses = '\*'" /var/lib/postgresql/data/postgresql.conf 2>/dev/null; then
+  echo "listen_addresses = '*'" >> /var/lib/postgresql/data/postgresql.conf
+fi
+if ! grep -q '0\.0\.0\.0/0' /var/lib/postgresql/data/pg_hba.conf 2>/dev/null; then
+  echo 'host all all 0.0.0.0/0 scram-sha-256' >> /var/lib/postgresql/data/pg_hba.conf
+fi
 
 exec "$@"

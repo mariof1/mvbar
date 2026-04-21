@@ -10,6 +10,7 @@ import {
   listAdminUsers
 } from './apiClient';
 import { useAuth } from './store';
+import { showConfirm } from './ConfirmModal';
 
 export function UserManagementPanel() {
   const token = useAuth((s) => s.token);
@@ -125,7 +126,7 @@ export function UserManagementPanel() {
 
   async function deleteUser() {
     if (!token || !selectedUser) return;
-    const ok = confirm(`Delete user ${selectedUser.email}? This cannot be undone.`);
+    const ok = await showConfirm({ title: 'Delete User', message: `Delete user ${selectedUser.email}? This cannot be undone.`, confirmLabel: 'Delete', danger: true });
     if (!ok) return;
 
     setLoading(true);

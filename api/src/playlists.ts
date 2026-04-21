@@ -82,4 +82,16 @@ export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
     broadcastToUser(req.user.userId, 'playlist:updated', { playlistId });
     return { ok: true };
   });
+
+  app.delete('/api/playlists/:id', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id)) return reply.code(400).send({ ok: false });
+
+    const deleted = await playlists.deletePlaylist(req.user.userId, id);
+    if (!deleted) return reply.code(404).send({ ok: false });
+    await audit('playlist_delete', { by: req.user.userId, playlistId: id });
+    broadcastToUser(req.user.userId, 'playlist:deleted', { id });
+    return { ok: true, deleted: id };
+  });
 });
