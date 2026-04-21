@@ -3,6 +3,8 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { create } from 'zustand';
 import { useFavorites } from './favoritesStore';
+import { useToastStore } from './Toast';
+import { useAuth } from './store';
 
 type LibraryUpdate = {
   type: 'library:update';
@@ -70,7 +72,12 @@ type ScanProgressUpdate = {
   };
 };
 
-type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | { type: 'connected' } | { type: 'ping' };
+type AdminUserPendingUpdate = {
+  type: 'user:pending' | 'user:approval_changed';
+  data: { email?: string; status?: string };
+};
+
+type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | { type: 'connected' } | { type: 'ping' };
 
 // Store for library update notifications
 interface LibraryUpdateStore {
@@ -112,6 +119,35 @@ export const usePlaylistUpdates = create<PlaylistUpdateStore>((set) => ({
   lastUpdate: 0,
   lastEvent: null,
   triggerRefresh: () => set({ lastUpdate: Date.now() }),
+}));
+
+// Store for admin pending-user notifications
+interface AdminPendingStore {
+  count: number;
+  lastEvent: number;
+  gotoUsersRequested: number;
+  setCount: (n: number) => void;
+  requestGotoUsers: () => void;
+  refresh: (token: string | null) => Promise<void>;
+}
+
+export const useAdminPending = create<AdminPendingStore>((set) => ({
+  count: 0,
+  lastEvent: 0,
+  gotoUsersRequested: 0,
+  setCount: (n) => set({ count: n }),
+  requestGotoUsers: () => set({ gotoUsersRequested: Date.now() }),
+  refresh: async (token) => {
+    if (!token) return;
+    try {
+      const res = await fetch('/api/admin/users/pending', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      set({ count: Array.isArray(data.users) ? data.users.length : 0 });
+    } catch { /* ignore */ }
+  },
 }));
 
 // Store for history update notifications
@@ -224,6 +260,12 @@ export function useWebSocket(isAdmin = false) {
           } else if (msg.type === 'scan:progress') {
             // Scan progress update (admin)
             useScanProgress.getState().setProgress(msg.data);
+          } else if (msg.type === 'user:pending') {
+            useAdminPending.setState((s) => ({ count: s.count + 1, lastEvent: Date.now() }));
+            const email = msg.data?.email ? ` (${msg.data.email})` : '';
+            useToastStore.getState().show(`New user pending approval${email}`, 'queue');
+          } else if (msg.type === 'user:approval_changed') {
+            useAdminPending.getState().refresh(useAuth.getState().token);
           }
         } catch {
           // Ignore malformed messages

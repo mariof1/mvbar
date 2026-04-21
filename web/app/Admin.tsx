@@ -20,7 +20,7 @@ import {
 } from './apiClient';
 import { useAuth } from './store';
 import { showConfirm } from './ConfirmModal';
-import { useScanProgress, useLibraryUpdates } from './useWebSocket';
+import { useScanProgress, useLibraryUpdates, useAdminPending } from './useWebSocket';
 
 type Tab = 'library' | 'users' | 'settings' | 'device-logs' | 'notifications';
 
@@ -31,6 +31,10 @@ export function Admin() {
   const isAdmin = user?.role === 'admin';
 
   const [activeTab, setActiveTab] = useState<Tab>('library');
+  const gotoUsersRequested = useAdminPending((s) => s.gotoUsersRequested);
+  useEffect(() => {
+    if (gotoUsersRequested > 0) setActiveTab('users');
+  }, [gotoUsersRequested]);
 
   if (!token || !isAdmin) return null;
 

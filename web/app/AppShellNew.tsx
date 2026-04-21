@@ -29,7 +29,7 @@ import { useRouter, useRoute, initRouter, getTabFromRoute, type Route } from './
 import { NavigationHeader } from './NavigationHeader';
 import { usePreferences } from './preferencesStore';
 import { getHlsStatus, logout, recordPlay, recordSkip, requestHlsTranscode, scrobbleToListenBrainz, nowPlayingListenBrainz, prefetchLyrics, listPlaylists, addTrackToPlaylist, apiFetch } from './apiClient';
-import { useWebSocket } from './useWebSocket';
+import { useWebSocket, useAdminPending } from './useWebSocket';
 
 // Icons as simple SVG components
 const Icons = {
@@ -1426,6 +1426,14 @@ export function AppShellNew() {
   // Initialize WebSocket connection for live updates
   useWebSocket(isAdmin);
 
+  // Admin: pending users badge
+  const pendingCount = useAdminPending((s) => s.count);
+  const refreshPending = useAdminPending((s) => s.refresh);
+  const requestGotoUsers = useAdminPending((s) => s.requestGotoUsers);
+  useEffect(() => {
+    if (isAdmin && token) refreshPending(token);
+  }, [isAdmin, token, refreshPending]);
+
   // Load preferences on mount
   useEffect(() => {
     if (token) loadPreferences(token);
@@ -1466,6 +1474,11 @@ export function AppShellNew() {
   }, [navigate]);
 
   useEffect(() => { initRouter(); }, []);
+
+  const handleBellClick = useCallback(() => {
+    requestGotoUsers();
+    navigate({ type: 'admin' });
+  }, [navigate, requestGotoUsers]);
 
   // Global Ctrl+K / Cmd+K keyboard shortcut for search
   useEffect(() => {
@@ -1728,6 +1741,23 @@ export function AppShellNew() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </button>
+          {isAdmin && (
+            <button
+              onClick={handleBellClick}
+              className="relative p-2 rounded-lg hover:bg-white/10 transition-colors"
+              aria-label={`Pending approvals${pendingCount ? ` (${pendingCount})` : ''}`}
+              title={pendingCount ? `${pendingCount} user${pendingCount === 1 ? '' : 's'} pending approval` : 'No pending approvals'}
+            >
+              <svg className="w-5 h-5 text-white/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 11-6 0" />
+              </svg>
+              {pendingCount > 0 && (
+                <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                  {pendingCount > 99 ? '99+' : pendingCount}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </header>
 
@@ -1751,16 +1781,35 @@ export function AppShellNew() {
                 {tab === 'admin' && 'Admin'}
               </h2>
             </div>
-            <button
-              onClick={() => setSearchOpen(true)}
-              className="flex items-center gap-3 px-4 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-slate-400 hover:text-white transition-all w-72 group"
-            >
-              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <span className="flex-1 text-left text-sm">Search...</span>
-              <kbd className="text-[11px] bg-white/10 group-hover:bg-white/15 px-1.5 py-0.5 rounded font-mono border border-white/10">⌘K</kbd>
-            </button>
+            <div className="flex items-center gap-3">
+              {isAdmin && (
+                <button
+                  onClick={handleBellClick}
+                  className="relative p-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-slate-400 hover:text-white transition-all"
+                  aria-label={`Pending approvals${pendingCount ? ` (${pendingCount})` : ''}`}
+                  title={pendingCount ? `${pendingCount} user${pendingCount === 1 ? '' : 's'} pending approval` : 'No pending approvals'}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 11-6 0" />
+                  </svg>
+                  {pendingCount > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center ring-2 ring-slate-900">
+                      {pendingCount > 99 ? '99+' : pendingCount}
+                    </span>
+                  )}
+                </button>
+              )}
+              <button
+                onClick={() => setSearchOpen(true)}
+                className="flex items-center gap-3 px-4 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-xl text-slate-400 hover:text-white transition-all w-72 group"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <span className="flex-1 text-left text-sm">Search...</span>
+                <kbd className="text-[11px] bg-white/10 group-hover:bg-white/15 px-1.5 py-0.5 rounded font-mono border border-white/10">⌘K</kbd>
+              </button>
+            </div>
           </header>
 
           {/* Content Area */}

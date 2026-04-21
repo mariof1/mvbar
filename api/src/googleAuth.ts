@@ -9,6 +9,7 @@ import https from 'https';
 import { db } from './db.js';
 import { config } from './config.js';
 import { notifyAdmins } from './telegram.js';
+import { broadcastToAdmins } from './websocket.js';
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
@@ -213,6 +214,7 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
 
             fastify.log.info(`Created new Google user (pending approval): ${email}`);
             notifyAdmins('user_pending', `New Google sign-in awaiting approval:\n• Email: ${email}`);
+            broadcastToAdmins('user:pending', { email });
           }
         } else if (refreshToken) {
           // Update refresh token for existing user (Google returns new one occasionally)
@@ -329,6 +331,7 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
 
       fastify.log.info(`Admin approved user: ${result.rows[0].email}`);
       notifyAdmins('user_approved', `User approved:\n• Email: ${result.rows[0].email}`);
+      broadcastToAdmins('user:approval_changed', { email: result.rows[0].email, status: 'approved' });
       return { success: true };
     }
   );
@@ -356,6 +359,7 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
 
       fastify.log.info(`Admin rejected user: ${result.rows[0].email}`);
       notifyAdmins('user_approved', `User rejected:\n• Email: ${result.rows[0].email}`);
+      broadcastToAdmins('user:approval_changed', { email: result.rows[0].email, status: 'rejected' });
       return { success: true };
     }
   );
@@ -618,6 +622,7 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
             };
             fastify.log.info(`Mobile: Created new Google user (pending approval): ${email}`);
             notifyAdmins('user_pending', `New Google sign-in awaiting approval (mobile):\n• Email: ${email}`);
+            broadcastToAdmins('user:pending', { email });
           }
         }
 
