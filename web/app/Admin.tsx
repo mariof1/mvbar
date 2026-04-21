@@ -37,7 +37,7 @@ export function Admin() {
   return (
     <div className="space-y-6">
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-slate-700/50 pb-4">
+      <div className="flex gap-2 border-b border-slate-700/50 pb-4 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
         {[
           { id: 'library' as Tab, label: 'Library', icon: (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -72,7 +72,7 @@ export function Admin() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap shrink-0 ${
               activeTab === tab.id
                 ? 'bg-cyan-500 text-white'
                 : 'bg-slate-800/50 text-slate-300 hover:bg-slate-700/50'
