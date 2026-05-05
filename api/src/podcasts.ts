@@ -389,7 +389,13 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
        JOIN podcasts p ON p.id = e.podcast_id
        JOIN user_podcast_subscriptions ups ON ups.podcast_id = p.id AND ups.user_id = $1
        JOIN user_episode_progress uep ON uep.episode_id = e.id AND uep.user_id = $1
-       WHERE uep.position_ms > 30000 AND (uep.played IS NULL OR uep.played = false)
+       WHERE uep.position_ms > 30000
+         AND (uep.played IS NULL OR uep.played = false)
+         AND (
+           e.duration_ms IS NULL
+           OR e.duration_ms <= 0
+           OR uep.position_ms < (e.duration_ms - 30000)
+         )
        ORDER BY uep.updated_at DESC
        LIMIT $2`,
       [req.user.userId, limit]
