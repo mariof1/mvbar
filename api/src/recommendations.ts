@@ -341,7 +341,15 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       buckets.push({
         key, name, subtitle, reason,
         count: tracks.length,
-        tracks: tracks.slice(0, 15).map(t => ({ id: t.id, title: t.title, artist: t.artist })),
+        tracks: tracks.slice(0, 15).map(t => ({
+          id: t.id,
+          title: t.title,
+          artist: t.artist,
+          album: t.album ?? null,
+          art_path: t.art_path ?? null,
+          art_hash: t.art_hash ?? null,
+          duration_ms: (t as any).duration_ms ?? null,
+        })),
         ...art
       });
     }
