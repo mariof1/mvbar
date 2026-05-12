@@ -433,6 +433,18 @@ export async function initDb() {
 
   // Track tempo/bpm for tempo-based recommendations
   await pool.query('alter table tracks add column if not exists bpm real');
+  // Migrate legacy integer bpm column to real so fractional averages can be queried.
+  // The active_tracks view references bpm so we drop+recreate it (view is recreated below).
+  await pool.query(`do $$
+    begin
+      if exists (
+        select 1 from information_schema.columns
+        where table_name='tracks' and column_name='bpm' and data_type='integer'
+      ) then
+        drop view if exists active_tracks;
+        alter table tracks alter column bpm type real using bpm::real;
+      end if;
+    end$$`);
   await pool.query('create index if not exists tracks_bpm_idx on tracks(bpm) where bpm is not null');
 
   // Add birthtime_ms (on-disk creation time) + created_at (derived for convenience)

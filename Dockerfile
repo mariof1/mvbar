@@ -28,6 +28,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then export NODE_OPTIONS="--jitless"; fi; \
     npm run build && npm prune --omit=dev
 
 FROM node:22-alpine AS web_builder
+ARG TARGETARCH
 WORKDIR /src/web
 # Avoid QEMU SIGILL when building multi-arch images in CI (use portable SWC/WASM)
 ENV NEXT_TELEMETRY_DISABLED=1 \
@@ -36,7 +37,9 @@ COPY web/package*.json ./
 # No cache mount - prevents serving wrong-arch SWC binaries in multi-platform builds
 RUN npm ci
 COPY web/ .
-RUN npm run build
+# Avoid QEMU SIGILL when building linux/arm64 in CI
+RUN if [ "$TARGETARCH" = "arm64" ]; then export NODE_OPTIONS="--jitless --max-old-space-size=4096"; fi; \
+    npm run build
 
 FROM alpine:3.20
 
