@@ -27,19 +27,22 @@ COPY worker/ .
 RUN if [ "$TARGETARCH" = "arm64" ]; then export NODE_OPTIONS="--jitless"; fi; \
     npm run build && npm prune --omit=dev
 
-FROM node:22-alpine AS web_builder
-ARG TARGETARCH
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web_builder
 WORKDIR /src/web
-# Avoid QEMU SIGILL when building multi-arch images in CI (use portable SWC/WASM)
-ENV NEXT_TELEMETRY_DISABLED=1 \
-    NEXT_DISABLE_SWC_BINARY=1
+# Build Next.js on the native build platform to avoid QEMU SIGILL / disabled
+# WebAssembly when cross-building linux/arm64. The build output is portable JS.
+ENV NEXT_TELEMETRY_DISABLED=1
 COPY web/package*.json ./
-# No cache mount - prevents serving wrong-arch SWC binaries in multi-platform builds
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm,id=web-npm-build npm ci
 COPY web/ .
-# Avoid QEMU SIGILL when building linux/arm64 in CI
-RUN if [ "$TARGETARCH" = "arm64" ]; then export NODE_OPTIONS="--jitless --max-old-space-size=4096"; fi; \
-    npm run build
+RUN npm run build
+
+# Install production node_modules for the actual target arch (no JIT-heavy work,
+# just downloads + extracts, so QEMU emulation is safe here).
+FROM node:22-alpine AS web_deps
+WORKDIR /src/web
+COPY web/package*.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
 FROM alpine:3.20
 
@@ -86,8 +89,8 @@ COPY --from=worker_builder /src/worker/package.json /app/worker/package.json
 COPY --from=worker_builder /src/worker/node_modules /app/worker/node_modules
 COPY --from=worker_builder /src/worker/dist /app/worker/dist
 
+COPY --from=web_deps /src/web/node_modules /app/web/node_modules
 COPY --from=web_builder /src/web/package.json /app/web/package.json
-COPY --from=web_builder /src/web/node_modules /app/web/node_modules
 COPY --from=web_builder /src/web/.next /app/web/.next
 COPY --from=web_builder /src/web/public /app/web/public
 
