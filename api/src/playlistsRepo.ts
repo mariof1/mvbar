@@ -1,17 +1,29 @@
 import { db } from './db.js';
 
-export type Playlist = { id: number; name: string; created_at: string };
+export type Playlist = { id: number; name: string; created_at: string; item_count?: number };
 
 export async function createPlaylist(userId: string, name: string) {
   const r = await db().query<Playlist>(
-    'insert into playlists(user_id, name) values ($1, $2) returning id, name, created_at',
+    'insert into playlists(user_id, name) values ($1, $2) returning id, name, created_at, 0::int as item_count',
     [userId, name]
   );
   return r.rows[0]!;
 }
 
 export async function listPlaylists(userId: string) {
-  const r = await db().query<Playlist>('select id, name, created_at from playlists where user_id=$1 order by id desc', [userId]);
+  const r = await db().query<Playlist>(
+    `select p.id, p.name, p.created_at,
+            coalesce(c.item_count, 0)::int as item_count
+       from playlists p
+       left join (
+         select playlist_id, count(*)::int as item_count
+           from playlist_items
+          group by playlist_id
+       ) c on c.playlist_id = p.id
+      where p.user_id=$1
+      order by p.id desc`,
+    [userId]
+  );
   return r.rows;
 }
 
