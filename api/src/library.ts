@@ -647,16 +647,32 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/library/tracks', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
 
-    const q = (req.query as { limit?: string; offset?: string }).limit;
-    const limit = Math.min(200, Math.max(1, Number(q ?? 50)));
-    const offset = Math.max(0, Number((req.query as { offset?: string }).offset ?? 0));
+    const qs = req.query as { limit?: string; offset?: string; sort?: string; order?: string };
+    const limit = Math.min(200, Math.max(1, Number(qs.limit ?? 50)));
+    const offset = Math.max(0, Number(qs.offset ?? 0));
+
+    const sortMap: Record<string, string> = {
+      created_at: 'created_at',
+      added: 'created_at',
+      updated_at: 'updated_at',
+      title: 'title',
+      artist: 'artist',
+      album: 'album',
+      year: 'year',
+      duration: 'duration_ms',
+    };
+    const sortCol = sortMap[(qs.sort ?? '').toLowerCase()] ?? null;
+    const orderDir = (qs.order ?? '').toLowerCase() === 'asc' ? 'asc' : 'desc';
+    const orderBy = sortCol
+      ? `order by ${sortCol} ${orderDir} nulls last, id ${orderDir}`
+      : `order by artist nulls last, album nulls last, title nulls last, id asc`;
 
     const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
     const where = allowed === null ? '' : `where library_id = any($3)`;
     const params = allowed === null ? [limit, offset] : [limit, offset, allowed];
 
     const r = await db().query(
-      `select id, path, ext, title, artist, album, duration_ms, library_id from active_tracks ${where} order by artist nulls last, album nulls last, title nulls last, id asc limit $1 offset $2`,
+      `select id, path, ext, title, artist, album, duration_ms, library_id, created_at, updated_at, art_path, art_hash from active_tracks ${where} ${orderBy} limit $1 offset $2`,
       params as any
     );
 
