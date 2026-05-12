@@ -2,10 +2,11 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from './store';
-import { apiFetch } from './apiClient';
+import { apiFetch, browseAlbum, browseArtistTracks } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useRouter } from './router';
 import { useLibraryUpdates } from './useWebSocket';
+import { AddMenu, type AddMenuTrack } from './AddMenu';
 
 type Hit = {
   id: number;
@@ -241,10 +242,13 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                 <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Artists</div>
                 <div className="space-y-0.5">
                   {artistHits.slice(0, 4).map((a) => (
-                    <button
+                    <div
                       key={a.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => handleNavigate({ type: 'browse-artist', artistId: a.id, artistName: a.name })}
-                      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left"
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleNavigate({ type: 'browse-artist', artistId: a.id, artistName: a.name }); }}
+                      className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left cursor-pointer"
                     >
                       <div className="w-9 h-9 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex-shrink-0 flex items-center justify-center text-xs font-bold text-white relative overflow-hidden">
                         {getInitials(a.name)}
@@ -261,10 +265,21 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                         <div className="text-sm font-medium text-white truncate">{a.name}</div>
                         <div className="text-xs text-slate-400">{a.track_count} tracks · {a.album_count} albums</div>
                       </div>
-                      <svg className="w-4 h-4 text-slate-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <div className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                        <AddMenu
+                          label="artist"
+                          title={`Add ${a.name}...`}
+                          getTracks={async () => {
+                            if (!token) return [];
+                            const r = await browseArtistTracks(token, a.id);
+                            return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                          }}
+                        />
+                      </div>
+                      <svg className="w-4 h-4 text-slate-600 flex-shrink-0 group-hover:opacity-0 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
-                    </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -276,10 +291,13 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                 <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Albums</div>
                 <div className="space-y-0.5">
                   {albumHits.slice(0, 4).map((a, idx) => (
-                    <button
+                    <div
                       key={`${a.album}-${idx}`}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => handleNavigate({ type: 'browse-album', artist: a.display_artist || '', album: a.album, artistId: a.artist_id || undefined })}
-                      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left"
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleNavigate({ type: 'browse-album', artist: a.display_artist || '', album: a.album, artistId: a.artist_id || undefined }); }}
+                      className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left cursor-pointer"
                     >
                       <div className="w-9 h-9 rounded-lg bg-slate-700 flex-shrink-0 relative overflow-hidden">
                         {a.art_track_id && (
@@ -295,10 +313,21 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                         <div className="text-sm font-medium text-white truncate">{a.album}</div>
                         <div className="text-xs text-slate-400 truncate">{a.display_artist || 'Unknown Artist'} · {a.track_count} tracks</div>
                       </div>
-                      <svg className="w-4 h-4 text-slate-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <div className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                        <AddMenu
+                          label="album"
+                          title={`Add ${a.album}...`}
+                          getTracks={async () => {
+                            if (!token) return [];
+                            const r = await browseAlbum(token, a.display_artist || '', a.album, a.artist_id ?? undefined);
+                            return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                          }}
+                        />
+                      </div>
+                      <svg className="w-4 h-4 text-slate-600 flex-shrink-0 group-hover:opacity-0 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
-                    </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -374,16 +403,12 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                       </button>
 
                       {/* Actions */}
-                      <div className="hidden sm:flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                        <button
-                          onClick={() => handleAddToQueue(t)}
-                          className="p-1.5 hover:bg-white/10 rounded-md transition-colors"
-                          title="Add to queue"
-                        >
-                          <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                          </svg>
-                        </button>
+                      <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0">
+                        <AddMenu
+                          label="track"
+                          title="Add to..."
+                          getTracks={() => [{ id: Number(t.id), title: t.title, artist: t.display_artist || t.artist, album: t.album }]}
+                        />
                         <button
                           onClick={async () => {
                             try { await toggleFav(token!, Number(t.id)); } catch (e: any) { if (e?.status === 401) clear(); }

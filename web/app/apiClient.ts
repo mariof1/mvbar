@@ -152,6 +152,31 @@ export async function addTrackToPlaylist(token: string, playlistId: string, trac
   };
 }
 
+export async function addTracksToPlaylist(token: string, playlistId: string, trackIds: number[]) {
+  // API accepts one track at a time; send sequentially to preserve order.
+  let count = 0;
+  for (const id of trackIds) {
+    await addTrackToPlaylist(token, playlistId, id);
+    count++;
+  }
+  return { ok: true, count };
+}
+
+export async function browseArtistTracks(token: string, artistId: number) {
+  return (await apiFetch(`/browse/artist/${artistId}/tracks`, { method: 'GET' }, token)) as {
+    ok: boolean;
+    tracks: Array<{
+      id: number;
+      title: string | null;
+      artist: string | null;
+      album: string | null;
+      duration_ms: number | null;
+      disc_number?: number | null;
+      track_number?: number | null;
+    }>;
+  };
+}
+
 export async function removeTrackFromPlaylist(token: string, playlistId: string, trackId: number) {
   return (await apiFetch(`/playlists/${encodeURIComponent(playlistId)}/items/${trackId}`, { method: 'DELETE' }, token)) as { ok: boolean };
 }

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { listHistory } from './apiClient';
 import { useAuth } from './store';
 import { useHistoryUpdates } from './useWebSocket';
+import { AddMenu } from './AddMenu';
 
 export function History(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
@@ -123,16 +124,12 @@ export function History(props: {
             </div>
 
             {/* Actions - hidden on small screens */}
-            <div className="hidden sm:flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                onClick={() => props.onAddToQueue?.({ id: t.id, title: t.title, artist: t.artist })}
-                className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors"
-                title="Add to queue"
-              >
-                <svg className="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-              </button>
+            <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+              <AddMenu
+                label="track"
+                title="Add to..."
+                getTracks={() => [{ id: t.id, title: t.title, artist: t.artist, album: t.album }]}
+              />
             </div>
           </div>
         ))}

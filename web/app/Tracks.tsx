@@ -5,6 +5,7 @@ import { addTrackToPlaylist, listPlaylists, listTracks } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useAuth } from './store';
 import { useLibraryUpdates } from './useWebSocket';
+import { AddMenu } from './AddMenu';
 
 export function Tracks(props: {
   refreshNonce?: number;
@@ -154,16 +155,12 @@ export function Tracks(props: {
             </div>
 
             {/* Actions - hidden on small screens */}
-            <div className="hidden sm:flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                onClick={() => props.onAddToQueue?.(t)}
-                className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors"
-                title="Add to queue"
-              >
-                <svg className="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-              </button>
+            <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+              <AddMenu
+                label="track"
+                title="Add to..."
+                getTracks={() => [{ id: t.id, title: t.title, artist: t.artist, album: t.album }]}
+              />
               <button
                 onClick={async () => {
                   try {

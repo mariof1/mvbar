@@ -3,8 +3,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
-import { apiFetch } from './apiClient';
+import { apiFetch, browseAlbum } from './apiClient';
 import { useLibraryUpdates } from './useWebSocket';
+import { AddMenu, type AddMenuTrack } from './AddMenu';
 
 type Album = {
   album: string;
@@ -211,15 +212,13 @@ export function RecentlyAdded({
                   <div className="text-slate-400 text-sm truncate">{track.artist}</div>
                 </div>
                 <span className="text-slate-500 text-sm">{formatDuration(track.duration_ms)}</span>
-                <button
-                  onClick={(e) => { e.stopPropagation(); onAddToQueue(track); }}
-                  className="opacity-0 group-hover:opacity-100 p-2 text-slate-400 hover:text-white transition-all"
-                  title="Add to queue"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                  </svg>
-                </button>
+                <div onClick={(e) => e.stopPropagation()} className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                  <AddMenu
+                    label="track"
+                    title="Add to..."
+                    getTracks={() => [{ id: track.id, title: track.title, artist: track.artist, album: track.album }]}
+                  />
+                </div>
               </div>
             ))}
           </div>
@@ -234,7 +233,7 @@ export function RecentlyAdded({
       {albums.map((album) => (
         <div
           key={`${album.album}-${album.display_artist}`}
-          className="group cursor-pointer"
+          className="group cursor-pointer relative"
           onClick={() => handleAlbumClick(album)}
         >
           <div className="relative aspect-square rounded-xl overflow-hidden mb-2">
@@ -252,6 +251,18 @@ export function RecentlyAdded({
                   <path d="M8 5v14l11-7z" />
                 </svg>
               </button>
+            </div>
+            <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+              <AddMenu
+                variant="subtle"
+                label="album"
+                title={`Add ${album.album}...`}
+                getTracks={async () => {
+                  if (!token) return [];
+                  const r = await browseAlbum(token, album.display_artist, album.album);
+                  return r.tracks.map((t: any) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                }}
+              />
             </div>
           </div>
           <h3 className="font-medium text-white truncate">{album.album}</h3>
