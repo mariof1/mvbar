@@ -89,7 +89,7 @@ export const preferencesPlugin: FastifyPluginAsync = fp(async (app) => {
       .map((s: string) => parseInt(s, 10))
       .filter((n: number) => Number.isFinite(n));
 
-    const results: { id: number; title: string; artist: string; source: string }[] = [];
+    const results: { id: number; title: string; artist: string; album: string | null; art_path: string | null; art_hash: string | null; duration_ms: number | null; source: string }[] = [];
     const limit = 20; // Larger batch for continuous playback
 
     if (!isLastfmEnabled()) {
@@ -100,7 +100,7 @@ export const preferencesPlugin: FastifyPluginAsync = fp(async (app) => {
     const similarTracks = await findSimilarLocalTracks(artist, title, excludeIds, limit);
     for (const t of similarTracks) {
       if (results.length >= limit) break;
-      results.push({ id: t.id, title: t.title, artist: t.artist, source: 'similar_track' });
+      results.push({ id: t.id, title: t.title, artist: t.artist, album: t.album, art_path: t.art_path, art_hash: t.art_hash, duration_ms: t.duration_ms, source: 'similar_track' });
     }
 
     // 2. Fallback: Get tracks from similar artists
@@ -112,8 +112,8 @@ export const preferencesPlugin: FastifyPluginAsync = fp(async (app) => {
         if (results.length >= limit) break;
         
         // Get random tracks from this similar artist
-        const artistTracks = await db().query<{ id: number; title: string; artist: string }>(
-          `SELECT id, title, artist FROM active_tracks 
+        const artistTracks = await db().query<{ id: number; title: string; artist: string; album: string | null; art_path: string | null; art_hash: string | null; duration_ms: number | null }>(
+          `SELECT id, title, artist, album, art_path, art_hash, duration_ms FROM active_tracks 
            WHERE lower(artist) = lower($1)
              AND id != ALL($2)
            ORDER BY random()
@@ -124,7 +124,7 @@ export const preferencesPlugin: FastifyPluginAsync = fp(async (app) => {
         for (const t of artistTracks.rows) {
           if (results.length >= limit) break;
           if (!existingIds.includes(t.id)) {
-            results.push({ id: t.id, title: t.title, artist: t.artist, source: 'similar_artist' });
+            results.push({ id: t.id, title: t.title, artist: t.artist, album: t.album, art_path: t.art_path, art_hash: t.art_hash, duration_ms: t.duration_ms, source: 'similar_artist' });
             existingIds.push(t.id);
           }
         }
@@ -143,6 +143,10 @@ export const preferencesPlugin: FastifyPluginAsync = fp(async (app) => {
         id: t.id,
         title: t.title,
         artist: t.artist,
+        album: t.album,
+        art_path: t.art_path,
+        art_hash: t.art_hash,
+        duration_ms: t.duration_ms,
       })),
       sources: results.reduce((acc, t) => {
         acc[t.source] = (acc[t.source] || 0) + 1;
