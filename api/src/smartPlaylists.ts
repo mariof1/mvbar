@@ -452,6 +452,87 @@ export const smartPlaylistsPlugin: FastifyPluginAsync = fp(async (app) => {
     };
   });
 
+  // Convert smart playlist to a regular playlist (snapshot current matches)
+  app.post('/api/smart-playlists/:id/convert', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+
+    const id = parseInt((req.params as any).id, 10);
+    if (isNaN(id)) return reply.code(400).send({ ok: false, error: 'Invalid ID' });
+
+    const body = (req.body as any) || {};
+    const deleteSmart = body.delete === true || body.delete === 'true';
+
+    const r = await db().query(
+      `select id, name, filters_json, sort_mode
+         from smart_playlists
+        where id = $1 and user_id = $2`,
+      [id, req.user.userId]
+    );
+    if (r.rows.length === 0) return reply.code(404).send({ ok: false, error: 'Not found' });
+
+    const row = r.rows[0];
+    let name = String(body?.name || row.name || '').trim();
+    if (!name) name = row.name;
+    if (name.length > 255) name = name.slice(0, 255);
+
+    const filters = normalizeFilters(row.filters_json);
+    let sortMode = String(body?.sort || row.sort_mode || 'random').toLowerCase();
+    if (!SORT_MODES.has(sortMode)) sortMode = 'random';
+
+    let limit = parseInt(body?.limit, 10) || 2000;
+    if (filters.maxResults) limit = Math.min(limit, filters.maxResults);
+    limit = Math.max(1, Math.min(5000, limit));
+
+    const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
+    const { sql, params } = await buildSmartPlaylistQuery(req.user.userId, filters, sortMode, allowed);
+    const tracksR = await db().query<{ id: number }>(`${sql} limit $${params.length + 1}`, [...params, limit]);
+    const trackIds = tracksR.rows.map((r: any) => Number(r.id)).filter((n: number) => Number.isFinite(n));
+
+    const client = await (db() as any).connect();
+    let newId: number;
+    try {
+      await client.query('begin');
+      const ins = await client.query(
+        'insert into playlists(user_id, name) values ($1, $2) returning id',
+        [req.user.userId, name]
+      );
+      newId = Number(ins.rows[0].id);
+      if (trackIds.length > 0) {
+        const values: string[] = [];
+        const insParams: any[] = [newId];
+        let p = 2;
+        trackIds.forEach((tid, idx) => {
+          values.push(`($1, $${p}, ${idx})`);
+          insParams.push(tid);
+          p += 1;
+        });
+        await client.query(
+          `insert into playlist_items(playlist_id, track_id, position)
+           values ${values.join(',')}
+           on conflict (playlist_id, track_id) do nothing`,
+          insParams
+        );
+      }
+      if (deleteSmart) {
+        await client.query('delete from smart_playlists where id = $1 and user_id = $2', [id, req.user.userId]);
+      }
+      await client.query('commit');
+    } catch (e) {
+      await client.query('rollback');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    return {
+      ok: true,
+      id: newId,
+      name,
+      item_count: trackIds.length,
+      deleted_smart: deleteSmart ? id : null,
+    };
+  });
+
   // Delete smart playlist
   app.delete('/api/smart-playlists/:id', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });

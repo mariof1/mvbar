@@ -7,6 +7,7 @@ import {
   createSmartPlaylist,
   updateSmartPlaylist,
   deleteSmartPlaylist,
+  convertSmartPlaylist,
   suggestSmartPlaylist,
   type SmartPlaylist,
   type SmartFilters,
@@ -298,6 +299,23 @@ export function SmartPlaylists(props: {
       setEditing(false);
       setEditId(null);
       await loadPlaylists();
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      setError(e?.data?.error ?? e?.message ?? 'error');
+    }
+  }
+
+  async function handleConvert(pl: SmartPlaylist) {
+    if (!token) return;
+    const ok = await showConfirm({
+      title: 'Convert to Playlist',
+      message: `Create a regular playlist from "${pl.name}" with the current matching tracks? The smart playlist will be kept.`,
+      confirmLabel: 'Convert',
+    });
+    if (!ok) return;
+    try {
+      await convertSmartPlaylist(token, pl.id, { name: pl.name });
+      setError(null);
     } catch (e: any) {
       if (e?.status === 401) clear();
       setError(e?.data?.error ?? e?.message ?? 'error');
@@ -710,6 +728,15 @@ export function SmartPlaylists(props: {
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => handleConvert(p)}
+                      className="p-2 text-slate-400 hover:text-cyan-300 hover:bg-slate-700 rounded-lg transition-colors"
+                      title="Convert to playlist (snapshot current tracks)"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
                       </svg>
                     </button>
                     <button

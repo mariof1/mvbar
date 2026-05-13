@@ -531,6 +531,17 @@ export async function deleteSmartPlaylist(token: string, id: number) {
   return (await apiFetch(`/smart-playlists/${id}`, { method: 'DELETE' }, token)) as { ok: boolean; deleted: number };
 }
 
+export async function convertSmartPlaylist(
+  token: string,
+  id: number,
+  opts?: { name?: string; deleteSmart?: boolean }
+) {
+  return (await apiFetch(`/smart-playlists/${id}/convert`, {
+    method: 'POST',
+    body: JSON.stringify({ name: opts?.name, delete: opts?.deleteSmart === true })
+  }, token)) as { ok: boolean; id: number; name: string; item_count: number; deleted_smart: number | null };
+}
+
 export async function deletePlaylist(token: string, id: number) {
   return (await apiFetch(`/playlists/${id}`, { method: 'DELETE' }, token)) as { ok: boolean; deleted: number };
 }
