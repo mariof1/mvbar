@@ -427,9 +427,11 @@ export function Playlists(props: {
                           onChange={(e) => setRenameValue(e.target.value)}
                           onClick={(e) => e.stopPropagation()}
                           onKeyDown={(e) => {
+                            e.stopPropagation();
                             if (e.key === 'Enter') { e.preventDefault(); commitRename(p.id); }
                             else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
                           }}
+                          onKeyUp={(e) => e.stopPropagation()}
                           onBlur={() => commitRename(p.id)}
                           className="w-full bg-slate-900/60 border border-cyan-500/40 rounded px-2 py-1 text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-400"
                         />
