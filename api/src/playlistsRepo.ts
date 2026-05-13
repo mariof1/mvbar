@@ -64,6 +64,16 @@ export async function setPosition(userId: string, playlistId: number, trackId: n
   return { ok: true };
 }
 
+export async function renamePlaylist(userId: string, playlistId: number, name: string) {
+  const r = await db().query<Playlist>(
+    `update playlists set name=$1 where id=$2 and user_id=$3
+     returning id, name, created_at,
+       (select coalesce(count(*),0)::int from playlist_items where playlist_id=playlists.id) as item_count`,
+    [name, playlistId, userId]
+  );
+  return r.rows[0] ?? null;
+}
+
 export async function deletePlaylist(userId: string, playlistId: number) {
   const r = await db().query(
     'delete from playlists where id=$1 and user_id=$2 returning id',

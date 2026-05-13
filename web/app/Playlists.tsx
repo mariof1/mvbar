@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { createPlaylist, getPlaylistItems, listPlaylists, addTrackToPlaylist, removeTrackFromPlaylist, setPlaylistItemPosition, deletePlaylist } from './apiClient';
+import { createPlaylist, getPlaylistItems, listPlaylists, addTrackToPlaylist, removeTrackFromPlaylist, setPlaylistItemPosition, deletePlaylist, renamePlaylist } from './apiClient';
 import { useAuth } from './store';
 import { SmartPlaylists } from './SmartPlaylists';
 import { useRouter } from './router';
@@ -42,6 +42,8 @@ export function Playlists(props: {
   const [name, setName] = useState('');
   const [addTrackId, setAddTrackId] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   // Live updates
   const playlistLastUpdate = usePlaylistUpdates((s) => s.lastUpdate);
@@ -146,6 +148,31 @@ export function Playlists(props: {
       await refreshPlaylists();
     } catch (e: any) {
       if (e?.status === 401) clear();
+    }
+  }
+
+  function startRename(p: Playlist) {
+    setRenamingId(p.id);
+    setRenameValue(p.name);
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameValue('');
+  }
+
+  async function commitRename(id: string) {
+    if (!token) return;
+    const n = renameValue.trim();
+    if (!n) { cancelRename(); return; }
+    try {
+      await renamePlaylist(token, Number(id), n);
+      setRenamingId(null);
+      setRenameValue('');
+      await refreshPlaylists();
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      setError(e?.data?.error ?? e?.message ?? 'error');
     }
   }
 
@@ -393,11 +420,35 @@ export function Playlists(props: {
                       </svg>
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="font-medium text-white truncate">{p.name}</div>
+                      {renamingId === p.id ? (
+                        <input
+                          autoFocus
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); commitRename(p.id); }
+                            else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                          }}
+                          onBlur={() => commitRename(p.id)}
+                          className="w-full bg-slate-900/60 border border-cyan-500/40 rounded px-2 py-1 text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                        />
+                      ) : (
+                        <div className="font-medium text-white truncate">{p.name}</div>
+                      )}
                       <div className="text-sm text-slate-400">
                         {new Date(p.created_at).toLocaleDateString()}
                       </div>
                     </div>
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); startRename(p); }}
+                    className="p-2 text-slate-400 hover:text-cyan-400 hover:bg-cyan-500/10 rounded-lg transition-colors flex-shrink-0"
+                    title="Rename playlist"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
                   </button>
                   <button
                     onClick={() => handleDelete(p.id)}

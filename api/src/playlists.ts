@@ -83,6 +83,26 @@ export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
     return { ok: true };
   });
 
+  app.patch('/api/playlists/:id', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(id)) return reply.code(400).send({ ok: false });
+
+    const body = req.body as { name?: string };
+    const name = (body.name ?? '').trim();
+    if (!name) return reply.code(400).send({ ok: false, error: 'invalid_name' });
+
+    try {
+      const updated = await playlists.renamePlaylist(req.user.userId, id, name);
+      if (!updated) return reply.code(404).send({ ok: false });
+      await audit('playlist_rename', { by: req.user.userId, playlistId: id, name });
+      broadcastToUser(req.user.userId, 'playlist:updated', { playlistId: id, name });
+      return { ok: true, playlist: updated };
+    } catch {
+      return reply.code(409).send({ ok: false, error: 'conflict' });
+    }
+  });
+
   app.delete('/api/playlists/:id', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     const id = Number((req.params as { id: string }).id);

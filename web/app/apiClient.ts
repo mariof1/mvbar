@@ -546,6 +546,13 @@ export async function deletePlaylist(token: string, id: number) {
   return (await apiFetch(`/playlists/${id}`, { method: 'DELETE' }, token)) as { ok: boolean; deleted: number };
 }
 
+export async function renamePlaylist(token: string, id: number, name: string) {
+  return (await apiFetch(`/playlists/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name })
+  }, token)) as { ok: boolean; playlist?: { id: number; name: string; item_count: number } };
+}
+
 export async function suggestSmartPlaylist(token: string, kind: string, q: string, ids?: number[]) {
   const params = new URLSearchParams({ kind, q });
   if (ids && ids.length > 0) params.set('ids', ids.join(','));
