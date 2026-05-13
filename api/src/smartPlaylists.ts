@@ -2,6 +2,7 @@ import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
 import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
+import { broadcastToUser } from './websocket.js';
 
 // Valid sort modes
 const SORT_MODES = new Set([
@@ -523,6 +524,8 @@ export const smartPlaylistsPlugin: FastifyPluginAsync = fp(async (app) => {
     } finally {
       client.release();
     }
+
+    broadcastToUser(req.user.userId, 'playlist:created', { id: newId, name });
 
     return {
       ok: true,
