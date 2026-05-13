@@ -575,8 +575,16 @@ export const smartPlaylistsPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     if (kind === 'artist' || kind === 'artists') {
+      // Only suggest artists that actually perform on tracks (have a row in
+      // track_artists), not orphan artist rows that come from composer /
+      // lyricist / producer credits stored in track_credits.
       const r = await db().query(
-        `select id, name from artists where name ilike $1 order by name limit $2`,
+        `select a.id, a.name
+           from artists a
+          where a.name ilike $1
+            and exists (select 1 from track_artists ta where ta.artist_id = a.id)
+          order by a.name
+          limit $2`,
         [`%${q}%`, limit]
       );
       return { items: r.rows.map((row: any) => ({ id: Number(row.id), name: row.name })) };

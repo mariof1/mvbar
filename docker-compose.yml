@@ -46,12 +46,40 @@ services:
       API_INTERNAL_BASE: http://127.0.0.1:3001
 
     volumes:
-      # mount your music (edit these)
-      - /path/to/music:/music:ro
-      #- /path/to/music2:/music2:ro
-
-      # mount your audiobooks
-      #- /path/to/audiobooks:/audiobooks:ro
+      # curated music selection from /mnt/music
+      - /mnt/music/ABBA:/music/ABBA:ro
+      - /mnt/music/ACDC:/music/ACDC:ro
+      - /mnt/music/Adele:/music/Adele:ro
+      - /mnt/music/Amy Winehouse:/music/Amy Winehouse:ro
+      - /mnt/music/Arctic Monkeys:/music/Arctic Monkeys:ro
+      - /mnt/music/Bob Dylan:/music/Bob Dylan:ro
+      - /mnt/music/Bob Marley & The Wailers:/music/Bob Marley & The Wailers:ro
+      - /mnt/music/Bruce Springsteen:/music/Bruce Springsteen:ro
+      - /mnt/music/Coldplay:/music/Coldplay:ro
+      - /mnt/music/Daft Punk:/music/Daft Punk:ro
+      - /mnt/music/David Bowie:/music/David Bowie:ro
+      - /mnt/music/Drake:/music/Drake:ro
+      - /mnt/music/Eminem:/music/Eminem:ro
+      - /mnt/music/Fleetwood Mac:/music/Fleetwood Mac:ro
+      - /mnt/music/Frank Sinatra:/music/Frank Sinatra:ro
+      - /mnt/music/Jay-Z:/music/Jay-Z:ro
+      - /mnt/music/Kanye West:/music/Kanye West:ro
+      - /mnt/music/Kendrick Lamar:/music/Kendrick Lamar:ro
+      - /mnt/music/Led Zeppelin:/music/Led Zeppelin:ro
+      - /mnt/music/Metallica:/music/Metallica:ro
+      - /mnt/music/Michael Jackson:/music/Michael Jackson:ro
+      - /mnt/music/Miles Davis:/music/Miles Davis:ro
+      - /mnt/music/Nirvana:/music/Nirvana:ro
+      - /mnt/music/Pink Floyd:/music/Pink Floyd:ro
+      - /mnt/music/Queen:/music/Queen:ro
+      - /mnt/music/Radiohead:/music/Radiohead:ro
+      - /mnt/music/Red Hot Chili Peppers:/music/Red Hot Chili Peppers:ro
+      - /mnt/music/The Beatles:/music/The Beatles:ro
+      - /mnt/music/U2:/music/U2:ro
+      - /mnt/music/2Pac:/music/2Pac:ro
+      - /mnt/music/50 Cent:/music/50 Cent:ro
+      - /mnt/music/Taco Hemingway:/music/Taco Hemingway:ro
+      - /mnt/music/Pezet:/music/Pezet:ro
 
       # persistent data
       - pg:/var/lib/postgresql/data
