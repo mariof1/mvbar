@@ -536,8 +536,8 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
         const passwordHash = `${salt}:${hash}`;
 
         await pool.query(
-          'UPDATE users SET google_id = NULL, google_refresh_token = NULL, password_hash = $1 WHERE id = $2',
-          [passwordHash, user.userId]
+          'UPDATE users SET google_id = NULL, google_refresh_token = NULL, password_hash = $1, subsonic_password = $2 WHERE id = $3',
+          [passwordHash, password, user.userId]
         );
 
         return { success: true, action: 'converted' };

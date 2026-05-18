@@ -581,6 +581,27 @@ export async function disconnectListenBrainz(token: string) {
   return (await apiFetch('/listenbrainz/disconnect', { method: 'POST' }, token)) as { ok: boolean };
 }
 
+// Subsonic/OpenSubsonic API credentials
+export async function getSubsonicSettings(token: string) {
+  return (await apiFetch('/subsonic/settings', { method: 'GET' }, token)) as {
+    ok: boolean;
+    username: string;
+    configured: boolean;
+    authType: 'google' | 'local';
+  };
+}
+
+export async function setSubsonicPassword(token: string, password: string) {
+  return (await apiFetch('/subsonic/password', {
+    method: 'PUT',
+    body: JSON.stringify({ password })
+  }, token)) as { ok: boolean };
+}
+
+export async function clearSubsonicPassword(token: string) {
+  return (await apiFetch('/subsonic/password', { method: 'DELETE' }, token)) as { ok: boolean };
+}
+
 export async function getListenBrainzRecommendations(token: string) {
   return (await apiFetch('/listenbrainz/recommendations', { method: 'GET' }, token)) as {
     ok: boolean;

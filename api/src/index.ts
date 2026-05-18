@@ -62,6 +62,27 @@ function colorStatus(statusCode: number) {
   return `${ansi.green}${statusCode}${ansi.reset}`;
 }
 
+const sensitiveQueryParams = new Set(['u', 'p', 't', 's', 'token', 'password', 'access_token', 'refresh_token', 'code']);
+
+function sanitizeUrlForLog(url: string) {
+  const queryStart = url.indexOf('?');
+  if (queryStart === -1) return url;
+
+  const path = url.slice(0, queryStart);
+  const query = url.slice(queryStart + 1);
+  const params = new URLSearchParams(query);
+  let changed = false;
+
+  for (const key of Array.from(params.keys())) {
+    if (sensitiveQueryParams.has(key.toLowerCase())) {
+      params.set(key, '[redacted]');
+      changed = true;
+    }
+  }
+
+  return changed ? `${path}?${params.toString()}` : url;
+}
+
 await initDb();
 logger.success('api', `Server starting on port ${config.port}`);
 
@@ -70,7 +91,7 @@ await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB
 
 app.addHook('onResponse', async (req, reply) => {
   const method = req.method;
-  const url = req.url;
+  const url = sanitizeUrlForLog(req.url);
   const status = reply.statusCode;
   const ms = Number((reply.elapsedTime ?? 0).toFixed(1));
   // Keep healthcheck noise out of logs

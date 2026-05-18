@@ -170,6 +170,19 @@ export async function initDb() {
   await pool.query('create index if not exists play_history_user_played_at_idx on play_history(user_id, played_at desc)');
 
   await pool.query(`
+    create table if not exists subsonic_bookmarks (
+      user_id text not null references users(id) on delete cascade,
+      item_id text not null,
+      item_type text not null default 'track',
+      position_ms integer not null default 0,
+      comment text,
+      created_at timestamptz not null default now(),
+      changed_at timestamptz not null default now(),
+      primary key (user_id, item_id)
+    );
+  `);
+
+  await pool.query(`
     create table if not exists user_track_stats (
       user_id text not null references users(id) on delete cascade,
       track_id bigint not null references tracks(id) on delete cascade,
