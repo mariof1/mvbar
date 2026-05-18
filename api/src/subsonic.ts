@@ -1138,54 +1138,75 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
   async function sendSearch(req: FastifyRequest, reply: FastifyReply, responseKey: 'searchResult2' | 'searchResult3') {
     const params = getParams(req);
     const user = currentUser(req);
-    const query = params.query || '';
-    const pattern = `%${query}%`;
-    const artistCount = Math.min(Math.max(Number(params.artistCount ?? 20), 0), 100);
-    const albumCount = Math.min(Math.max(Number(params.albumCount ?? 20), 0), 100);
-    const songCount = Math.min(Math.max(Number(params.songCount ?? 20), 0), 100);
+    // Symfonium and some other clients send literal `""` to mean "match everything".
+    // Treat that, plain empty, and `*` / `%` wildcards as "no filter".
+    let rawQuery = (params.query ?? '').trim();
+    if (rawQuery.startsWith('"') && rawQuery.endsWith('"') && rawQuery.length >= 2) {
+      rawQuery = rawQuery.slice(1, -1);
+    }
+    const matchAll = rawQuery === '' || rawQuery === '*' || rawQuery === '%';
+    const pattern = `%${rawQuery}%`;
+    // Subsonic spec allows up to 500 per category; Symfonium uses 500 during sync.
+    const artistCount = Math.min(Math.max(Number(params.artistCount ?? 20) | 0, 0), 500);
+    const albumCount = Math.min(Math.max(Number(params.albumCount ?? 20) | 0, 0), 500);
+    const songCount = Math.min(Math.max(Number(params.songCount ?? 20) | 0, 0), 500);
+    const artistOffset = Math.max(Number(params.artistOffset ?? 0) | 0, 0);
+    const albumOffset = Math.max(Number(params.albumOffset ?? 0) | 0, 0);
+    const songOffset = Math.max(Number(params.songOffset ?? 0) | 0, 0);
 
-    const artistArgs: unknown[] = [pattern, artistCount];
-    const artistAccess = trackAccessCondition(user, artistArgs, 't', params.musicFolderId);
-    const artists = await db().query(`
-      select a.id, a.name,
-             count(distinct t.album)::int as album_count,
-             min(t.id) filter (where t.art_path is not null) as art_track_id
-        from artists a
-        join track_artists ta on ta.artist_id = a.id
-        join active_tracks t on t.id = ta.track_id
-       where ${artistAccess} and a.name ilike $1
-       group by a.id, a.name
-       order by a.name
-       limit $2
-    `, artistArgs);
+    let artists: { rows: any[] } = { rows: [] };
+    if (artistCount > 0) {
+      const args: unknown[] = matchAll ? [] : [pattern];
+      const access = trackAccessCondition(user, args, 't', params.musicFolderId);
+      const filter = matchAll ? '' : 'and a.name ilike $1';
+      artists = await db().query(`
+        select a.id, a.name,
+               count(distinct t.album)::int as album_count,
+               min(t.id) filter (where t.art_path is not null) as art_track_id
+          from artists a
+          join track_artists ta on ta.artist_id = a.id
+          join active_tracks t on t.id = ta.track_id
+         where ${access} and a.name is not null and a.name <> '' ${filter}
+         group by a.id, a.name
+         order by a.name
+         limit ${artistCount} offset ${artistOffset}
+      `, args);
+    }
 
-    const albumArgs: unknown[] = [pattern, albumCount];
-    const albumAccess = trackAccessCondition(user, albumArgs, 't', params.musicFolderId);
-    const albums = await db().query(`
-      select t.album as name,
-             max(coalesce(nullif(t.album_artist, ''), nullif(t.artist, ''), 'Unknown Artist')) as artist,
-             min(t.year) as year,
-             count(*)::int as track_count,
-             sum(t.duration_ms) as total_duration_ms,
-             min(t.id) filter (where t.art_path is not null) as art_track_id
-        from active_tracks t
-       where ${albumAccess} and t.album ilike $1
-       group by t.album
-       order by t.album
-       limit $2
-    `, albumArgs);
+    let albums: { rows: any[] } = { rows: [] };
+    if (albumCount > 0) {
+      const args: unknown[] = matchAll ? [] : [pattern];
+      const access = trackAccessCondition(user, args, 't', params.musicFolderId);
+      const filter = matchAll ? '' : 'and t.album ilike $1';
+      albums = await db().query(`
+        select t.album as name,
+               max(coalesce(nullif(t.album_artist, ''), nullif(t.artist, ''), 'Unknown Artist')) as artist,
+               min(t.year) as year,
+               count(*)::int as track_count,
+               sum(t.duration_ms) as total_duration_ms,
+               min(t.id) filter (where t.art_path is not null) as art_track_id
+          from active_tracks t
+         where ${access} and t.album is not null and t.album <> '' ${filter}
+         group by t.album
+         order by t.album
+         limit ${albumCount} offset ${albumOffset}
+      `, args);
+    }
 
-    const songArgs: unknown[] = [user.userId, pattern, songCount];
-    const songAccess = trackAccessCondition(user, songArgs, 't', params.musicFolderId);
-    const songs = await db().query(`
-      select t.*, f.added_at as starred_at
-        from active_tracks t
-        left join favorite_tracks f on f.track_id = t.id and f.user_id = $1
-       where ${songAccess}
-         and (t.title ilike $2 or t.artist ilike $2 or t.album ilike $2)
-       order by t.title
-       limit $3
-    `, songArgs);
+    let songs: { rows: any[] } = { rows: [] };
+    if (songCount > 0) {
+      const args: unknown[] = matchAll ? [user.userId] : [user.userId, pattern];
+      const access = trackAccessCondition(user, args, 't', params.musicFolderId);
+      const filter = matchAll ? '' : 'and (t.title ilike $2 or t.artist ilike $2 or t.album ilike $2)';
+      songs = await db().query(`
+        select t.*, f.added_at as starred_at
+          from active_tracks t
+          left join favorite_tracks f on f.track_id = t.id and f.user_id = $1
+         where ${access} ${filter}
+         order by t.title
+         limit ${songCount} offset ${songOffset}
+      `, args);
+    }
 
     sendResponse(reply, createResponse({
       [responseKey]: {
