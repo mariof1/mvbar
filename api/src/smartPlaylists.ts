@@ -50,7 +50,7 @@ function coerceStrList(values: any): string[] {
   return out;
 }
 
-interface SmartFilters {
+export interface SmartFilters {
   include: {
     artists: number[];
     artistsMode: 'any' | 'all';
@@ -75,7 +75,7 @@ interface SmartFilters {
   maxResults: number | null;
 }
 
-function normalizeFilters(raw: any): SmartFilters {
+export function normalizeFilters(raw: any): SmartFilters {
   raw = raw || {};
   const inc = raw.include && typeof raw.include === 'object' ? raw.include : {};
   const exc = raw.exclude && typeof raw.exclude === 'object' ? raw.exclude : {};
@@ -130,11 +130,12 @@ function normalizeFilters(raw: any): SmartFilters {
   return filters;
 }
 
-async function buildSmartPlaylistQuery(
+export async function buildSmartPlaylistQuery(
   userId: string,
   filters: SmartFilters,
   sortMode: string,
-  allowed: number[] | null
+  allowed: number[] | null,
+  selectColumns = 't.id, t.title, t.artist, t.album, t.duration_ms, t.art_path, t.art_hash'
 ): Promise<{ sql: string; params: any[] }> {
   const conditions: string[] = [];
   const params: any[] = [];
@@ -275,12 +276,12 @@ async function buildSmartPlaylistQuery(
   if (orderBy.includes('left join')) {
     // Stats-based sorting needs different structure
     const parts = orderBy.split(' order by ');
-    sql = `select t.id, t.title, t.artist, t.album, t.duration_ms, t.art_path, t.art_hash
+    sql = `select ${selectColumns}
            from active_tracks t ${parts[0]}
            ${whereClause}
            order by ${parts[1]}`;
   } else {
-    sql = `select t.id, t.title, t.artist, t.album, t.duration_ms, t.art_path, t.art_hash
+    sql = `select ${selectColumns}
            from active_tracks t
            ${whereClause}
            ${orderBy}`;

@@ -16,6 +16,7 @@ import { audit, db, redis } from './db.js';
 import logger from './logger.js';
 import { allowedLibrariesForUser } from './access.js';
 import { normalizeEmail, verifyPassword } from './security.js';
+import { buildSmartPlaylistQuery, normalizeFilters } from './smartPlaylists.js';
 import type { Role } from './store.js';
 
 const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
@@ -31,6 +32,9 @@ const OPENSUBSONIC_EXTENSIONS = [
   { name: 'formPost', versions: [1] },
   { name: 'songLyrics', versions: [1] },
 ];
+
+const SMART_PLAYLIST_ID_PREFIX = 'smart-';
+const SUBSONIC_SMART_PLAYLIST_LIMIT = 2000;
 
 const ERROR = {
   GENERIC: { code: 0, message: 'A generic error.' },
@@ -68,6 +72,15 @@ type SubsonicResponse = {
     error?: { code: number; message: string };
     [key: string]: unknown;
   };
+};
+
+type SmartPlaylistRow = {
+  id: string | number;
+  name: string;
+  filters_json: unknown;
+  sort_mode: string | null;
+  created_at: unknown;
+  updated_at: unknown;
 };
 
 function createResponse(data: Record<string, unknown> = {}): SubsonicResponse {
@@ -349,6 +362,15 @@ function trackAccessCondition(user: SubsonicUser, params: unknown[], alias = 't'
   return `${alias}.library_id = any($${params.length}::bigint[])`;
 }
 
+function smartPlaylistAllowedLibraries(user: SubsonicUser, musicFolderId?: string) {
+  const folderId = musicFolderId ? decodeLibraryDirectoryId(musicFolderId) : null;
+  if (folderId !== null) {
+    if (user.allowedLibraries !== null && !user.allowedLibraries.includes(folderId)) return [];
+    return [folderId];
+  }
+  return user.allowedLibraries;
+}
+
 async function listAllowedLibraries(user: SubsonicUser) {
   if (user.allowedLibraries === null) {
     const r = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries order by mount_path asc');
@@ -359,6 +381,37 @@ async function listAllowedLibraries(user: SubsonicUser) {
     'select id, mount_path from libraries where id = any($1::bigint[]) order by mount_path asc',
     [user.allowedLibraries]
   );
+  return r.rows;
+}
+
+function smartPlaylistSubsonicId(id: string | number) {
+  return `${SMART_PLAYLIST_ID_PREFIX}${id}`;
+}
+
+function decodeSmartPlaylistSubsonicId(id: string | undefined) {
+  if (!id?.startsWith(SMART_PLAYLIST_ID_PREFIX)) return null;
+  const n = Number(id.slice(SMART_PLAYLIST_ID_PREFIX.length));
+  return Number.isFinite(n) ? n : null;
+}
+
+function smartPlaylistValidUntil() {
+  return new Date(Date.now() + 60 * 60 * 1000).toISOString();
+}
+
+async function materializeSmartPlaylistTracks(
+  user: SubsonicUser,
+  playlist: SmartPlaylistRow,
+  musicFolderId: string | undefined,
+  selectColumns: string
+) {
+  const filters = normalizeFilters(playlist.filters_json);
+  const sortMode = String(playlist.sort_mode || 'random').toLowerCase();
+  const limit = filters.maxResults
+    ? Math.min(SUBSONIC_SMART_PLAYLIST_LIMIT, filters.maxResults)
+    : SUBSONIC_SMART_PLAYLIST_LIMIT;
+  const allowed = smartPlaylistAllowedLibraries(user, musicFolderId);
+  const { sql, params } = await buildSmartPlaylistQuery(user.userId, filters, sortMode, allowed, selectColumns);
+  const r = await db().query(`${sql} limit $${params.length + 1}`, [...params, limit]);
   return r.rows;
 }
 
@@ -1892,18 +1945,48 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
        where p.user_id = $1
        order by p.name
     `, args);
+
+    const smartRows = await db().query<SmartPlaylistRow>(`
+      select id, name, filters_json, sort_mode, created_at, updated_at
+        from smart_playlists
+       where user_id = $1
+       order by name
+    `, [user.userId]);
+
+    const smartPlaylists = [];
+    for (const smart of smartRows.rows) {
+      const tracks = await materializeSmartPlaylistTracks(user, smart, params.musicFolderId, 't.id, t.duration_ms');
+      smartPlaylists.push({
+        id: smartPlaylistSubsonicId(smart.id),
+        name: smart.name,
+        owner: user.username,
+        public: false,
+        songCount: tracks.length,
+        duration: Math.round(tracks.reduce((sum: number, t: any) => sum + Number(t.duration_ms || 0), 0) / 1000),
+        created: isoDate(smart.created_at),
+        changed: isoDate(smart.updated_at ?? smart.created_at),
+        readonly: true,
+        validUntil: smartPlaylistValidUntil(),
+      });
+    }
+
+    const regularPlaylists = r.rows.map((p) => ({
+      id: String(p.id),
+      name: p.name,
+      owner: user.username,
+      public: false,
+      songCount: Number(p.song_count) || 0,
+      duration: Math.round((Number(p.duration) || 0) / 1000),
+      created: isoDate(p.created_at),
+      changed: isoDate(p.created_at),
+    }));
+
+    const allPlaylists = [...regularPlaylists, ...smartPlaylists]
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
     sendResponse(reply, createResponse({
       playlists: {
-        playlist: r.rows.map((p) => ({
-          id: String(p.id),
-          name: p.name,
-          owner: user.username,
-          public: false,
-          songCount: Number(p.song_count) || 0,
-          duration: Math.round((Number(p.duration) || 0) / 1000),
-          created: isoDate(p.created_at),
-          changed: isoDate(p.created_at),
-        })),
+        playlist: allPlaylists,
       },
     }), params.f, params.callback);
   });
@@ -1912,6 +1995,36 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     const params = getParams(req);
     if (!params.id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f, params.callback);
     const user = currentUser(req);
+
+    const smartId = decodeSmartPlaylistSubsonicId(params.id);
+    if (smartId !== null) {
+      const sr = await db().query<SmartPlaylistRow>(
+        `select id, name, filters_json, sort_mode, created_at, updated_at
+           from smart_playlists
+          where id = $1 and user_id = $2`,
+        [smartId, user.userId]
+      );
+      const smart = sr.rows[0];
+      if (!smart) return sendResponse(reply, createError(ERROR.NOT_FOUND.code, 'Playlist not found'), params.f, params.callback);
+
+      const songs = await materializeSmartPlaylistTracks(user, smart, params.musicFolderId, 't.*');
+      return sendResponse(reply, createResponse({
+        playlist: {
+          id: smartPlaylistSubsonicId(smart.id),
+          name: smart.name,
+          owner: user.username,
+          public: false,
+          songCount: songs.length,
+          duration: Math.round(songs.reduce((sum: number, song: any) => sum + Number(song.duration_ms || 0), 0) / 1000),
+          created: isoDate(smart.created_at),
+          changed: isoDate(smart.updated_at ?? smart.created_at),
+          readonly: true,
+          validUntil: smartPlaylistValidUntil(),
+          entry: songs.map(formatSong),
+        },
+      }), params.f, params.callback);
+    }
+
     const pr = await db().query('select id, name, user_id, created_at from playlists where id=$1 and user_id=$2', [params.id, user.userId]);
     if (!pr.rows[0]) return sendResponse(reply, createError(ERROR.NOT_FOUND.code, 'Playlist not found'), params.f, params.callback);
 
@@ -1990,6 +2103,9 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     const user = currentUser(req);
     const name = (params.name || 'New Playlist').trim();
     const existingId = Number(params.playlistId);
+    if (decodeSmartPlaylistSubsonicId(params.playlistId) !== null) {
+      return sendResponse(reply, createError(ERROR.NOT_AUTHORIZED.code, 'Smart playlists are read-only'), params.f, params.callback);
+    }
     let playlistId = Number.isFinite(existingId) ? existingId : null;
 
     if (playlistId === null) {
@@ -2020,6 +2136,9 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     const params = getParams(req);
     const user = currentUser(req);
     const playlistId = Number(params.playlistId);
+    if (decodeSmartPlaylistSubsonicId(params.playlistId) !== null) {
+      return sendResponse(reply, createError(ERROR.NOT_AUTHORIZED.code, 'Smart playlists are read-only'), params.f, params.callback);
+    }
     if (!Number.isFinite(playlistId)) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing playlistId parameter'), params.f, params.callback);
     if (params.name) await db().query('update playlists set name=$1 where id=$2 and user_id=$3', [params.name, playlistId, user.userId]);
     if (params.songIdToAdd) {
@@ -2049,6 +2168,9 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     const params = getParams(req);
     const user = currentUser(req);
     const id = Number(params.id);
+    if (decodeSmartPlaylistSubsonicId(params.id) !== null) {
+      return sendResponse(reply, createError(ERROR.NOT_AUTHORIZED.code, 'Smart playlists are read-only'), params.f, params.callback);
+    }
     if (!Number.isFinite(id)) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f, params.callback);
     await db().query('delete from playlists where id=$1 and user_id=$2', [id, user.userId]);
     sendResponse(reply, createResponse(), params.f, params.callback);
