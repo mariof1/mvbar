@@ -468,6 +468,7 @@ export type SmartFilters = {
     genresMode: 'any' | 'all';
     years: number[];
     countries: string[];
+    languages: string[];
   };
   exclude: {
     artists: number[];
@@ -475,10 +476,19 @@ export type SmartFilters = {
     genres: string[];
     years: number[];
     countries: string[];
+    languages: string[];
   };
   duration: {
     min: number | null;
     max: number | null;
+  };
+  bpm: {
+    min: number | null;
+    max: number | null;
+  };
+  dateAdded: {
+    from: string | null;
+    to: string | null;
   };
   favoriteOnly: boolean;
   maxResults: number | null;

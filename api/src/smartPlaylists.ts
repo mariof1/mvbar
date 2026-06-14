@@ -50,6 +50,33 @@ function coerceStrList(values: any): string[] {
   return out;
 }
 
+function coerceNullableInt(value: any, min: number, max: number): number | null {
+  if (value == null || String(value).trim() === '') return null;
+  try {
+    const n = parseInt(String(value), 10);
+    if (isNaN(n)) return null;
+    return Math.max(min, Math.min(max, n));
+  } catch {
+    return null;
+  }
+}
+
+function coerceDateOnly(value: any): string | null {
+  if (value == null || String(value).trim() === '') return null;
+  const s = String(value).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return null;
+  const [, year, month, day] = m;
+  const d = new Date(`${year}-${month}-${day}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  if (
+    d.getUTCFullYear() !== Number(year) ||
+    d.getUTCMonth() + 1 !== Number(month) ||
+    d.getUTCDate() !== Number(day)
+  ) return null;
+  return `${year}-${month}-${day}`;
+}
+
 export interface SmartFilters {
   include: {
     artists: number[];
@@ -59,6 +86,7 @@ export interface SmartFilters {
     genresMode: 'any' | 'all';
     years: number[];
     countries: string[];
+    languages: string[];
   };
   exclude: {
     artists: number[];
@@ -66,10 +94,19 @@ export interface SmartFilters {
     genres: string[];
     years: number[];
     countries: string[];
+    languages: string[];
   };
   duration: {
     min: number | null;
     max: number | null;
+  };
+  bpm: {
+    min: number | null;
+    max: number | null;
+  };
+  dateAdded: {
+    from: string | null;
+    to: string | null;
   };
   favoriteOnly: boolean;
   maxResults: number | null;
@@ -80,6 +117,9 @@ export function normalizeFilters(raw: any): SmartFilters {
   const inc = raw.include && typeof raw.include === 'object' ? raw.include : {};
   const exc = raw.exclude && typeof raw.exclude === 'object' ? raw.exclude : {};
   const dur = raw.duration && typeof raw.duration === 'object' ? raw.duration : {};
+  const bpm = raw.bpm && typeof raw.bpm === 'object' ? raw.bpm : {};
+  const dateAddedRaw = raw.dateAdded || raw.date_added;
+  const dateAdded = dateAddedRaw && typeof dateAddedRaw === 'object' ? dateAddedRaw : {};
 
   let artistsMode = String(inc.artistsMode || inc.artists_mode || '').toLowerCase();
   let genresMode = String(inc.genresMode || inc.genres_mode || '').toLowerCase();
@@ -95,6 +135,7 @@ export function normalizeFilters(raw: any): SmartFilters {
       genresMode: genresMode as 'any' | 'all',
       years: coerceIntList(inc.years),
       countries: coerceStrList(inc.countries),
+      languages: coerceStrList(inc.languages),
     },
     exclude: {
       artists: coerceIntList(exc.artists),
@@ -102,25 +143,31 @@ export function normalizeFilters(raw: any): SmartFilters {
       genres: coerceStrList(exc.genres),
       years: coerceIntList(exc.years),
       countries: coerceStrList(exc.countries),
+      languages: coerceStrList(exc.languages),
     },
     duration: {
       min: null,
       max: null,
     },
+    bpm: {
+      min: null,
+      max: null,
+    },
+    dateAdded: {
+      from: null,
+      to: null,
+    },
     favoriteOnly: Boolean(raw.favoriteOnly),
     maxResults: null,
   };
 
-  try {
-    if (dur.min != null && String(dur.min).trim() !== '') {
-      filters.duration.min = Math.max(0, parseInt(String(dur.min), 10));
-    }
-  } catch {}
-  try {
-    if (dur.max != null && String(dur.max).trim() !== '') {
-      filters.duration.max = Math.max(0, parseInt(String(dur.max), 10));
-    }
-  } catch {}
+  filters.duration.min = coerceNullableInt(dur.min, 0, 86400);
+  filters.duration.max = coerceNullableInt(dur.max, 0, 86400);
+  filters.bpm.min = coerceNullableInt(bpm.min, 0, 400);
+  filters.bpm.max = coerceNullableInt(bpm.max, 0, 400);
+  filters.dateAdded.from = coerceDateOnly(dateAdded.from ?? dateAdded.min ?? dateAdded.start);
+  filters.dateAdded.to = coerceDateOnly(dateAdded.to ?? dateAdded.max ?? dateAdded.end);
+
   try {
     if (raw.maxResults != null && String(raw.maxResults).trim() !== '') {
       filters.maxResults = Math.max(1, Math.min(2000, parseInt(String(raw.maxResults), 10)));
@@ -225,6 +272,18 @@ export async function buildSmartPlaylistQuery(
     conditions.push(`t.id not in (select tc.track_id from track_countries tc where tc.country = any($${paramIdx++}))`);
   }
 
+  // Include languages (using normalized track_languages table)
+  if (filters.include.languages.length > 0) {
+    params.push(filters.include.languages);
+    conditions.push(`t.id in (select tl.track_id from track_languages tl where tl.language = any($${paramIdx++}))`);
+  }
+
+  // Exclude languages (using normalized track_languages table)
+  if (filters.exclude.languages.length > 0) {
+    params.push(filters.exclude.languages);
+    conditions.push(`t.id not in (select tl.track_id from track_languages tl where tl.language = any($${paramIdx++}))`);
+  }
+
   // Duration filters (in seconds, track has duration_ms)
   if (filters.duration.min != null) {
     params.push(filters.duration.min * 1000);
@@ -233,6 +292,26 @@ export async function buildSmartPlaylistQuery(
   if (filters.duration.max != null) {
     params.push(filters.duration.max * 1000);
     conditions.push(`coalesce(t.duration_ms, 0) <= $${paramIdx++}`);
+  }
+
+  // BPM filters
+  if (filters.bpm.min != null) {
+    params.push(filters.bpm.min);
+    conditions.push(`t.bpm is not null and t.bpm >= $${paramIdx++}`);
+  }
+  if (filters.bpm.max != null) {
+    params.push(filters.bpm.max);
+    conditions.push(`t.bpm is not null and t.bpm <= $${paramIdx++}`);
+  }
+
+  // Date added filters. The UI sends date-only strings; make the end date inclusive.
+  if (filters.dateAdded.from) {
+    params.push(filters.dateAdded.from);
+    conditions.push(`t.created_at >= $${paramIdx++}::date`);
+  }
+  if (filters.dateAdded.to) {
+    params.push(filters.dateAdded.to);
+    conditions.push(`t.created_at < ($${paramIdx++}::date + interval '1 day')`);
   }
 
   // Favorite only
