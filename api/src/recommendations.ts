@@ -631,7 +631,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // REDIS CACHE – serve cached response for 5 minutes per user
     // ========================================================================
     const RECO_CACHE_TTL = 300;
-    const cacheKey = `reco:v4:${userId}:${(allowed ?? []).sort().join(',')}`;
+    const cacheKey = `reco:v5:${userId}:${(allowed ?? []).sort().join(',')}`;
     try {
       const cached = await redis().get(cacheKey);
       if (cached) {
@@ -670,7 +670,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       buckets.push({
         key, name, subtitle, reason,
         count: tracks.length,
-        tracks: tracks.slice(0, 15).map(t => ({
+        tracks: tracks.map(t => ({
           id: t.id,
           title: t.title,
           artist: t.artist,
