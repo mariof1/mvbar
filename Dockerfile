@@ -98,7 +98,8 @@ COPY infra/caddy/Caddyfile /etc/caddy/Caddyfile
 COPY infra/supervisord.conf /etc/supervisord.conf
 COPY infra/entrypoint.sh /entrypoint.sh
 COPY infra/wait-for-http.sh /app/infra/wait-for-http.sh
-RUN chmod +x /entrypoint.sh /app/infra/wait-for-http.sh
+RUN sed -i 's/\r$//' /entrypoint.sh /app/infra/wait-for-http.sh && \
+    chmod +x /entrypoint.sh /app/infra/wait-for-http.sh
 
 VOLUME ["/var/lib/postgresql/data", "/data/redis", "/meili_data", "/data/caddy", "/config/caddy", "/data/cache", "/hls", "/podcasts"]
 
