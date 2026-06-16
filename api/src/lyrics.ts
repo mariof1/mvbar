@@ -27,6 +27,10 @@ function isSyncedLyrics(text: string): boolean {
   return /\[\d{2}:\d{2}/.test(text);
 }
 
+function isGeneratedLyricsCache(relPath: string): boolean {
+  return relPath === 'cache' || relPath.startsWith('cache/') || relPath.startsWith('cache\\');
+}
+
 // Fetch lyrics from LRCLIB (community-sourced synced lyrics)
 async function fetchFromLrclib(
   artist: string,
@@ -106,24 +110,62 @@ async function prefetchLyrics(trackId: number): Promise<void> {
     const r = await db().query<{
       lyrics_path: string | null;
       embedded_lyrics: string | null;
+      embedded_lyrics_synced: boolean;
       title: string;
       artist: string;
       album: string | null;
       duration_ms: number | null;
-    }>('SELECT lyrics_path, embedded_lyrics, title, artist, album, duration_ms from tracks WHERE id=$1', [trackId]);
+      path: string;
+      mount_path: string;
+    }>(`SELECT t.lyrics_path, t.embedded_lyrics, t.embedded_lyrics_synced,
+              t.title, t.artist, t.album, t.duration_ms, t.path, l.mount_path
+        FROM tracks t JOIN libraries l ON l.id = t.library_id
+        WHERE t.id=$1`, [trackId]);
     const row = r.rows[0];
     if (!row) return;
 
-    // Already have cached lyrics
+    let hasLocalUnsynced = false;
+
+    // Already have synced cached lyrics. Plain generated cache is not enough:
+    // keep looking so LRCLIB can upgrade it to synced lyrics later.
     if (row.lyrics_path && !row.lyrics_path.startsWith('music:')) {
       try {
         const abs = safeJoinLyrics(row.lyrics_path);
-        await readFile(abs, 'utf8');
-        return; // Lyrics exist, no need to fetch
+        const text = await readFile(abs, 'utf8');
+        if (text.trim()) {
+          if (isSyncedLyrics(text)) return;
+          if (!isGeneratedLyricsCache(row.lyrics_path)) hasLocalUnsynced = true;
+        }
       } catch {
         // File not found, continue to fetch
       }
     }
+
+    if (row.lyrics_path?.startsWith('music:')) {
+      try {
+        const text = await tryReadFile(safeJoinMount(row.mount_path, row.lyrics_path.slice(6)));
+        if (text?.trim()) {
+          if (isSyncedLyrics(text)) return;
+          hasLocalUnsynced = true;
+        }
+      } catch {
+        // invalid stored sidecar path; continue with other sources
+      }
+    }
+
+    const lrcSidecar = await readMusicSidecar(row.mount_path, row.path, '.lrc');
+    if (lrcSidecar?.trim()) {
+      if (isSyncedLyrics(lrcSidecar)) return;
+      hasLocalUnsynced = true;
+    }
+
+    if (row.embedded_lyrics?.trim()) {
+      if (row.embedded_lyrics_synced) return;
+      hasLocalUnsynced = true;
+    }
+
+    const txtSidecar = await readMusicSidecar(row.mount_path, row.path, '.txt');
+    if (txtSidecar?.trim()) hasLocalUnsynced = true;
 
     // Fetch from LRCLIB in background
     const durationSec = row.duration_ms ? row.duration_ms / 1000 : undefined;
@@ -132,8 +174,8 @@ async function prefetchLyrics(trackId: number): Promise<void> {
     if (lrcData?.syncedLyrics) {
       await cacheLyrics(trackId, lrcData.syncedLyrics, true);
       logger.info('lyrics', `Prefetched synced lyrics for track ${trackId}`);
-    } else if (lrcData?.plainLyrics && !row.embedded_lyrics) {
-      // Cache plain lyrics from LRCLIB if we don't have embedded
+    } else if (lrcData?.plainLyrics && !hasLocalUnsynced) {
+      // Cache online plain lyrics only when there is no local file/tag text.
       await cacheLyrics(trackId, lrcData.plainLyrics, false);
       logger.info('lyrics', `Prefetched plain lyrics for track ${trackId}`);
     }
@@ -157,13 +199,11 @@ export const lyricsPlugin: FastifyPluginAsync = fp(async (app) => {
   });
 
   // Lyrics fallback chain:
-  // 1. Cached lyrics file in LYRICS_DIR (.lrc synced)
-  // 2. Sidecar .lrc file alongside audio file (in music dir)
-  // 3. Embedded synced lyrics from DB
-  // 4. LRCLIB online fetch (synced → plain)
-  // 5. Embedded unsynced lyrics from DB
-  // 6. Sidecar .txt file alongside audio file
-  // 7. Cached plain lyrics file in LYRICS_DIR (.txt)
+  // 1. Local synced lyrics: cache/sidecar .lrc, music .lrc, embedded synced tags
+  // 2. LRCLIB synced lyrics, cached for future use when found
+  // 3. Local unsynced lyrics: lyrics file, music sidecar, embedded tags
+  // 4. Existing generated plain cache
+  // 5. LRCLIB plain lyrics only when there is no local text
   app.get('/api/library/tracks/:id/lyrics', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
 
@@ -196,7 +236,12 @@ export const lyricsPlugin: FastifyPluginAsync = fp(async (app) => {
       return reply.send({ lyrics: text, type });
     };
 
-    // 1. Cached lyrics file in LYRICS_DIR
+    let lyricsDirPlain: string | null = null;
+    let generatedPlainCache: string | null = null;
+    let musicSidecarPlain: string | null = null;
+
+    // 1a. Lyrics file in LYRICS_DIR. Synced returns immediately; plain waits
+    // until after the online synced upgrade attempt.
     if (row.lyrics_path && !row.lyrics_path.startsWith('music:')) {
       try {
         const abs = safeJoinLyrics(row.lyrics_path);
@@ -204,14 +249,18 @@ export const lyricsPlugin: FastifyPluginAsync = fp(async (app) => {
         if (text.trim()) {
           const synced = isSyncedLyrics(text);
           if (synced) return sendLyrics(text, 'synced');
-          // Keep plain cached lyrics as last resort (step 7)
+          if (isGeneratedLyricsCache(row.lyrics_path)) {
+            generatedPlainCache = text;
+          } else {
+            lyricsDirPlain = text;
+          }
         }
       } catch {
         // File not found, continue
       }
     }
 
-    // 2. Sidecar .lrc file alongside audio file (in music dir)
+    // 1b. Sidecar file alongside audio. A .txt path can be stored here too.
     if (row.lyrics_path?.startsWith('music:')) {
       const musicRelPath = row.lyrics_path.slice(6); // strip "music:" prefix
       try {
@@ -220,21 +269,26 @@ export const lyricsPlugin: FastifyPluginAsync = fp(async (app) => {
         if (text?.trim() && isSyncedLyrics(text)) {
           return sendLyrics(text, 'synced');
         }
+        if (text?.trim()) musicSidecarPlain = text;
       } catch { /* continue */ }
-    } else {
-      // Try .lrc sidecar even if not stored in lyrics_path
-      const lrcText = await readMusicSidecar(row.mount_path, row.path, '.lrc');
-      if (lrcText?.trim() && isSyncedLyrics(lrcText)) {
-        return sendLyrics(lrcText, 'synced');
-      }
     }
 
-    // 3. Embedded synced lyrics from DB
+    // Try .lrc sidecar even if not stored in lyrics_path.
+    const lrcText = await readMusicSidecar(row.mount_path, row.path, '.lrc');
+    if (lrcText?.trim() && isSyncedLyrics(lrcText)) {
+      return sendLyrics(lrcText, 'synced');
+    }
+    if (lrcText?.trim() && !musicSidecarPlain) {
+      musicSidecarPlain = lrcText;
+    }
+
+    // 1c. Embedded synced lyrics from DB
     if (row.embedded_lyrics && row.embedded_lyrics_synced) {
       return sendLyrics(row.embedded_lyrics, 'synced');
     }
 
-    // 4. LRCLIB online fetch
+    // 2. LRCLIB online fetch. Synced is an upgrade over local plain lyrics;
+    // plain is held until every local source has had a chance.
     const durationSec = row.duration_ms ? row.duration_ms / 1000 : undefined;
     const lrcData = await fetchFromLrclib(row.artist, row.title, row.album ?? undefined, durationSec);
 
@@ -244,31 +298,23 @@ export const lyricsPlugin: FastifyPluginAsync = fp(async (app) => {
       return sendLyrics(lrcData.syncedLyrics, 'synced');
     }
 
-    if (lrcData?.plainLyrics) {
-      await cacheLyrics(id, lrcData.plainLyrics, false);
-      return sendLyrics(lrcData.plainLyrics, 'unsynced');
-    }
+    const onlinePlain = lrcData?.plainLyrics?.trim() ? lrcData.plainLyrics : null;
 
-    // 5. Embedded unsynced lyrics from DB
-    if (row.embedded_lyrics) {
-      return sendLyrics(row.embedded_lyrics, 'unsynced');
-    }
+    // 3. Local unsynced lyrics from file/tag sources.
+    if (lyricsDirPlain) return sendLyrics(lyricsDirPlain, 'unsynced');
+    if (musicSidecarPlain) return sendLyrics(musicSidecarPlain, 'unsynced');
+    if (row.embedded_lyrics) return sendLyrics(row.embedded_lyrics, 'unsynced');
 
-    // 6. Sidecar .txt file alongside audio file
     const txtText = await readMusicSidecar(row.mount_path, row.path, '.txt');
-    if (txtText?.trim()) {
-      return sendLyrics(txtText, 'unsynced');
-    }
+    if (txtText?.trim()) return sendLyrics(txtText, 'unsynced');
 
-    // 7. Cached plain lyrics file from LYRICS_DIR (from step 1 that was skipped)
-    if (row.lyrics_path && !row.lyrics_path.startsWith('music:')) {
-      try {
-        const abs = safeJoinLyrics(row.lyrics_path);
-        const text = await readFile(abs, 'utf8');
-        if (text.trim()) {
-          return sendLyrics(text, 'unsynced');
-        }
-      } catch { /* no cached plain lyrics */ }
+    // 4. Previously generated online plain cache.
+    if (generatedPlainCache) return sendLyrics(generatedPlainCache, 'unsynced');
+
+    // 5. Online plain lyrics only when there is no local text.
+    if (onlinePlain) {
+      await cacheLyrics(id, onlinePlain, false);
+      return sendLyrics(onlinePlain, 'unsynced');
     }
 
     return reply.code(204).send();
