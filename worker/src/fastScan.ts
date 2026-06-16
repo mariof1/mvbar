@@ -80,6 +80,8 @@ interface TrackData {
   artMime: string | null;
   artHash: string | null;
   lyricsPath: string | null;
+  embeddedLyrics: string | null;
+  embeddedLyricsSynced: boolean;
   artists: string[];       // Array of individual artist names
   albumartists: string[];  // Array of individual album artist names
   composers: string[];     // Array of composer names
@@ -230,6 +232,8 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
     const artMimes = tracks.map(t => t.artMime);
     const artHashes = tracks.map(t => t.artHash);
     const lyricsPaths = tracks.map(t => t.lyricsPath);
+    const embeddedLyrics = tracks.map(t => t.embeddedLyrics);
+    const embeddedLyricsSynced = tracks.map(t => t.embeddedLyricsSynced);
     const trackNumbers = tracks.map(t => t.trackNumber);
     const trackTotals = tracks.map(t => t.trackTotal);
     const discNumbers = tracks.map(t => t.discNumber);
@@ -263,7 +267,8 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
     const trackResult = await client.query<{ id: number; path: string }>(`
       INSERT INTO tracks (
         library_id, path, mtime_ms, size_bytes, ext, title, artist, album, album_artist, 
-        genre, country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path, 
+        genre, country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path,
+        embedded_lyrics, embedded_lyrics_synced,
         track_number, track_total, disc_number, disc_total, last_seen_job_id, updated_at, birthtime_ms, created_at,
         bpm, initial_key, composer, conductor, publisher, copyright, comment, mood, grouping,
         isrc, release_date, original_year, compilation,
@@ -274,7 +279,8 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
         u.library_id, u.path, u.mtime_ms, u.size_bytes, u.ext,
         u.title, u.artist, u.album, u.album_artist, u.genre,
         u.country, u.language, u.year, u.duration_ms, u.art_path,
-        u.art_mime, u.art_hash, u.lyrics_path, u.track_number, u.track_total,
+        u.art_mime, u.art_hash, u.lyrics_path, u.embedded_lyrics, u.embedded_lyrics_synced,
+        u.track_number, u.track_total,
         u.disc_number, u.disc_total, u.last_seen_job_id, u.updated_at,
         u.birthtime_ms,
         to_timestamp(u.birthtime_ms::double precision / 1000.0),
@@ -286,16 +292,17 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
         $1::bigint[], $2::text[], $3::bigint[], $4::bigint[], $5::text[],
         $6::text[], $7::text[], $8::text[], $9::text[], $10::text[],
         $11::text[], $12::text[], $13::int[], $14::int[], $15::text[],
-        $16::text[], $17::text[], $18::text[], $19::int[], $20::int[],
-        $21::int[], $22::int[], $23::int[], $24::timestamptz[], $25::bigint[],
-        $26::int[], $27::text[], $28::text[], $29::text[], $30::text[],
-        $31::text[], $32::text[], $33::text[], $34::text[],
-        $35::text[], $36::text[], $37::int[], $38::boolean[],
-        $39::text[], $40::text[], $41::text[], $42::text[],
-        $43::text[], $44::text[], $45::text[], $46::text[]
+        $16::text[], $17::text[], $18::text[], $19::text[], $20::boolean[],
+        $21::int[], $22::int[], $23::int[], $24::int[], $25::int[],
+        $26::timestamptz[], $27::bigint[], $28::int[], $29::text[], $30::text[],
+        $31::text[], $32::text[], $33::text[], $34::text[], $35::text[],
+        $36::text[], $37::text[], $38::text[], $39::int[], $40::boolean[],
+        $41::text[], $42::text[], $43::text[], $44::text[],
+        $45::text[], $46::text[], $47::text[], $48::text[]
       ) AS u(
         library_id, path, mtime_ms, size_bytes, ext, title, artist, album, album_artist, genre,
-        country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path, track_number, track_total,
+        country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path,
+        embedded_lyrics, embedded_lyrics_synced, track_number, track_total,
         disc_number, disc_total, last_seen_job_id, updated_at, birthtime_ms,
         bpm, initial_key, composer, conductor, publisher, copyright, comment, mood, grouping,
         isrc, release_date, original_year, compilation,
@@ -319,6 +326,8 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
         art_mime = EXCLUDED.art_mime,
         art_hash = EXCLUDED.art_hash,
         lyrics_path = EXCLUDED.lyrics_path,
+        embedded_lyrics = EXCLUDED.embedded_lyrics,
+        embedded_lyrics_synced = EXCLUDED.embedded_lyrics_synced,
         track_number = EXCLUDED.track_number,
         track_total = EXCLUDED.track_total,
         disc_number = EXCLUDED.disc_number,
@@ -351,7 +360,8 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       libraryIds, paths, mtimeMss, sizeBytes, exts,
       titles, artists, albums, albumArtists, genres,
       countries, languages, years, durations, artPaths,
-      artMimes, artHashes, lyricsPaths, trackNumbers, trackTotals,
+      artMimes, artHashes, lyricsPaths, embeddedLyrics, embeddedLyricsSynced,
+      trackNumbers, trackTotals,
       discNumbers, discTotals,
       tracks.map(() => 0),  // last_seen_job_id = 0 for fast scan
       tracks.map(() => new Date()),
@@ -861,7 +871,31 @@ export async function runFastScan(
         try {
           const lst = await stat(lyricsAbs);
           if (lst.isFile()) lyricsPath = lyricsRel;
-        } catch {}
+        } catch {
+          const txtRel = `${baseNoExtRel}.txt`;
+          const txtAbs = path.join(LYRICS_DIR, txtRel);
+          try {
+            const tst = await stat(txtAbs);
+            if (tst.isFile()) lyricsPath = txtRel;
+          } catch {
+            // no lyrics sidecar files in the lyrics cache
+          }
+        }
+
+        if (!lyricsPath) {
+          const baseNoExtAbs = file.fullPath.replace(/\.[^./\\]+$/, '');
+          for (const sidecarExt of ['.lrc', '.txt']) {
+            try {
+              const sst = await stat(baseNoExtAbs + sidecarExt);
+              if (sst.isFile()) {
+                lyricsPath = `music:${path.relative(musicDir, baseNoExtAbs + sidecarExt)}`;
+                break;
+              }
+            } catch {
+              // no music-dir sidecar for this extension
+            }
+          }
+        }
         
         const isNew = !existing;
         return {
@@ -884,6 +918,8 @@ export async function runFastScan(
           artMime,
           artHash,
           lyricsPath,
+          embeddedLyrics: tags.embeddedLyrics,
+          embeddedLyricsSynced: tags.embeddedLyricsSynced,
           artists: tags.artists,
           albumartists: tags.albumartists,
           composers: tags.composers || [],

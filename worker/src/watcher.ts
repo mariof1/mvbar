@@ -271,7 +271,31 @@ export class LibraryWatcher {
       try {
         const lst = await stat(lyricsAbs);
         if (lst.isFile()) lyricsPath = lyricsRel;
-      } catch {}
+      } catch {
+        const txtRel = `${baseNoExtRel}.txt`;
+        const txtAbs = path.join(LYRICS_DIR, txtRel);
+        try {
+          const tst = await stat(txtAbs);
+          if (tst.isFile()) lyricsPath = txtRel;
+        } catch {
+          // no lyrics sidecar files in the lyrics cache
+        }
+      }
+
+      if (!lyricsPath) {
+        const baseNoExtAbs = filePath.replace(/\.[^./\\]+$/, '');
+        for (const sidecarExt of ['.lrc', '.txt']) {
+          try {
+            const sst = await stat(baseNoExtAbs + sidecarExt);
+            if (sst.isFile()) {
+              lyricsPath = `music:${path.relative(this.root, baseNoExtAbs + sidecarExt)}`;
+              break;
+            }
+          } catch {
+            // no music-dir sidecar for this extension
+          }
+        }
+      }
 
       // Upsert to DB
       await upsertTrack({
@@ -295,6 +319,8 @@ export class LibraryWatcher {
         artMime: art?.mime ?? null,
         artHash: art?.hash ?? null,
         lyricsPath,
+        embeddedLyrics: tags.embeddedLyrics,
+        embeddedLyricsSynced: tags.embeddedLyricsSynced,
         artists: tags.artists,
         albumArtists: tags.albumartists
       });
