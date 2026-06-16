@@ -248,7 +248,7 @@ export async function findSimilarLocalTracks(
   trackName: string,
   excludeTrackIds: number[] = [],
   limit = 20
-): Promise<{ id: number; title: string; artist: string; match: number }[]> {
+): Promise<{ id: number; title: string; artist: string; album: string | null; art_path: string | null; art_hash: string | null; duration_ms: number | null; match: number }[]> {
   const similar = await getSimilarTracks(artistName, trackName, 100);
   if (similar.length === 0) return [];
 
@@ -271,8 +271,8 @@ export async function findSimilarLocalTracks(
     : '';
   if (excludeTrackIds.length > 0) params.push(excludeTrackIds as any);
 
-  const r = await db().query<{ id: number; title: string; artist: string; matched_title: string; matched_artist: string }>(
-    `SELECT DISTINCT ON (t.id) t.id, t.title, t.artist, lower(t.title) as matched_title, lower(t.artist) as matched_artist
+  const r = await db().query<{ id: number; title: string; artist: string; album: string | null; art_path: string | null; art_hash: string | null; duration_ms: number | null; matched_title: string; matched_artist: string }>(
+    `SELECT DISTINCT ON (t.id) t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.duration_ms, lower(t.title) as matched_title, lower(t.artist) as matched_artist
      FROM active_tracks t
      WHERE (lower(t.title), lower(t.artist)) IN (${values.join(',')})
        ${excludeClause}`,
@@ -296,8 +296,8 @@ export async function findSimilarLocalTracks(
     const pExclude = excludeTrackIds.length > 0 ? `AND t.id != ALL($${pIdx})` : '';
     if (excludeTrackIds.length > 0) partialParams.push(excludeTrackIds as any);
 
-    const pr = await db().query<{ id: number; title: string; artist: string; matched_title: string; matched_artist: string }>(
-      `SELECT DISTINCT ON (t.id) t.id, t.title, t.artist, lower(t.title) as matched_title, lower(t.artist) as matched_artist
+    const pr = await db().query<{ id: number; title: string; artist: string; album: string | null; art_path: string | null; art_hash: string | null; duration_ms: number | null; matched_title: string; matched_artist: string }>(
+      `SELECT DISTINCT ON (t.id) t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.duration_ms, lower(t.title) as matched_title, lower(t.artist) as matched_artist
        FROM active_tracks t
        WHERE (${partialValues.join(' OR ')}) ${pExclude}
        LIMIT ${limit}`,
@@ -309,7 +309,7 @@ export async function findSimilarLocalTracks(
   // Merge results and map back to match scores
   const allRows = [...r.rows, ...partialResults];
   const seenIds = new Set<number>();
-  const results: { id: number; title: string; artist: string; match: number }[] = [];
+  const results: { id: number; title: string; artist: string; album: string | null; art_path: string | null; art_hash: string | null; duration_ms: number | null; match: number }[] = [];
 
   // Create lookup for match scores
   const matchScoreLookup = new Map<string, number>();
@@ -331,7 +331,7 @@ export async function findSimilarLocalTracks(
       }
     }
     
-    results.push({ id: row.id, title: row.title, artist: row.artist, match: matchScore });
+    results.push({ id: row.id, title: row.title, artist: row.artist, album: row.album, art_path: row.art_path, art_hash: row.art_hash, duration_ms: row.duration_ms, match: matchScore });
   }
   
   return results.sort((a, b) => b.match - a.match);

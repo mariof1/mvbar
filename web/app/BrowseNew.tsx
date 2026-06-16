@@ -7,6 +7,7 @@ import {
   browseAlbum,
   browseAlbums,
   browseArtistById,
+  browseArtistTracks,
   browseArtists,
   browseCountries,
   browseCountryTracks,
@@ -19,6 +20,7 @@ import { useFavorites } from './favoritesStore';
 import { useAuth } from './store';
 import { useLibraryUpdates } from './useWebSocket';
 import { useRouter, useRoute } from './router';
+import { AddMenu, type AddMenuTrack } from './AddMenu';
 
 type Tab = 'artists' | 'albums' | 'genres' | 'countries' | 'languages';
 
@@ -841,15 +843,22 @@ export function BrowseNew(props: {
               {albumDetail.tracks.length} tracks
               {albumDetail.totalDiscs > 1 && ` · ${albumDetail.totalDiscs} discs`}
             </p>
-            <button
-              onClick={() => props.onPlayAll?.(albumDetail.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: albumDetail.name })))}
-              className="mt-4 px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-              Play All
-            </button>
+            <div className="mt-4 flex items-center gap-2">
+              <button
+                onClick={() => props.onPlayAll?.(albumDetail.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: albumDetail.name })))}
+                className="px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+                Play All
+              </button>
+              <AddMenu
+                label="album"
+                title={`Add ${albumDetail.name}...`}
+                getTracks={() => albumDetail.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: albumDetail.name }))}
+              />
+            </div>
           </div>
         </div>
 
@@ -935,18 +944,13 @@ export function BrowseNew(props: {
                       </button>
                     )}
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        props.onAddToQueue?.({ id: track.id, title: track.title, artist: track.display_artist || track.artist });
-                      }}
-                      className="hidden sm:block p-2 rounded-full hover:bg-slate-700 text-slate-400"
-                      title="Add to queue"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                      </svg>
-                    </button>
+                    <div className="block">
+                      <AddMenu
+                        label="track"
+                        title="Add to..."
+                        getTracks={() => [{ id: track.id, title: track.title, artist: track.display_artist || track.artist, album: albumDetail.name }]}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1262,6 +1266,17 @@ export function BrowseNew(props: {
           <div>
             <h1 className="text-3xl font-bold text-white">{selectedArtist.name}</h1>
             <p className="text-slate-400 mt-1">{artistAlbums.length} albums</p>
+            <div className="mt-3">
+              <AddMenu
+                label="artist"
+                title={`Add ${selectedArtist.name}...`}
+                getTracks={async () => {
+                  if (!token || !selectedArtist) return [];
+                  const r = await browseArtistTracks(token, selectedArtist.id);
+                  return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                }}
+              />
+            </div>
           </div>
         </div>
 
@@ -1270,25 +1285,38 @@ export function BrowseNew(props: {
             <h2 className="text-xl font-semibold text-white mb-4">Albums</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
               {artistAlbums.map((a) => (
-                <button
-                  key={a.album}
-                  onClick={() => selectAlbum({ artist: a.display_artist, album: a.album, artistId: selectedArtist?.id })}
-                  className="group text-left"
-                >
-                  <div className="aspect-square rounded-lg overflow-hidden bg-slate-800 mb-2 shadow-lg group-hover:shadow-xl transition-shadow">
-                    {a.art_path ? (
-                      <img src={`/api/art/${a.art_path}`} alt={a.album} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                    ) : (
-                      <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
-                        <svg className="w-12 h-12 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                        </svg>
-                      </div>
-                    )}
+                <div key={a.album} className="relative group">
+                  <button
+                    onClick={() => selectAlbum({ artist: a.display_artist, album: a.album, artistId: selectedArtist?.id })}
+                    className="w-full text-left"
+                  >
+                    <div className="aspect-square rounded-lg overflow-hidden bg-slate-800 mb-2 shadow-lg group-hover:shadow-xl transition-shadow">
+                      {a.art_path ? (
+                        <img src={`/api/art/${a.art_path}`} alt={a.album} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                      ) : (
+                        <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
+                          <svg className="w-12 h-12 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                    <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
+                    <div className="text-sm text-slate-500">{a.track_count} tracks</div>
+                  </button>
+                  <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                    <AddMenu
+                      variant="subtle"
+                      label="album"
+                      title={`Add ${a.album}...`}
+                      getTracks={async () => {
+                        if (!token) return [];
+                        const r = await browseAlbum(token, a.display_artist, a.album, selectedArtist?.id);
+                        return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                      }}
+                    />
                   </div>
-                  <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
-                  <div className="text-sm text-slate-500">{a.track_count} tracks</div>
-                </button>
+                </div>
               ))}
             </div>
           </div>
@@ -1299,25 +1327,38 @@ export function BrowseNew(props: {
             <h2 className="text-xl font-semibold text-white mb-4">Appears On</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
               {artistAppearsOn.map((a) => (
-                <button
-                  key={`${a.album_artist}-${a.album}`}
-                  onClick={() => selectAlbum({ artist: a.album_artist, album: a.album })}
-                  className="group text-left"
-                >
-                  <div className="aspect-square rounded-lg overflow-hidden bg-slate-800 mb-2 shadow-lg group-hover:shadow-xl transition-shadow">
-                    {a.art_path ? (
-                      <img src={`/api/art/${a.art_path}`} alt={a.album} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                    ) : (
-                      <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
-                        <svg className="w-12 h-12 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                        </svg>
-                      </div>
-                    )}
+                <div key={`${a.album_artist}-${a.album}`} className="relative group">
+                  <button
+                    onClick={() => selectAlbum({ artist: a.album_artist, album: a.album })}
+                    className="w-full text-left"
+                  >
+                    <div className="aspect-square rounded-lg overflow-hidden bg-slate-800 mb-2 shadow-lg group-hover:shadow-xl transition-shadow">
+                      {a.art_path ? (
+                        <img src={`/api/art/${a.art_path}`} alt={a.album} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                      ) : (
+                        <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
+                          <svg className="w-12 h-12 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                    <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
+                    <div className="text-sm text-slate-500 truncate">{a.album_artist}</div>
+                  </button>
+                  <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                    <AddMenu
+                      variant="subtle"
+                      label="album"
+                      title={`Add ${a.album}...`}
+                      getTracks={async () => {
+                        if (!token) return [];
+                        const r = await browseAlbum(token, a.album_artist, a.album);
+                        return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                      }}
+                    />
                   </div>
-                  <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
-                  <div className="text-sm text-slate-500 truncate">{a.album_artist}</div>
-                </button>
+                </div>
               ))}
             </div>
           </div>
@@ -1356,6 +1397,11 @@ export function BrowseNew(props: {
             </svg>
             Play All
           </button>
+          <AddMenu
+            label="genre"
+            title={`Add ${selectedGenre}...`}
+            getTracks={() => genreTracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: t.album }))}
+          />
         </div>
 
         <div className="space-y-1">
@@ -1433,6 +1479,11 @@ export function BrowseNew(props: {
             </svg>
             Play All
           </button>
+          <AddMenu
+            label="country"
+            title={`Add ${selectedCountry}...`}
+            getTracks={() => countryTracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: t.album }))}
+          />
         </div>
 
         <div className="space-y-1">
@@ -1512,6 +1563,11 @@ export function BrowseNew(props: {
             </svg>
             Play All
           </button>
+          <AddMenu
+            label="language"
+            title={`Add ${selectedLanguage}...`}
+            getTracks={() => languageTracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: t.album }))}
+          />
         </div>
 
         <div className="space-y-1">
@@ -1623,22 +1679,35 @@ export function BrowseNew(props: {
         {tab === 'artists' && (
           <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
             {artists.map((a) => (
-              <button
-                key={a.id}
-                data-flip-id={`artist:${a.id}`}
-                onClick={() => selectArtist({ id: a.id, name: a.name })}
-                className="group text-center p-4 rounded-xl hover:bg-slate-800/50 transition-colors"
-              >
-                <div className="w-24 h-24 mx-auto rounded-full overflow-hidden bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center text-2xl font-bold text-white group-hover:from-cyan-500 group-hover:to-blue-600 transition-all shadow-lg">
-                  {a.art_path ? (
-                    <img src={`/api/art/${a.art_path}`} alt={a.name} className="w-full h-full object-cover" />
-                  ) : (
-                    getInitials(a.name)
-                  )}
+              <div key={a.id} className="relative group">
+                <button
+                  data-flip-id={`artist:${a.id}`}
+                  onClick={() => selectArtist({ id: a.id, name: a.name })}
+                  className="w-full text-center p-4 rounded-xl hover:bg-slate-800/50 transition-colors"
+                >
+                  <div className="w-24 h-24 mx-auto rounded-full overflow-hidden bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center text-2xl font-bold text-white group-hover:from-cyan-500 group-hover:to-blue-600 transition-all shadow-lg">
+                    {a.art_path ? (
+                      <img src={`/api/art/${a.art_path}`} alt={a.name} className="w-full h-full object-cover" />
+                    ) : (
+                      getInitials(a.name)
+                    )}
+                  </div>
+                  <div className="mt-3 font-medium text-white truncate group-hover:text-cyan-400">{a.name}</div>
+                  <div className="text-sm text-slate-500">{a.album_count} albums</div>
+                </button>
+                <div className="absolute top-3 right-3 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                  <AddMenu
+                    variant="subtle"
+                    label="artist"
+                    title={`Add ${a.name}...`}
+                    getTracks={async () => {
+                      if (!token) return [];
+                      const r = await browseArtistTracks(token, a.id);
+                      return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                    }}
+                  />
                 </div>
-                <div className="mt-3 font-medium text-white truncate group-hover:text-cyan-400">{a.name}</div>
-                <div className="text-sm text-slate-500">{a.album_count} albums</div>
-              </button>
+              </div>
             ))}
             {loading && (
               <div className="col-span-full flex justify-center py-8">
@@ -1652,26 +1721,39 @@ export function BrowseNew(props: {
         {tab === 'albums' && (
           <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
             {albums.map((a) => (
-              <button
-                key={`${a.display_artist}||${a.album}`}
-                data-flip-id={`album:${a.display_artist}||${a.album}`}
-                onClick={() => selectAlbum({ artist: a.display_artist, album: a.album })}
-                className="group text-left"
-              >
-                <div className="aspect-square rounded-lg overflow-hidden bg-slate-800 mb-2 shadow-lg group-hover:shadow-xl transition-shadow">
-                  {a.art_path ? (
-                    <img src={`/api/art/${a.art_path}`} alt={a.album} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                  ) : (
-                    <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
-                      <svg className="w-12 h-12 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                      </svg>
-                    </div>
-                  )}
+              <div key={`${a.display_artist}||${a.album}`} className="relative group">
+                <button
+                  data-flip-id={`album:${a.display_artist}||${a.album}`}
+                  onClick={() => selectAlbum({ artist: a.display_artist, album: a.album })}
+                  className="w-full text-left"
+                >
+                  <div className="aspect-square rounded-lg overflow-hidden bg-slate-800 mb-2 shadow-lg group-hover:shadow-xl transition-shadow">
+                    {a.art_path ? (
+                      <img src={`/api/art/${a.art_path}`} alt={a.album} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                    ) : (
+                      <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
+                        <svg className="w-12 h-12 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                  <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
+                  <div className="text-sm text-slate-500 truncate">{a.display_artist}</div>
+                </button>
+                <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                  <AddMenu
+                    variant="subtle"
+                    label="album"
+                    title={`Add ${a.album}...`}
+                    getTracks={async () => {
+                      if (!token) return [];
+                      const r = await browseAlbum(token, a.display_artist, a.album);
+                      return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                    }}
+                  />
                 </div>
-                <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
-                <div className="text-sm text-slate-500 truncate">{a.display_artist}</div>
-              </button>
+              </div>
             ))}
             {loading && (
               <div className="col-span-full flex justify-center py-8">

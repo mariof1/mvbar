@@ -1,7 +1,16 @@
 'use client';
 
 import { useState, useEffect, useRef, type ReactElement } from 'react';
-import { apiFetch, logout, getListenBrainzSettings, connectListenBrainz, disconnectListenBrainz } from './apiClient';
+import {
+  apiFetch,
+  logout,
+  getListenBrainzSettings,
+  connectListenBrainz,
+  disconnectListenBrainz,
+  getSubsonicSettings,
+  setSubsonicPassword,
+  clearSubsonicPassword,
+} from './apiClient';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { usePreferences } from './preferencesStore';
@@ -59,6 +68,14 @@ export function Settings() {
   const [lbLoading, setLbLoading] = useState(false);
   const [lbError, setLbError] = useState<string | null>(null);
 
+  // Subsonic/OpenSubsonic settings
+  const [subsonicUsername, setSubsonicUsername] = useState('');
+  const [subsonicConfigured, setSubsonicConfigured] = useState(false);
+  const [subsonicPassword, setSubsonicPasswordValue] = useState('');
+  const [subsonicLoading, setSubsonicLoading] = useState(false);
+  const [subsonicError, setSubsonicError] = useState<string | null>(null);
+  const [subsonicNotice, setSubsonicNotice] = useState<string | null>(null);
+
   // Load profile
   const loadProfile = async () => {
     if (!token) return;
@@ -86,6 +103,12 @@ export function Settings() {
         .then(r => {
           setLbConnected(r.connected);
           setLbUsername(r.username);
+        })
+        .catch(() => {});
+      getSubsonicSettings(token)
+        .then(r => {
+          setSubsonicUsername(r.username);
+          setSubsonicConfigured(r.configured);
         })
         .catch(() => {});
     }
@@ -227,6 +250,39 @@ export function Settings() {
     } catch {
     } finally {
       setLbLoading(false);
+    }
+  }
+
+  async function handleSetSubsonicPassword() {
+    if (!subsonicPassword.trim() || subsonicPassword.length < 8) return;
+    setSubsonicLoading(true);
+    setSubsonicError(null);
+    setSubsonicNotice(null);
+    try {
+      await setSubsonicPassword(token, subsonicPassword);
+      setSubsonicPasswordValue('');
+      setSubsonicConfigured(true);
+      setSubsonicNotice('Subsonic password updated.');
+    } catch (e: any) {
+      setSubsonicError(e?.data?.error ?? e?.message ?? 'Failed to update Subsonic password');
+    } finally {
+      setSubsonicLoading(false);
+    }
+  }
+
+  async function handleClearSubsonicPassword() {
+    setSubsonicLoading(true);
+    setSubsonicError(null);
+    setSubsonicNotice(null);
+    try {
+      await clearSubsonicPassword(token);
+      setSubsonicConfigured(false);
+      setSubsonicPasswordValue('');
+      setSubsonicNotice('Subsonic password cleared.');
+    } catch (e: any) {
+      setSubsonicError(e?.data?.error ?? e?.message ?? 'Failed to clear Subsonic password');
+    } finally {
+      setSubsonicLoading(false);
     }
   }
 
@@ -525,6 +581,60 @@ export function Settings() {
 
         {activeTab === 'integrations' && (
           <>
+            {/* Subsonic / OpenSubsonic */}
+            <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                {subsonicConfigured ? (
+                  <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" />
+                  </svg>
+                )}
+                Subsonic / OpenSubsonic
+              </h2>
+
+              <div className="space-y-3 max-w-md">
+                <div className="text-sm text-slate-400">
+                  Use <span className="text-white">{subsonicUsername || user.email}</span> as the username in clients such as DSub or Symfonium.
+                </div>
+                <input
+                  type="password"
+                  placeholder={subsonicConfigured ? 'New Subsonic password' : 'Subsonic password (min 8 characters)'}
+                  value={subsonicPassword}
+                  onChange={(e) => setSubsonicPasswordValue(e.target.value)}
+                  className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={handleSetSubsonicPassword}
+                    disabled={subsonicLoading || subsonicPassword.length < 8}
+                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors"
+                  >
+                    {subsonicLoading ? 'Saving...' : subsonicConfigured ? 'Update Password' : 'Set Password'}
+                  </button>
+                  {subsonicConfigured && (
+                    <button
+                      onClick={handleClearSubsonicPassword}
+                      disabled={subsonicLoading}
+                      className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {profile?.auth_type === 'google' && (
+                  <div className="text-xs text-slate-500">
+                    Google sign-in cannot be sent to Subsonic clients, so this app password is required.
+                  </div>
+                )}
+                {subsonicNotice && <div className="text-green-400 text-sm">{subsonicNotice}</div>}
+                {subsonicError && <div className="text-red-400 text-sm">{subsonicError}</div>}
+              </div>
+            </section>
+
             {/* ListenBrainz */}
             <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
               <h2 className="text-lg font-semibold text-white flex items-center gap-2">

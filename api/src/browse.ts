@@ -881,6 +881,32 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
   });
 
   // Legacy endpoints for backward compatibility
+  // Return *all* tracks for an artist (used to bulk-add to queue/playlist)
+  app.get('/api/browse/artist/:id/tracks', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    const { id } = req.params as { id: string };
+    const artistId = Number(id);
+    if (!artistId) return reply.code(400).send({ ok: false });
+
+    const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
+    const libFilter = allowed === null ? '' : `and t.library_id = any($2)`;
+    const params: any[] = allowed === null ? [artistId] : [artistId, allowed];
+
+    const r = await db().query(
+      `
+      select distinct t.id, t.title, t.artist, t.album, t.duration_ms,
+             t.disc_number, t.track_number
+      from track_artists ta
+      join active_tracks t on t.id = ta.track_id
+      where ta.artist_id = $1
+      ${libFilter}
+      order by t.album nulls last, t.disc_number nulls last, t.track_number nulls last, t.title
+    `,
+      params
+    );
+    return { ok: true, tracks: r.rows };
+  });
+
   app.get('/api/browse/artist', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     const qs = req.query as { name?: string };

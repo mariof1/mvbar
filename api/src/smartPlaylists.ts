@@ -2,6 +2,7 @@ import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
 import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
+import { broadcastToUser } from './websocket.js';
 
 // Valid sort modes
 const SORT_MODES = new Set([
@@ -49,7 +50,34 @@ function coerceStrList(values: any): string[] {
   return out;
 }
 
-interface SmartFilters {
+function coerceNullableInt(value: any, min: number, max: number): number | null {
+  if (value == null || String(value).trim() === '') return null;
+  try {
+    const n = parseInt(String(value), 10);
+    if (isNaN(n)) return null;
+    return Math.max(min, Math.min(max, n));
+  } catch {
+    return null;
+  }
+}
+
+function coerceDateOnly(value: any): string | null {
+  if (value == null || String(value).trim() === '') return null;
+  const s = String(value).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return null;
+  const [, year, month, day] = m;
+  const d = new Date(`${year}-${month}-${day}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  if (
+    d.getUTCFullYear() !== Number(year) ||
+    d.getUTCMonth() + 1 !== Number(month) ||
+    d.getUTCDate() !== Number(day)
+  ) return null;
+  return `${year}-${month}-${day}`;
+}
+
+export interface SmartFilters {
   include: {
     artists: number[];
     artistsMode: 'any' | 'all';
@@ -58,6 +86,7 @@ interface SmartFilters {
     genresMode: 'any' | 'all';
     years: number[];
     countries: string[];
+    languages: string[];
   };
   exclude: {
     artists: number[];
@@ -65,20 +94,32 @@ interface SmartFilters {
     genres: string[];
     years: number[];
     countries: string[];
+    languages: string[];
   };
   duration: {
     min: number | null;
     max: number | null;
   };
+  bpm: {
+    min: number | null;
+    max: number | null;
+  };
+  dateAdded: {
+    from: string | null;
+    to: string | null;
+  };
   favoriteOnly: boolean;
   maxResults: number | null;
 }
 
-function normalizeFilters(raw: any): SmartFilters {
+export function normalizeFilters(raw: any): SmartFilters {
   raw = raw || {};
   const inc = raw.include && typeof raw.include === 'object' ? raw.include : {};
   const exc = raw.exclude && typeof raw.exclude === 'object' ? raw.exclude : {};
   const dur = raw.duration && typeof raw.duration === 'object' ? raw.duration : {};
+  const bpm = raw.bpm && typeof raw.bpm === 'object' ? raw.bpm : {};
+  const dateAddedRaw = raw.dateAdded || raw.date_added;
+  const dateAdded = dateAddedRaw && typeof dateAddedRaw === 'object' ? dateAddedRaw : {};
 
   let artistsMode = String(inc.artistsMode || inc.artists_mode || '').toLowerCase();
   let genresMode = String(inc.genresMode || inc.genres_mode || '').toLowerCase();
@@ -94,6 +135,7 @@ function normalizeFilters(raw: any): SmartFilters {
       genresMode: genresMode as 'any' | 'all',
       years: coerceIntList(inc.years),
       countries: coerceStrList(inc.countries),
+      languages: coerceStrList(inc.languages),
     },
     exclude: {
       artists: coerceIntList(exc.artists),
@@ -101,25 +143,31 @@ function normalizeFilters(raw: any): SmartFilters {
       genres: coerceStrList(exc.genres),
       years: coerceIntList(exc.years),
       countries: coerceStrList(exc.countries),
+      languages: coerceStrList(exc.languages),
     },
     duration: {
       min: null,
       max: null,
     },
+    bpm: {
+      min: null,
+      max: null,
+    },
+    dateAdded: {
+      from: null,
+      to: null,
+    },
     favoriteOnly: Boolean(raw.favoriteOnly),
     maxResults: null,
   };
 
-  try {
-    if (dur.min != null && String(dur.min).trim() !== '') {
-      filters.duration.min = Math.max(0, parseInt(String(dur.min), 10));
-    }
-  } catch {}
-  try {
-    if (dur.max != null && String(dur.max).trim() !== '') {
-      filters.duration.max = Math.max(0, parseInt(String(dur.max), 10));
-    }
-  } catch {}
+  filters.duration.min = coerceNullableInt(dur.min, 0, 86400);
+  filters.duration.max = coerceNullableInt(dur.max, 0, 86400);
+  filters.bpm.min = coerceNullableInt(bpm.min, 0, 400);
+  filters.bpm.max = coerceNullableInt(bpm.max, 0, 400);
+  filters.dateAdded.from = coerceDateOnly(dateAdded.from ?? dateAdded.min ?? dateAdded.start);
+  filters.dateAdded.to = coerceDateOnly(dateAdded.to ?? dateAdded.max ?? dateAdded.end);
+
   try {
     if (raw.maxResults != null && String(raw.maxResults).trim() !== '') {
       filters.maxResults = Math.max(1, Math.min(2000, parseInt(String(raw.maxResults), 10)));
@@ -129,11 +177,12 @@ function normalizeFilters(raw: any): SmartFilters {
   return filters;
 }
 
-async function buildSmartPlaylistQuery(
+export async function buildSmartPlaylistQuery(
   userId: string,
   filters: SmartFilters,
   sortMode: string,
-  allowed: number[] | null
+  allowed: number[] | null,
+  selectColumns = 't.id, t.title, t.artist, t.album, t.duration_ms, t.art_path, t.art_hash'
 ): Promise<{ sql: string; params: any[] }> {
   const conditions: string[] = [];
   const params: any[] = [];
@@ -223,6 +272,18 @@ async function buildSmartPlaylistQuery(
     conditions.push(`t.id not in (select tc.track_id from track_countries tc where tc.country = any($${paramIdx++}))`);
   }
 
+  // Include languages (using normalized track_languages table)
+  if (filters.include.languages.length > 0) {
+    params.push(filters.include.languages);
+    conditions.push(`t.id in (select tl.track_id from track_languages tl where tl.language = any($${paramIdx++}))`);
+  }
+
+  // Exclude languages (using normalized track_languages table)
+  if (filters.exclude.languages.length > 0) {
+    params.push(filters.exclude.languages);
+    conditions.push(`t.id not in (select tl.track_id from track_languages tl where tl.language = any($${paramIdx++}))`);
+  }
+
   // Duration filters (in seconds, track has duration_ms)
   if (filters.duration.min != null) {
     params.push(filters.duration.min * 1000);
@@ -231,6 +292,26 @@ async function buildSmartPlaylistQuery(
   if (filters.duration.max != null) {
     params.push(filters.duration.max * 1000);
     conditions.push(`coalesce(t.duration_ms, 0) <= $${paramIdx++}`);
+  }
+
+  // BPM filters
+  if (filters.bpm.min != null) {
+    params.push(filters.bpm.min);
+    conditions.push(`t.bpm is not null and t.bpm >= $${paramIdx++}`);
+  }
+  if (filters.bpm.max != null) {
+    params.push(filters.bpm.max);
+    conditions.push(`t.bpm is not null and t.bpm <= $${paramIdx++}`);
+  }
+
+  // Date added filters. The UI sends date-only strings; make the end date inclusive.
+  if (filters.dateAdded.from) {
+    params.push(filters.dateAdded.from);
+    conditions.push(`t.created_at >= $${paramIdx++}::date`);
+  }
+  if (filters.dateAdded.to) {
+    params.push(filters.dateAdded.to);
+    conditions.push(`t.created_at < ($${paramIdx++}::date + interval '1 day')`);
   }
 
   // Favorite only
@@ -274,12 +355,12 @@ async function buildSmartPlaylistQuery(
   if (orderBy.includes('left join')) {
     // Stats-based sorting needs different structure
     const parts = orderBy.split(' order by ');
-    sql = `select t.id, t.title, t.artist, t.album, t.duration_ms, t.art_path, t.art_hash
+    sql = `select ${selectColumns}
            from active_tracks t ${parts[0]}
            ${whereClause}
            order by ${parts[1]}`;
   } else {
-    sql = `select t.id, t.title, t.artist, t.album, t.duration_ms, t.art_path, t.art_hash
+    sql = `select ${selectColumns}
            from active_tracks t
            ${whereClause}
            ${orderBy}`;
@@ -452,6 +533,89 @@ export const smartPlaylistsPlugin: FastifyPluginAsync = fp(async (app) => {
     };
   });
 
+  // Convert smart playlist to a regular playlist (snapshot current matches)
+  app.post('/api/smart-playlists/:id/convert', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+
+    const id = parseInt((req.params as any).id, 10);
+    if (isNaN(id)) return reply.code(400).send({ ok: false, error: 'Invalid ID' });
+
+    const body = (req.body as any) || {};
+    const deleteSmart = body.delete === true || body.delete === 'true';
+
+    const r = await db().query(
+      `select id, name, filters_json, sort_mode
+         from smart_playlists
+        where id = $1 and user_id = $2`,
+      [id, req.user.userId]
+    );
+    if (r.rows.length === 0) return reply.code(404).send({ ok: false, error: 'Not found' });
+
+    const row = r.rows[0];
+    let name = String(body?.name || row.name || '').trim();
+    if (!name) name = row.name;
+    if (name.length > 255) name = name.slice(0, 255);
+
+    const filters = normalizeFilters(row.filters_json);
+    let sortMode = String(body?.sort || row.sort_mode || 'random').toLowerCase();
+    if (!SORT_MODES.has(sortMode)) sortMode = 'random';
+
+    let limit = parseInt(body?.limit, 10) || 2000;
+    if (filters.maxResults) limit = Math.min(limit, filters.maxResults);
+    limit = Math.max(1, Math.min(5000, limit));
+
+    const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
+    const { sql, params } = await buildSmartPlaylistQuery(req.user.userId, filters, sortMode, allowed);
+    const tracksR = await db().query<{ id: number }>(`${sql} limit $${params.length + 1}`, [...params, limit]);
+    const trackIds = tracksR.rows.map((r: any) => Number(r.id)).filter((n: number) => Number.isFinite(n));
+
+    const client = await (db() as any).connect();
+    let newId: number;
+    try {
+      await client.query('begin');
+      const ins = await client.query(
+        'insert into playlists(user_id, name) values ($1, $2) returning id',
+        [req.user.userId, name]
+      );
+      newId = Number(ins.rows[0].id);
+      if (trackIds.length > 0) {
+        const values: string[] = [];
+        const insParams: any[] = [newId];
+        let p = 2;
+        trackIds.forEach((tid, idx) => {
+          values.push(`($1, $${p}, ${idx})`);
+          insParams.push(tid);
+          p += 1;
+        });
+        await client.query(
+          `insert into playlist_items(playlist_id, track_id, position)
+           values ${values.join(',')}
+           on conflict (playlist_id, track_id) do nothing`,
+          insParams
+        );
+      }
+      if (deleteSmart) {
+        await client.query('delete from smart_playlists where id = $1 and user_id = $2', [id, req.user.userId]);
+      }
+      await client.query('commit');
+    } catch (e) {
+      await client.query('rollback');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    broadcastToUser(req.user.userId, 'playlist:created', { id: newId, name });
+
+    return {
+      ok: true,
+      id: newId,
+      name,
+      item_count: trackIds.length,
+      deleted_smart: deleteSmart ? id : null,
+    };
+  });
+
   // Delete smart playlist
   app.delete('/api/smart-playlists/:id', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
@@ -491,8 +655,16 @@ export const smartPlaylistsPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     if (kind === 'artist' || kind === 'artists') {
+      // Only suggest artists that actually perform on tracks (have a row in
+      // track_artists), not orphan artist rows that come from composer /
+      // lyricist / producer credits stored in track_credits.
       const r = await db().query(
-        `select id, name from artists where name ilike $1 order by name limit $2`,
+        `select a.id, a.name
+           from artists a
+          where a.name ilike $1
+            and exists (select 1 from track_artists ta where ta.artist_id = a.id)
+          order by a.name
+          limit $2`,
         [`%${q}%`, limit]
       );
       return { items: r.rows.map((row: any) => ({ id: Number(row.id), name: row.name })) };

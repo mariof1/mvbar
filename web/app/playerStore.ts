@@ -14,6 +14,9 @@ type PlayerState = {
   playTrackNow: (t: QueueTrack) => void;
   playIndex: (idx: number) => void;
   addToQueue: (t: QueueTrack) => void;
+  addManyToQueue: (tracks: QueueTrack[]) => void;
+  playNext: (t: QueueTrack) => void;
+  playNextMany: (tracks: QueueTrack[]) => void;
   removeFromQueue: (idx: number) => void;
   reorderQueue: (fromIdx: number, toIdx: number) => void;
   clearQueue: () => void;
@@ -52,6 +55,49 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     set({ queue: nextQueue, isOpen: true });
     useToastStore.getState().show(
       `Added "${t.title || 'Track'}" to queue`,
+      'queue'
+    );
+  },
+  addManyToQueue: (tracks) => {
+    if (tracks.length === 0) return;
+    const s = get();
+    const nextQueue = [...s.queue, ...tracks];
+    set({ queue: nextQueue, isOpen: true });
+    useToastStore.getState().show(
+      `Added ${tracks.length} track${tracks.length === 1 ? '' : 's'} to queue`,
+      'queue'
+    );
+  },
+  playNext: (t) => {
+    const s = get();
+    if (s.queue.length === 0) {
+      closePodcastPlayer();
+      closeAudiobookPlayer();
+      set({ queue: [t], index: 0, isOpen: true });
+    } else {
+      const insertAt = s.index + 1;
+      const newQueue = [...s.queue.slice(0, insertAt), t, ...s.queue.slice(insertAt)];
+      set({ queue: newQueue, isOpen: true });
+    }
+    useToastStore.getState().show(
+      `"${t.title || 'Track'}" will play next`,
+      'queue'
+    );
+  },
+  playNextMany: (tracks) => {
+    if (tracks.length === 0) return;
+    const s = get();
+    if (s.queue.length === 0) {
+      closePodcastPlayer();
+      closeAudiobookPlayer();
+      set({ queue: tracks, index: 0, isOpen: true });
+    } else {
+      const insertAt = s.index + 1;
+      const newQueue = [...s.queue.slice(0, insertAt), ...tracks, ...s.queue.slice(insertAt)];
+      set({ queue: newQueue, isOpen: true });
+    }
+    useToastStore.getState().show(
+      `${tracks.length} track${tracks.length === 1 ? '' : 's'} will play next`,
       'queue'
     );
   },

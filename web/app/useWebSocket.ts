@@ -261,11 +261,16 @@ export function useWebSocket(isAdmin = false) {
             // Scan progress update (admin)
             useScanProgress.getState().setProgress(msg.data);
           } else if (msg.type === 'user:pending') {
-            useAdminPending.setState((s) => ({ count: s.count + 1, lastEvent: Date.now() }));
-            const email = msg.data?.email ? ` (${msg.data.email})` : '';
-            useToastStore.getState().show(`New user pending approval${email}`, 'queue');
+            if (useAuth.getState().user?.role === 'admin') {
+              useAdminPending.setState((s) => ({ count: s.count + 1, lastEvent: Date.now() }));
+              const email = msg.data?.email ? ` (${msg.data.email})` : '';
+              useToastStore.getState().show(`New user pending approval${email}`, 'queue');
+            }
           } else if (msg.type === 'user:approval_changed') {
-            useAdminPending.getState().refresh(useAuth.getState().token);
+            const auth = useAuth.getState();
+            if (auth.user?.role === 'admin') {
+              useAdminPending.getState().refresh(auth.token);
+            }
           }
         } catch {
           // Ignore malformed messages

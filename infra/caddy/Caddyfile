@@ -1,6 +1,9 @@
 {
   # Set this in production if you want Let's Encrypt account email.
   # email you@example.com
+  log default {
+    exclude http.handlers.reverse_proxy
+  }
   # basic hardening
   servers {
     trusted_proxies static private_ranges

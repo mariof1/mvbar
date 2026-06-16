@@ -5,6 +5,7 @@ import { listFavorites } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useAuth } from './store';
 import { useLibraryUpdates } from './useWebSocket';
+import { AddMenu } from './AddMenu';
 
 export function Favorites(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
@@ -107,15 +108,13 @@ export function Favorites(props: {
 
             {/* Actions - always show remove button on mobile */}
             <div className="flex items-center gap-1">
-              <button
-                onClick={() => props.onAddToQueue?.({ id: t.id, title: t.title, artist: t.artist })}
-                className="hidden sm:block p-2 hover:bg-slate-700/50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
-                title="Add to queue"
-              >
-                <svg className="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-              </button>
+              <div className="block sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                <AddMenu
+                  label="track"
+                  title="Add to..."
+                  getTracks={() => [{ id: t.id, title: t.title, artist: t.artist, album: t.album }]}
+                />
+              </div>
               <button
                 onClick={async () => {
                   try {

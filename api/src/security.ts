@@ -11,11 +11,14 @@ export function hashPassword(password: string) {
   return `${salt}:${hash}`;
 }
 
-export function verifyPassword(password: string, stored: string) {
+export function verifyPassword(password: string, stored: string | null | undefined) {
+  if (!stored) return false;
   const [salt, hash] = stored.split(':');
   if (!salt || !hash) return false;
   const check = crypto.scryptSync(password, salt, 64).toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(check, 'hex'));
+  const storedHash = Buffer.from(hash, 'hex');
+  const checkHash = Buffer.from(check, 'hex');
+  return storedHash.length === checkHash.length && crypto.timingSafeEqual(storedHash, checkHash);
 }
 
 export function randomId(prefix = 'u') {

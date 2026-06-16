@@ -7,6 +7,7 @@ import {
   createSmartPlaylist,
   updateSmartPlaylist,
   deleteSmartPlaylist,
+  convertSmartPlaylist,
   suggestSmartPlaylist,
   type SmartPlaylist,
   type SmartFilters,
@@ -30,9 +31,27 @@ const SORT_OPTIONS = [
 ];
 
 const emptyFilters: SmartFilters = {
-  include: { artists: [], artistsMode: 'any', albums: [], genres: [], genresMode: 'any', years: [], countries: [] },
-  exclude: { artists: [], albums: [], genres: [], years: [], countries: [] },
+  include: {
+    artists: [],
+    artistsMode: 'any',
+    albums: [],
+    genres: [],
+    genresMode: 'any',
+    years: [],
+    countries: [],
+    languages: [],
+  },
+  exclude: {
+    artists: [],
+    albums: [],
+    genres: [],
+    years: [],
+    countries: [],
+    languages: [],
+  },
   duration: { min: null, max: null },
+  bpm: { min: null, max: null },
+  dateAdded: { from: null, to: null },
   favoriteOnly: false,
   maxResults: null,
 };
@@ -171,6 +190,10 @@ export function SmartPlaylists(props: {
   const [editFavoriteOnly, setEditFavoriteOnly] = useState(false);
   const [editDurationMin, setEditDurationMin] = useState<string>('');
   const [editDurationMax, setEditDurationMax] = useState<string>('');
+  const [editBpmMin, setEditBpmMin] = useState<string>('');
+  const [editBpmMax, setEditBpmMax] = useState<string>('');
+  const [editDateAddedFrom, setEditDateAddedFrom] = useState<string>('');
+  const [editDateAddedTo, setEditDateAddedTo] = useState<string>('');
   
   // Include filters
   const [includeArtists, setIncludeArtists] = useState<Array<{ id: number; name: string }>>([]);
@@ -180,6 +203,7 @@ export function SmartPlaylists(props: {
   const [includeGenresMode, setIncludeGenresMode] = useState<'any' | 'all'>('any');
   const [includeYears, setIncludeYears] = useState<number[]>([]);
   const [includeCountries, setIncludeCountries] = useState<string[]>([]);
+  const [includeLanguages, setIncludeLanguages] = useState<string[]>([]);
   
   // Exclude filters
   const [excludeArtists, setExcludeArtists] = useState<Array<{ id: number; name: string }>>([]);
@@ -187,6 +211,7 @@ export function SmartPlaylists(props: {
   const [excludeGenres, setExcludeGenres] = useState<string[]>([]);
   const [excludeYears, setExcludeYears] = useState<number[]>([]);
   const [excludeCountries, setExcludeCountries] = useState<string[]>([]);
+  const [excludeLanguages, setExcludeLanguages] = useState<string[]>([]);
 
   // Artist name resolution
   const [artistNames, setArtistNames] = useState<Map<number, string>>(new Map());
@@ -268,6 +293,7 @@ export function SmartPlaylists(props: {
         genresMode: includeGenresMode,
         years: includeYears,
         countries: includeCountries,
+        languages: includeLanguages,
       },
       exclude: {
         artists: excludeArtists.map((a) => a.id),
@@ -275,10 +301,19 @@ export function SmartPlaylists(props: {
         genres: excludeGenres,
         years: excludeYears,
         countries: excludeCountries,
+        languages: excludeLanguages,
       },
       duration: {
         min: editDurationMin ? parseInt(editDurationMin, 10) : null,
         max: editDurationMax ? parseInt(editDurationMax, 10) : null,
+      },
+      bpm: {
+        min: editBpmMin ? parseInt(editBpmMin, 10) : null,
+        max: editBpmMax ? parseInt(editBpmMax, 10) : null,
+      },
+      dateAdded: {
+        from: editDateAddedFrom || null,
+        to: editDateAddedTo || null,
       },
       favoriteOnly: editFavoriteOnly,
       maxResults: editMaxResults ? parseInt(editMaxResults, 10) : null,
@@ -298,6 +333,23 @@ export function SmartPlaylists(props: {
       setEditing(false);
       setEditId(null);
       await loadPlaylists();
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      setError(e?.data?.error ?? e?.message ?? 'error');
+    }
+  }
+
+  async function handleConvert(pl: SmartPlaylist) {
+    if (!token) return;
+    const ok = await showConfirm({
+      title: 'Convert to Playlist',
+      message: `Create a regular playlist from "${pl.name}" with the current matching tracks? The smart playlist will be kept.`,
+      confirmLabel: 'Convert',
+    });
+    if (!ok) return;
+    try {
+      await convertSmartPlaylist(token, pl.id, { name: pl.name });
+      setError(null);
     } catch (e: any) {
       if (e?.status === 401) clear();
       setError(e?.data?.error ?? e?.message ?? 'error');
@@ -331,6 +383,10 @@ export function SmartPlaylists(props: {
       setEditFavoriteOnly(f.favoriteOnly);
       setEditDurationMin(f.duration?.min ? String(f.duration.min) : '');
       setEditDurationMax(f.duration?.max ? String(f.duration.max) : '');
+      setEditBpmMin(f.bpm?.min ? String(f.bpm.min) : '');
+      setEditBpmMax(f.bpm?.max ? String(f.bpm.max) : '');
+      setEditDateAddedFrom(f.dateAdded?.from ?? '');
+      setEditDateAddedTo(f.dateAdded?.to ?? '');
       
       // Resolve artist names for IDs
       const incArtistIds = f.include?.artists ?? [];
@@ -347,12 +403,14 @@ export function SmartPlaylists(props: {
       setIncludeGenresMode(f.include?.genresMode || 'any');
       setIncludeYears(f.include?.years ?? []);
       setIncludeCountries(f.include?.countries ?? []);
+      setIncludeLanguages(f.include?.languages ?? []);
       
       setExcludeArtists(excArtistIds.map((id) => ({ id, name: resolvedNames.get(id) || `Artist #${id}` })));
       setExcludeAlbums(f.exclude?.albums ?? []);
       setExcludeGenres(f.exclude?.genres ?? []);
       setExcludeYears(f.exclude?.years ?? []);
       setExcludeCountries(f.exclude?.countries ?? []);
+      setExcludeLanguages(f.exclude?.languages ?? []);
     } else {
       setEditId(null);
       setEditName('');
@@ -361,6 +419,10 @@ export function SmartPlaylists(props: {
       setEditFavoriteOnly(false);
       setEditDurationMin('');
       setEditDurationMax('');
+      setEditBpmMin('');
+      setEditBpmMax('');
+      setEditDateAddedFrom('');
+      setEditDateAddedTo('');
       setIncludeArtists([]);
       setIncludeArtistsMode('any');
       setIncludeAlbums([]);
@@ -368,11 +430,13 @@ export function SmartPlaylists(props: {
       setIncludeGenresMode('any');
       setIncludeYears([]);
       setIncludeCountries([]);
+      setIncludeLanguages([]);
       setExcludeArtists([]);
       setExcludeAlbums([]);
       setExcludeGenres([]);
       setExcludeYears([]);
       setExcludeCountries([]);
+      setExcludeLanguages([]);
     }
     setEditing(true);
   }
@@ -474,6 +538,54 @@ export function SmartPlaylists(props: {
             </div>
           </div>
 
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">Date Added From</label>
+              <input
+                type="date"
+                value={editDateAddedFrom}
+                onChange={(e) => setEditDateAddedFrom(e.target.value)}
+                className="w-full px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-400 focus:outline-none text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">Date Added To</label>
+              <input
+                type="date"
+                value={editDateAddedTo}
+                onChange={(e) => setEditDateAddedTo(e.target.value)}
+                className="w-full px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-400 focus:outline-none text-sm"
+              />
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">Min BPM</label>
+              <input
+                type="number"
+                value={editBpmMin}
+                onChange={(e) => setEditBpmMin(e.target.value)}
+                className="w-full px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-400 focus:outline-none text-sm"
+                placeholder="60"
+                min="0"
+                max="400"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">Max BPM</label>
+              <input
+                type="number"
+                value={editBpmMax}
+                onChange={(e) => setEditBpmMax(e.target.value)}
+                className="w-full px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-400 focus:outline-none text-sm"
+                placeholder="180"
+                min="0"
+                max="400"
+              />
+            </div>
+          </div>
+
           <label className="flex items-center gap-3 cursor-pointer pt-2">
             <input
               type="checkbox"
@@ -564,6 +676,16 @@ export function SmartPlaylists(props: {
               displayFn={(c) => String(c)}
               valueKey="value"
             />
+
+            <SmartPicker
+              label="Languages"
+              kind="language"
+              selected={includeLanguages}
+              onChange={setIncludeLanguages}
+              token={token}
+              displayFn={(l) => String(l)}
+              valueKey="value"
+            />
           </div>
 
           {/* Exclude Rules */}
@@ -621,6 +743,16 @@ export function SmartPlaylists(props: {
               onChange={setExcludeCountries}
               token={token}
               displayFn={(c) => String(c)}
+              valueKey="value"
+            />
+
+            <SmartPicker
+              label="Languages"
+              kind="language"
+              selected={excludeLanguages}
+              onChange={setExcludeLanguages}
+              token={token}
+              displayFn={(l) => String(l)}
               valueKey="value"
             />
           </div>
@@ -710,6 +842,15 @@ export function SmartPlaylists(props: {
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => handleConvert(p)}
+                      className="p-2 text-slate-400 hover:text-cyan-300 hover:bg-slate-700 rounded-lg transition-colors"
+                      title="Convert to playlist (snapshot current tracks)"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
                       </svg>
                     </button>
                     <button

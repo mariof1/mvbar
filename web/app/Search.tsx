@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { useAuth } from './store';
-import { apiFetch } from './apiClient';
+import { apiFetch, browseAlbum, browseArtistTracks } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useRouter } from './router';
 import { useLibraryUpdates } from './useWebSocket';
+import { AddMenu, type AddMenuTrack } from './AddMenu';
 
 type Hit = {
   id: number;
@@ -182,19 +183,33 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
                 <div className="text-sm font-semibold text-slate-300">Artists</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {artistHits.slice(0, 8).map((a) => (
-                    <button
+                    <div
                       key={a.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => navigate({ type: 'browse-artist', artistId: a.id, artistName: a.name })}
-                      className="p-3 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200 text-left flex items-center gap-3"
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate({ type: 'browse-artist', artistId: a.id, artistName: a.name }); }}
+                      className="group p-3 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200 text-left flex items-center gap-3 cursor-pointer"
                     >
                       <ArtistArt name={a.name} art_path={a.art_path} art_hash={a.art_hash} />
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="font-semibold text-white truncate">{a.name}</div>
                         <div className="text-xs text-slate-400 truncate">
                           {a.track_count} tracks • {a.album_count} albums
                         </div>
                       </div>
-                    </button>
+                      <div className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                        <AddMenu
+                          label="artist"
+                          title={`Add ${a.name}...`}
+                          getTracks={async () => {
+                            if (!token) return [];
+                            const r = await browseArtistTracks(token, a.id);
+                            return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                          }}
+                        />
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -205,12 +220,19 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
                 <div className="text-sm font-semibold text-slate-300">Albums</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {albumHits.slice(0, 8).map((a, idx) => (
-                    <button
+                    <div
                       key={`${a.album}-${idx}`}
+                      role="button"
+                      tabIndex={0}
                       onClick={() =>
                         navigate({ type: 'browse-album', artist: a.display_artist || '', album: a.album, artistId: a.artist_id || undefined })
                       }
-                      className="p-3 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200 text-left flex items-center gap-3"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          navigate({ type: 'browse-album', artist: a.display_artist || '', album: a.album, artistId: a.artist_id || undefined });
+                        }
+                      }}
+                      className="group p-3 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200 text-left flex items-center gap-3 cursor-pointer"
                     >
                       <img
                         src={a.art_track_id ? `/api/library/tracks/${a.art_track_id}/art` : ''}
@@ -222,13 +244,24 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
                         }}
                       />
                       <div className="hidden w-10 h-10 rounded-lg bg-slate-700 flex-shrink-0" />
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="font-semibold text-white truncate">{a.album}</div>
                         <div className="text-xs text-slate-400 truncate">
                           {a.display_artist || 'Unknown Artist'} • {a.track_count} tracks
                         </div>
                       </div>
-                    </button>
+                      <div className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                        <AddMenu
+                          label="album"
+                          title={`Add ${a.album}...`}
+                          getTracks={async () => {
+                            if (!token) return [];
+                            const r = await browseAlbum(token, a.display_artist || '', a.album, a.artist_id ?? undefined);
+                            return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                          }}
+                        />
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -306,16 +339,12 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
                 </div>
 
                 {/* Actions - hidden on small screens */}
-                <div className="hidden sm:flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={() => props.onAddToQueue?.({ ...t, artist: t.display_artist || t.artist })}
-                    className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors"
-                    title="Add to queue"
-                  >
-                    <svg className="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                    </svg>
-                  </button>
+                <div className="flex items-center gap-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                  <AddMenu
+                    label="track"
+                    title="Add to..."
+                    getTracks={() => [{ id: Number(t.id), title: t.title, artist: t.display_artist || t.artist, album: t.album }]}
+                  />
                   <button
                     onClick={async () => {
                       try {

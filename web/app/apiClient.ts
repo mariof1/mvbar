@@ -152,6 +152,31 @@ export async function addTrackToPlaylist(token: string, playlistId: string, trac
   };
 }
 
+export async function addTracksToPlaylist(token: string, playlistId: string, trackIds: number[]) {
+  // API accepts one track at a time; send sequentially to preserve order.
+  let count = 0;
+  for (const id of trackIds) {
+    await addTrackToPlaylist(token, playlistId, id);
+    count++;
+  }
+  return { ok: true, count };
+}
+
+export async function browseArtistTracks(token: string, artistId: number) {
+  return (await apiFetch(`/browse/artist/${artistId}/tracks`, { method: 'GET' }, token)) as {
+    ok: boolean;
+    tracks: Array<{
+      id: number;
+      title: string | null;
+      artist: string | null;
+      album: string | null;
+      duration_ms: number | null;
+      disc_number?: number | null;
+      track_number?: number | null;
+    }>;
+  };
+}
+
 export async function removeTrackFromPlaylist(token: string, playlistId: string, trackId: number) {
   return (await apiFetch(`/playlists/${encodeURIComponent(playlistId)}/items/${trackId}`, { method: 'DELETE' }, token)) as { ok: boolean };
 }
@@ -443,6 +468,7 @@ export type SmartFilters = {
     genresMode: 'any' | 'all';
     years: number[];
     countries: string[];
+    languages: string[];
   };
   exclude: {
     artists: number[];
@@ -450,10 +476,19 @@ export type SmartFilters = {
     genres: string[];
     years: number[];
     countries: string[];
+    languages: string[];
   };
   duration: {
     min: number | null;
     max: number | null;
+  };
+  bpm: {
+    min: number | null;
+    max: number | null;
+  };
+  dateAdded: {
+    from: string | null;
+    to: string | null;
   };
   favoriteOnly: boolean;
   maxResults: number | null;
@@ -506,8 +541,26 @@ export async function deleteSmartPlaylist(token: string, id: number) {
   return (await apiFetch(`/smart-playlists/${id}`, { method: 'DELETE' }, token)) as { ok: boolean; deleted: number };
 }
 
+export async function convertSmartPlaylist(
+  token: string,
+  id: number,
+  opts?: { name?: string; deleteSmart?: boolean }
+) {
+  return (await apiFetch(`/smart-playlists/${id}/convert`, {
+    method: 'POST',
+    body: JSON.stringify({ name: opts?.name, delete: opts?.deleteSmart === true })
+  }, token)) as { ok: boolean; id: number; name: string; item_count: number; deleted_smart: number | null };
+}
+
 export async function deletePlaylist(token: string, id: number) {
   return (await apiFetch(`/playlists/${id}`, { method: 'DELETE' }, token)) as { ok: boolean; deleted: number };
+}
+
+export async function renamePlaylist(token: string, id: number, name: string) {
+  return (await apiFetch(`/playlists/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name })
+  }, token)) as { ok: boolean; playlist?: { id: number; name: string; item_count: number } };
 }
 
 export async function suggestSmartPlaylist(token: string, kind: string, q: string, ids?: number[]) {
@@ -536,6 +589,27 @@ export async function connectListenBrainz(token: string, lbToken: string) {
 
 export async function disconnectListenBrainz(token: string) {
   return (await apiFetch('/listenbrainz/disconnect', { method: 'POST' }, token)) as { ok: boolean };
+}
+
+// Subsonic/OpenSubsonic API credentials
+export async function getSubsonicSettings(token: string) {
+  return (await apiFetch('/subsonic/settings', { method: 'GET' }, token)) as {
+    ok: boolean;
+    username: string;
+    configured: boolean;
+    authType: 'google' | 'local';
+  };
+}
+
+export async function setSubsonicPassword(token: string, password: string) {
+  return (await apiFetch('/subsonic/password', {
+    method: 'PUT',
+    body: JSON.stringify({ password })
+  }, token)) as { ok: boolean };
+}
+
+export async function clearSubsonicPassword(token: string) {
+  return (await apiFetch('/subsonic/password', { method: 'DELETE' }, token)) as { ok: boolean };
 }
 
 export async function getListenBrainzRecommendations(token: string) {

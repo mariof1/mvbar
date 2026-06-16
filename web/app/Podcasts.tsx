@@ -515,10 +515,18 @@ export function PodcastPlayer({
     const onLoadedMetadata = () => setDuration(audioEl.duration);
     const onEnded = () => {
       setPlaying(false);
-      onProgressUpdate?.(episode.id, Math.floor(audioEl.currentTime * 1000), true);
+      const positionMs = Math.floor(audioEl.currentTime * 1000);
+      onProgressUpdate?.(episode.id, positionMs, true);
+      // Persist played=true to the API so it leaves "Continue Listening"
+      apiFetch(
+        `/podcasts/episodes/${episode.id}/progress`,
+        { method: 'POST', body: JSON.stringify({ positionMs, played: true }) },
+        token!
+      ).catch(() => {});
+      updateLocalPodcastProgress(episode.id, positionMs, true);
       sendWebSocketMessage('podcast:progress', {
         episodeId: episode.id,
-        position_ms: Math.floor(audioEl.currentTime * 1000),
+        position_ms: positionMs,
         played: true,
       });
     };

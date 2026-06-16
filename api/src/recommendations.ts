@@ -129,6 +129,7 @@ interface TrackData {
   country: string | null;
   language: string | null;
   bpm: number | null;
+  duration_ms?: number | null;
   play_count: number;
   skip_count: number;
   last_played_at: Date | null;
@@ -148,6 +149,41 @@ interface Bucket {
   art_hashes: string[];
 }
 
+interface TasteProfile {
+  confidence: number;
+  positiveSamples: number;
+  artistWeights: Map<string, number>;
+  albumWeights: Map<string, number>;
+  genreWeights: Map<string, number>;
+  familyWeights: Map<string, number>;
+  countryWeights: Map<string, number>;
+  languageWeights: Map<string, number>;
+  decadeWeights: Map<string, number>;
+  dislikedArtistWeights: Map<string, number>;
+  dislikedGenreWeights: Map<string, number>;
+  dislikedFamilyWeights: Map<string, number>;
+  bpmMean: number | null;
+  bpmStd: number | null;
+}
+
+interface TasteProfileRow {
+  id: number;
+  artist: string | null;
+  album: string | null;
+  genre: string | null;
+  country: string | null;
+  language: string | null;
+  year: number | null;
+  bpm: number | null;
+  play_count: number;
+  skip_count: number;
+  last_played_at: Date | null;
+  last_skipped_at: Date | null;
+  is_favorite: boolean;
+  playlist_count: number;
+  recent_plays: number;
+}
+
 // ============================================================================
 // SCORING ENGINE
 // ============================================================================
@@ -158,6 +194,295 @@ interface ScoringOptions {
   recentlyPlayedIds: Set<number>;
   favoriteIds: Set<number>;
   likedGenreFamilies?: Set<string>;  // genre families the user listens to
+  tasteProfile?: TasteProfile;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalizeFeature(value: string | null | undefined): string {
+  return foldDiacritics(String(value ?? '').trim()).replace(/\s+/g, ' ');
+}
+
+function splitFeatureList(value: string | null | undefined): string[] {
+  if (!value) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of value.split(/[;,/|]/)) {
+    const normalized = normalizeFeature(part);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function trackGenreList(track: TrackData): string[] {
+  const aggregateGenres = (track as TrackData & { genres?: string[] }).genres;
+  if (Array.isArray(aggregateGenres) && aggregateGenres.length > 0) {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const genre of aggregateGenres) {
+      const normalized = normalizeFeature(genre);
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      result.push(normalized);
+    }
+    return result;
+  }
+  return splitFeatureList(track.genre);
+}
+
+function genreFamilyKeys(genres: string[]): string[] {
+  const keys = new Set<string>();
+  for (const genre of genres) {
+    const fam = tokenToFamily.get(genre);
+    if (fam) keys.add(fam.key);
+  }
+  return [...keys];
+}
+
+function decadeKey(year: number | null | undefined): string | null {
+  if (!year || year < 1950 || year > 2100) return null;
+  return String(Math.floor(year / 10) * 10);
+}
+
+function incrementWeight(map: Map<string, number>, key: string | null | undefined, amount: number) {
+  if (!key || !Number.isFinite(amount) || amount <= 0) return;
+  map.set(key, (map.get(key) || 0) + amount);
+}
+
+function normalizeWeights(map: Map<string, number>, maxScore: number) {
+  let max = 0;
+  for (const value of map.values()) max = Math.max(max, value);
+  if (max <= 0) return;
+  for (const [key, value] of map.entries()) {
+    map.set(key, Math.log1p(value) / Math.log1p(max) * maxScore);
+  }
+}
+
+function mapScore(map: Map<string, number>, key: string | null | undefined): number {
+  if (!key) return 0;
+  return map.get(key) || 0;
+}
+
+function interactionPositiveWeight(row: TasteProfileRow, now: number): number {
+  const plays = Number(row.play_count || 0);
+  const skips = Number(row.skip_count || 0);
+  const playlistCount = Number(row.playlist_count || 0);
+  const recentPlays = Number(row.recent_plays || 0);
+  const attempts = Math.max(1, plays + skips);
+  const skipRatio = skips / attempts;
+
+  let weight = Math.log2(plays + 1) * 6;
+  weight += recentPlays * 1.4;
+  if (row.is_favorite) weight += 18;
+  if (playlistCount > 0) weight += Math.min(18, playlistCount * 7);
+
+  if (row.last_played_at) {
+    const daysSince = (now - new Date(row.last_played_at).getTime()) / 86400000;
+    if (daysSince <= 7) weight *= 1.35;
+    else if (daysSince <= 30) weight *= 1.18;
+    else if (daysSince > 365) weight *= 0.82;
+  }
+
+  if (skips > 0) {
+    weight -= Math.pow(skips, 1.2) * 3;
+    if (skipRatio > 0.5) weight -= 10;
+    if (skipRatio > 0.7) weight -= 15;
+  }
+
+  return Math.max(0, weight);
+}
+
+function interactionNegativeWeight(row: TasteProfileRow, now: number): number {
+  const plays = Number(row.play_count || 0);
+  const skips = Number(row.skip_count || 0);
+  if (skips <= 0) return 0;
+
+  const attempts = Math.max(1, plays + skips);
+  const skipRatio = skips / attempts;
+  let weight = Math.pow(skips, 1.15) * 2.5;
+  if (skipRatio > 0.55) weight += 8;
+  if (skipRatio > 0.75) weight += 12;
+  weight -= Math.log2(plays + 1) * 3;
+
+  if (row.last_skipped_at) {
+    const daysSince = (now - new Date(row.last_skipped_at).getTime()) / 86400000;
+    if (daysSince <= 14) weight *= 1.25;
+    else if (daysSince > 180) weight *= 0.65;
+  }
+
+  if (row.is_favorite || row.playlist_count > 0) weight *= 0.35;
+  return Math.max(0, weight);
+}
+
+function emptyTasteProfile(): TasteProfile {
+  return {
+    confidence: 0,
+    positiveSamples: 0,
+    artistWeights: new Map(),
+    albumWeights: new Map(),
+    genreWeights: new Map(),
+    familyWeights: new Map(),
+    countryWeights: new Map(),
+    languageWeights: new Map(),
+    decadeWeights: new Map(),
+    dislikedArtistWeights: new Map(),
+    dislikedGenreWeights: new Map(),
+    dislikedFamilyWeights: new Map(),
+    bpmMean: null,
+    bpmStd: null,
+  };
+}
+
+async function buildTasteProfile(userId: string, allowed: number[] | null, now: number): Promise<TasteProfile> {
+  const profile = emptyTasteProfile();
+  const rows = await db().query<TasteProfileRow>(
+    `select t.id, t.artist, t.album, t.genre, t.country, t.language, t.year, t.bpm,
+            coalesce(s.play_count, 0)::int as play_count,
+            coalesce(s.skip_count, 0)::int as skip_count,
+            s.last_played_at,
+            s.last_skipped_at,
+            case when f.track_id is not null then true else false end as is_favorite,
+            coalesce(pc.playlist_count, 0)::int as playlist_count,
+            coalesce(rp.recent_plays, 0)::int as recent_plays
+     from active_tracks t
+     left join user_track_stats s on s.track_id = t.id and s.user_id = $1
+     left join favorite_tracks f on f.track_id = t.id and f.user_id = $1
+     left join (
+       select pi.track_id, count(distinct pi.playlist_id)::int as playlist_count
+       from playlist_items pi
+       join playlists p on p.id = pi.playlist_id
+       where p.user_id = $1
+       group by pi.track_id
+     ) pc on pc.track_id = t.id
+     left join (
+       select track_id, count(*)::int as recent_plays
+       from play_history
+       where user_id = $1 and played_at > now() - interval '60 days'
+       group by track_id
+     ) rp on rp.track_id = t.id
+     where (
+       coalesce(s.play_count, 0) > 0
+       or coalesce(s.skip_count, 0) > 0
+       or f.track_id is not null
+       or coalesce(pc.playlist_count, 0) > 0
+     )
+     ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
+     order by greatest(
+       coalesce(s.last_played_at, 'epoch'::timestamptz),
+       coalesce(f.added_at, 'epoch'::timestamptz)
+     ) desc
+     limit 2500`,
+    allowed ? [userId, allowed] : [userId]
+  );
+
+  let totalPositive = 0;
+  let bpmWeight = 0;
+  let bpmWeightedSum = 0;
+  let bpmWeightedSquares = 0;
+
+  for (const row of rows.rows) {
+    const positive = interactionPositiveWeight(row, now);
+    const negative = interactionNegativeWeight(row, now);
+    const artist = normalizeFeature(row.artist);
+    const album = normalizeFeature(row.album);
+    const albumKey = artist && album ? `${artist}::${album}` : null;
+    const genres = splitFeatureList(row.genre);
+    const families = genreFamilyKeys(genres);
+    const countries = splitFeatureList(row.country);
+    const languages = splitFeatureList(row.language);
+    const decade = decadeKey(row.year);
+
+    if (positive > 0) {
+      totalPositive += positive;
+      profile.positiveSamples++;
+      incrementWeight(profile.artistWeights, artist, positive * 1.25);
+      incrementWeight(profile.albumWeights, albumKey, positive * 0.5);
+      incrementWeight(profile.decadeWeights, decade, positive * 0.45);
+      for (const genre of genres) incrementWeight(profile.genreWeights, genre, positive * 1.05);
+      for (const family of families) incrementWeight(profile.familyWeights, family, positive * 0.9);
+      for (const country of countries) incrementWeight(profile.countryWeights, country, positive * 0.3);
+      for (const language of languages) incrementWeight(profile.languageWeights, language, positive * 0.35);
+
+      if (row.bpm && row.bpm > 0) {
+        const weight = Math.min(positive, 35);
+        bpmWeight += weight;
+        bpmWeightedSum += row.bpm * weight;
+        bpmWeightedSquares += row.bpm * row.bpm * weight;
+      }
+    }
+
+    if (negative > 0) {
+      incrementWeight(profile.dislikedArtistWeights, artist, negative * 0.8);
+      for (const genre of genres) incrementWeight(profile.dislikedGenreWeights, genre, negative * 0.75);
+      for (const family of families) incrementWeight(profile.dislikedFamilyWeights, family, negative * 0.6);
+    }
+  }
+
+  normalizeWeights(profile.artistWeights, 16);
+  normalizeWeights(profile.albumWeights, 5);
+  normalizeWeights(profile.genreWeights, 12);
+  normalizeWeights(profile.familyWeights, 10);
+  normalizeWeights(profile.countryWeights, 3);
+  normalizeWeights(profile.languageWeights, 4);
+  normalizeWeights(profile.decadeWeights, 4);
+  normalizeWeights(profile.dislikedArtistWeights, 12);
+  normalizeWeights(profile.dislikedGenreWeights, 8);
+  normalizeWeights(profile.dislikedFamilyWeights, 6);
+
+  if (bpmWeight > 0) {
+    profile.bpmMean = bpmWeightedSum / bpmWeight;
+    const variance = Math.max(0, bpmWeightedSquares / bpmWeight - profile.bpmMean * profile.bpmMean);
+    profile.bpmStd = Math.sqrt(variance);
+  }
+
+  const sampleConfidence = clamp(profile.positiveSamples / 30, 0, 1);
+  const signalConfidence = clamp(Math.log1p(totalPositive) / Math.log1p(350), 0, 1);
+  profile.confidence = clamp((sampleConfidence * 0.45) + (signalConfidence * 0.55), 0, 1);
+
+  return profile;
+}
+
+function tasteScoreTrack(track: TrackData, profile: TasteProfile, purpose: ScoringOptions['purpose']): number {
+  if (profile.confidence <= 0) return 0;
+
+  const artist = normalizeFeature(track.artist);
+  const album = normalizeFeature(track.album);
+  const albumKey = artist && album ? `${artist}::${album}` : null;
+  const genres = trackGenreList(track);
+  const families = genreFamilyKeys(genres);
+  const countries = splitFeatureList(track.country);
+  const languages = splitFeatureList(track.language);
+  const decade = decadeKey(track.year);
+
+  let score = 0;
+  score += mapScore(profile.artistWeights, artist);
+  score += mapScore(profile.albumWeights, albumKey);
+  score += mapScore(profile.decadeWeights, decade);
+  score += Math.min(16, genres.reduce((sum, genre) => sum + mapScore(profile.genreWeights, genre), 0));
+  score += Math.min(12, families.reduce((sum, family) => sum + mapScore(profile.familyWeights, family), 0));
+  score += Math.min(4, countries.reduce((sum, country) => sum + mapScore(profile.countryWeights, country), 0));
+  score += Math.min(4, languages.reduce((sum, language) => sum + mapScore(profile.languageWeights, language), 0));
+
+  score -= mapScore(profile.dislikedArtistWeights, artist);
+  score -= Math.min(10, genres.reduce((sum, genre) => sum + mapScore(profile.dislikedGenreWeights, genre), 0));
+  score -= Math.min(8, families.reduce((sum, family) => sum + mapScore(profile.dislikedFamilyWeights, family), 0));
+
+  if (profile.bpmMean && track.bpm && track.bpm > 0) {
+    const tolerance = Math.max(12, profile.bpmStd || 18);
+    const distance = Math.abs(track.bpm - profile.bpmMean);
+    score += Math.max(0, 8 - (distance / tolerance) * 8);
+    if (distance > tolerance * 2.2) score -= 3;
+  }
+
+  if (purpose === 'discovery' && track.play_count === 0) score += 5;
+  if (purpose === 'discovery' && mapScore(profile.artistWeights, artist) > 12) score -= 2;
+  if (purpose === 'familiar' && track.is_favorite) score += 5;
+
+  return clamp(score * (0.55 + profile.confidence * 0.45), -35, 65);
 }
 
 function scoreTrack(track: TrackData, opts: ScoringOptions): number {
@@ -232,8 +557,12 @@ function scoreTrack(track: TrackData, opts: ScoringOptions): number {
       }
     }
   }
+
+  if (opts.tasteProfile) {
+    score += tasteScoreTrack(track, opts.tasteProfile, purpose);
+  }
   
-  return Math.max(-50, Math.min(100, score));
+  return Math.max(-60, Math.min(140, score));
 }
 
 // ============================================================================
@@ -302,7 +631,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // REDIS CACHE – serve cached response for 5 minutes per user
     // ========================================================================
     const RECO_CACHE_TTL = 300;
-    const cacheKey = `reco:${userId}:${(allowed ?? []).sort().join(',')}`;
+    const cacheKey = `reco:v5:${userId}:${(allowed ?? []).sort().join(',')}`;
     try {
       const cached = await redis().get(cacheKey);
       if (cached) {
@@ -341,7 +670,15 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       buckets.push({
         key, name, subtitle, reason,
         count: tracks.length,
-        tracks: tracks.slice(0, 15).map(t => ({ id: t.id, title: t.title, artist: t.artist })),
+        tracks: tracks.map(t => ({
+          id: t.id,
+          title: t.title,
+          artist: t.artist,
+          album: t.album ?? null,
+          art_path: t.art_path ?? null,
+          art_hash: t.art_hash ?? null,
+          duration_ms: (t as any).duration_ms ?? null,
+        })),
         ...art
       });
     }
@@ -369,6 +706,8 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     const cooldownIds = new Set(recentCooldownR.rows.map(r => r.track_id));
 
     const scoringOpts: ScoringOptions = { purpose: 'mixed', now, recentlyPlayedIds, favoriteIds };
+    const tasteProfile = await buildTasteProfile(userId, allowed, now);
+    scoringOpts.tasteProfile = tasteProfile;
 
     // Top artists
     const topArtistsR = await db().query<{ artist: string; plays: number }>(
@@ -395,6 +734,45 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       if (fam) likedGenreFamilies.add(fam.key);
     }
     scoringOpts.likedGenreFamilies = likedGenreFamilies;
+
+    // ========================================================================
+    // BUCKET: MADE FOR YOU (strongest personalized taste match)
+    // ========================================================================
+
+    if (tasteProfile.confidence >= 0.08) {
+      const personalizedR = await db().query<TrackData>(
+        `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
+                t.genre, t.country, t.language, t.year, t.bpm, t.duration_ms, t.updated_at,
+                coalesce(s.play_count, 0)::int as play_count,
+                coalesce(s.skip_count, 0)::int as skip_count,
+                s.last_played_at,
+                case when f.track_id is not null then true else false end as is_favorite
+         from active_tracks t
+         left join user_track_stats s on s.track_id = t.id and s.user_id = $1
+         left join favorite_tracks f on f.track_id = t.id and f.user_id = $1
+         where (s.last_played_at is null or s.last_played_at < now() - interval '18 hours')
+           and (t.duration_ms is null or t.duration_ms between 45000 and 1200000)
+           ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
+         order by coalesce(s.last_played_at, 'epoch'::timestamptz) asc,
+                  coalesce(t.birthtime_ms, extract(epoch from t.created_at) * 1000) desc nulls last
+         limit 2500`,
+        allowed ? [userId, allowed] : [userId]
+      );
+
+      const seed = dailySeed(userId, 'made_for_you');
+      const scored = personalizedR.rows
+        .map(t => ({
+          ...t,
+          score:
+            scoreTrack(t, scoringOpts) +
+            (t.play_count === 0 ? 6 : 0) +
+            seededNoise(seed, t.id) * 3
+        }))
+        .filter(t => (t.score || 0) > 4);
+
+      const diverse = diversify(scored, { maxPerArtist: 2, maxPerAlbum: 3, limit: 60, seed });
+      await addBucket('made_for_you', 'Made For You', diverse, 'Ranked from your plays, favorites, playlists, and skips');
+    }
 
     // Top genre + country combos (for "Polish Hip-Hop" style buckets)
     const genreCountryR = await db().query<{ genre: string; country: string; plays: number }>(
@@ -432,7 +810,8 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // ========================================================================
 
     const topPicksR = await db().query<TrackData>(
-      `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at,
+      `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
+              t.genre, t.country, t.language, t.year, t.bpm, t.duration_ms, t.updated_at,
               coalesce(s.play_count, 0)::int as play_count,
               coalesce(s.skip_count, 0)::int as skip_count,
               s.last_played_at,
@@ -1009,14 +1388,16 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       }
 
       const discoverR = await db().query<TrackData & { genres: string[] }>(
-        `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at,
+        `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
+                t.genre, t.country, t.language, t.year, t.bpm, t.duration_ms, t.updated_at,
                 0 as play_count, 0 as skip_count, null::timestamptz as last_played_at, false as is_favorite,
                 array_agg(tg.genre) as genres
          from active_tracks t join track_genres tg on tg.track_id = t.id
          left join user_track_stats s on s.track_id = t.id and s.user_id = $1
          where (s.play_count is null or s.play_count = 0)
            ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
-         group by t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at
+         group by t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
+                  t.genre, t.country, t.language, t.year, t.bpm, t.duration_ms, t.updated_at
          order by t.updated_at desc nulls last limit 500`,
         allowed ? [userId, allowed] : [userId]
       );
@@ -1034,10 +1415,17 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
           }
         }
         // Bonus for tracks by artists similar to user's top artists
-        const artistBonus = topArtistNames.has((t.artist || '').toLowerCase()) ? 0 : 0;
+        const artistBonus = topArtistNames.has((t.artist || '').toLowerCase()) ? 3 : 0;
         // Artist "adjacent" bonus — same album as a played track's artist gets a small boost
         const freshness = t.updated_at ? Math.max(0, 30 - (now - new Date(t.updated_at).getTime()) / 86400000) : 0;
-        return { ...t, score: genreScore + freshness * 0.5 + artistBonus };
+        return {
+          ...t,
+          score:
+            scoreTrack(t, { ...scoringOpts, purpose: 'discovery' }) +
+            genreScore +
+            freshness * 0.35 +
+            artistBonus
+        };
       }).filter(t => t.score > 0);
 
       if (scored.length >= 10) {

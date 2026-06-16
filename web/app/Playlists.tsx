@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { createPlaylist, getPlaylistItems, listPlaylists, addTrackToPlaylist, removeTrackFromPlaylist, setPlaylistItemPosition, deletePlaylist } from './apiClient';
+import { createPlaylist, getPlaylistItems, listPlaylists, addTrackToPlaylist, removeTrackFromPlaylist, setPlaylistItemPosition, deletePlaylist, renamePlaylist } from './apiClient';
 import { useAuth } from './store';
 import { SmartPlaylists } from './SmartPlaylists';
 import { useRouter } from './router';
@@ -42,6 +42,8 @@ export function Playlists(props: {
   const [name, setName] = useState('');
   const [addTrackId, setAddTrackId] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   // Live updates
   const playlistLastUpdate = usePlaylistUpdates((s) => s.lastUpdate);
@@ -146,6 +148,31 @@ export function Playlists(props: {
       await refreshPlaylists();
     } catch (e: any) {
       if (e?.status === 401) clear();
+    }
+  }
+
+  function startRename(p: Playlist) {
+    setRenamingId(p.id);
+    setRenameValue(p.name);
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameValue('');
+  }
+
+  async function commitRename(id: string) {
+    if (!token) return;
+    const n = renameValue.trim();
+    if (!n) { cancelRename(); return; }
+    try {
+      await renamePlaylist(token, Number(id), n);
+      setRenamingId(null);
+      setRenameValue('');
+      await refreshPlaylists();
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      setError(e?.data?.error ?? e?.message ?? 'error');
     }
   }
 
@@ -383,21 +410,56 @@ export function Playlists(props: {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {pls.map((p) => (
                 <div key={p.id} className="flex items-center gap-2 p-3 rounded-xl bg-slate-800/30 border border-slate-700/30 hover:bg-slate-800/50 hover:border-slate-600/50 transition-all">
-                  <button
-                    onClick={() => selectPlaylist(p.id)}
-                    className="flex items-center gap-3 flex-1 min-w-0 text-left"
-                  >
-                    <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                      <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                      </svg>
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium text-white truncate">{p.name}</div>
-                      <div className="text-sm text-slate-400">
-                        {new Date(p.created_at).toLocaleDateString()}
+                  {renamingId === p.id ? (
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                        </svg>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <input
+                          autoFocus
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); commitRename(p.id); }
+                            else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                          }}
+                          onBlur={() => commitRename(p.id)}
+                          className="w-full bg-slate-900/60 border border-cyan-500/40 rounded px-2 py-1 text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                        />
+                        <div className="text-sm text-slate-400">
+                          {new Date(p.created_at).toLocaleDateString()}
+                        </div>
                       </div>
                     </div>
+                  ) : (
+                    <button
+                      onClick={() => selectPlaylist(p.id)}
+                      className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                    >
+                      <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                        </svg>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-white truncate">{p.name}</div>
+                        <div className="text-sm text-slate-400">
+                          {new Date(p.created_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); startRename(p); }}
+                    className="p-2 text-slate-400 hover:text-cyan-400 hover:bg-cyan-500/10 rounded-lg transition-colors flex-shrink-0"
+                    title="Rename playlist"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
                   </button>
                   <button
                     onClick={() => handleDelete(p.id)}
