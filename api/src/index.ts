@@ -62,7 +62,7 @@ function colorStatus(statusCode: number) {
   return `${ansi.green}${statusCode}${ansi.reset}`;
 }
 
-const sensitiveQueryParams = new Set(['u', 'p', 't', 's', 'token', 'password', 'access_token', 'refresh_token', 'code']);
+const sensitiveQueryParams = new Set(['u', 'p', 't', 's', 'sig', 'token', 'password', 'access_token', 'refresh_token', 'code']);
 
 function sanitizeUrlForLog(url: string) {
   const queryStart = url.indexOf('?');
