@@ -8,12 +8,14 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
   // Paginated artists list with ID for routing
   app.get('/api/browse/artists', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
-    const qs = req.query as { limit?: string; offset?: string; sort?: string; q?: string };
+    const qs = req.query as { limit?: string; offset?: string; sort?: string; q?: string; letter?: string };
     const limit = Math.min(200, Math.max(1, Number(qs.limit ?? 50)));
     const offset = Math.max(0, Number(qs.offset ?? 0));
     const sort = qs.sort ?? 'az';
     const filter = qs.q?.trim().toLowerCase() || '';
     const filterAscii = filter ? asciiFold(filter) : '';
+    const letterRaw = qs.letter?.trim().toLowerCase() || '';
+    const letter = /^[a-z]$/.test(letterRaw) || letterRaw === '#' ? letterRaw : '';
 
     const orderBy =
       sort === 'tracks_desc'
@@ -23,12 +25,33 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
           : 'a.name asc';
 
     const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
-    const libFilter = allowed === null ? '' : `and t.library_id = any($${filter ? 5 : 3})`;
+
+    const params: any[] = [limit, offset];
+    let paramIdx = 3;
+
     // Search both name and ascii_name for international character support
-    const nameFilter = filter ? `and (lower(a.name) like $3 or lower(a.ascii_name) like $4)` : '';
-    const params = filter
-      ? (allowed === null ? [limit, offset, `%${filter}%`, `%${filterAscii}%`] : [limit, offset, `%${filter}%`, `%${filterAscii}%`, allowed])
-      : (allowed === null ? [limit, offset] : [limit, offset, allowed]);
+    let nameFilter = '';
+    if (filter) {
+      nameFilter = `and (lower(a.name) like $${paramIdx} or lower(coalesce(a.ascii_name, a.name)) like $${paramIdx + 1})`;
+      params.push(`%${filter}%`, `%${filterAscii}%`);
+      paramIdx += 2;
+    }
+
+    let letterFilter = '';
+    if (letter === '#') {
+      letterFilter = `and lower(left(coalesce(nullif(a.ascii_name, ''), a.name), 1)) !~ '^[a-z]$'`;
+    } else if (letter) {
+      letterFilter = `and lower(left(coalesce(nullif(a.ascii_name, ''), a.name), 1)) = $${paramIdx}`;
+      params.push(letter);
+      paramIdx++;
+    }
+
+    let libFilter = '';
+    if (allowed !== null) {
+      libFilter = `and t.library_id = any($${paramIdx})`;
+      params.push(allowed);
+      paramIdx++;
+    }
 
     const r = await db().query(
       `
@@ -44,6 +67,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       join active_tracks t on t.id = ta.track_id
       where a.name is not null and a.name <> ''
       ${nameFilter}
+      ${letterFilter}
       ${libFilter}
       group by a.id, a.name, a.art_path, a.art_hash
       order by ${orderBy}
@@ -53,11 +77,30 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
     );
 
     // Get total count for infinite scroll
-    const countParams = filter
-      ? (allowed === null ? [`%${filter}%`, `%${filterAscii}%`] : [`%${filter}%`, `%${filterAscii}%`, allowed])
-      : (allowed === null ? [] : [allowed]);
-    const countNameFilter = filter ? `and (lower(a.name) like $1 or lower(a.ascii_name) like $2)` : '';
-    const countLibFilter = allowed === null ? '' : `and t.library_id = any($${filter ? 3 : 1})`;
+    const countParams: any[] = [];
+    let countParamIdx = 1;
+
+    let countNameFilter = '';
+    if (filter) {
+      countNameFilter = `and (lower(a.name) like $${countParamIdx} or lower(coalesce(a.ascii_name, a.name)) like $${countParamIdx + 1})`;
+      countParams.push(`%${filter}%`, `%${filterAscii}%`);
+      countParamIdx += 2;
+    }
+
+    let countLetterFilter = '';
+    if (letter === '#') {
+      countLetterFilter = `and lower(left(coalesce(nullif(a.ascii_name, ''), a.name), 1)) !~ '^[a-z]$'`;
+    } else if (letter) {
+      countLetterFilter = `and lower(left(coalesce(nullif(a.ascii_name, ''), a.name), 1)) = $${countParamIdx}`;
+      countParams.push(letter);
+      countParamIdx++;
+    }
+
+    let countLibFilter = '';
+    if (allowed !== null) {
+      countLibFilter = `and t.library_id = any($${countParamIdx})`;
+      countParams.push(allowed);
+    }
 
     const countR = await db().query(
       `
@@ -67,6 +110,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       join active_tracks t on t.id = ta.track_id
       where a.name is not null and a.name <> ''
       ${countNameFilter}
+      ${countLetterFilter}
       ${countLibFilter}
     `,
       countParams
@@ -84,13 +128,15 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
   // Paginated albums list with artwork
   app.get('/api/browse/albums', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
-    const qs = req.query as { limit?: string; offset?: string; sort?: string; artistId?: string; q?: string };
+    const qs = req.query as { limit?: string; offset?: string; sort?: string; artistId?: string; q?: string; letter?: string };
     const limit = Math.min(200, Math.max(1, Number(qs.limit ?? 50)));
     const offset = Math.max(0, Number(qs.offset ?? 0));
     const sort = qs.sort ?? 'az';
     const artistId = qs.artistId ? Number(qs.artistId) : null;
     const filter = qs.q?.trim().toLowerCase() || '';
     const filterAscii = filter ? asciiFold(filter) : '';
+    const letterRaw = qs.letter?.trim().toLowerCase() || '';
+    const letter = /^[a-z]$/.test(letterRaw) || letterRaw === '#' ? letterRaw : '';
 
     const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
 
@@ -112,6 +158,15 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       params.push(`%${filter}%`);
       params.push(`%${filterAscii}%`);
       paramIdx += 2;
+    }
+
+    let letterFilter = '';
+    if (letter === '#') {
+      letterFilter = `and lower(left(t.album, 1)) !~ '^[a-z]$'`;
+    } else if (letter) {
+      letterFilter = `and lower(left(t.album, 1)) = $${paramIdx}`;
+      params.push(letter);
+      paramIdx++;
     }
 
     let libFilter = '';
@@ -144,6 +199,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         where t.album is not null and t.album <> ''
         ${artistFilter}
         ${nameFilter}
+        ${letterFilter}
         ${libFilter}
         order by t.album, t.path
       ),
@@ -153,6 +209,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         where t.album is not null and t.album <> ''
         ${artistFilter}
         ${nameFilter}
+        ${letterFilter}
         ${libFilter}
         group by t.album
       )
@@ -198,6 +255,15 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       countParamIdx += 2;
     }
 
+    let countLetterFilter = '';
+    if (letter === '#') {
+      countLetterFilter = `and lower(left(t.album, 1)) !~ '^[a-z]$'`;
+    } else if (letter) {
+      countLetterFilter = `and lower(left(t.album, 1)) = $${countParamIdx}`;
+      countParams.push(letter);
+      countParamIdx++;
+    }
+
     let countLibFilter = '';
     if (allowed !== null) {
       countLibFilter = `and t.library_id = any($${countParamIdx})`;
@@ -211,6 +277,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       where t.album is not null and t.album <> ''
       ${countArtistFilter}
       ${countNameFilter}
+      ${countLetterFilter}
       ${countLibFilter}
     `,
       countParams
