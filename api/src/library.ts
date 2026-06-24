@@ -672,7 +672,10 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     const params = allowed === null ? [limit, offset] : [limit, offset, allowed];
 
     const r = await db().query(
-      `select id, path, ext, title, artist, album, duration_ms, library_id, created_at, updated_at, art_path, art_hash from active_tracks ${where} ${orderBy} limit $1 offset $2`,
+      `select id, path, ext, title, artist, album_artist, album, duration_ms,
+              library_id, created_at, updated_at, art_path, art_hash,
+              genre, country, language, year, bpm, track_number, disc_number
+       from active_tracks ${where} ${orderBy} limit $1 offset $2`,
       params as any
     );
 
