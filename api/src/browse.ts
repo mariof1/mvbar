@@ -561,7 +561,9 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
 
     const r = await db().query(
       `
-      select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash
+      select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms,
+             t.art_path, t.art_hash, t.path, t.genre, t.country, t.language,
+             t.year, t.bpm, t.track_number, t.disc_number
       from active_tracks t
       where t.country ilike '%' || $1 || '%'
       ${libFilter}
@@ -595,7 +597,9 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
 
     const r = await db().query(
       `
-      select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash
+      select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms,
+             t.art_path, t.art_hash, t.path, t.genre, t.country, t.language,
+             t.year, t.bpm, t.track_number, t.disc_number
       from active_tracks t
       where t.language ilike '%' || $1 || '%'
       ${libFilter}
@@ -629,7 +633,9 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
 
     const r = await db().query(
       `
-      select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash
+      select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms,
+             t.art_path, t.art_hash, t.path, t.genre, t.country, t.language,
+             t.year, t.bpm, t.track_number, t.disc_number
       from active_tracks t
       where t.genre ilike '%' || $1 || '%'
       ${libFilter}
