@@ -10,6 +10,10 @@ type Track = {
   id: number;
   title: string;
   artist: string;
+  album: string | null;
+  art_path: string | null;
+  art_hash: string | null;
+  duration_ms: number | null;
 };
 
 type Bucket = {
@@ -149,11 +153,15 @@ function ArtGrid({ paths, hashes }: { paths: string[]; hashes: string[] }) {
 
 // Bucket card with 2x2 art grid
 function BucketCard({ bucket, onClick, flipId }: { bucket: Bucket; onClick?: () => void; flipId?: string }) {
+  const disabled = bucket.tracks.length === 0;
+
   return (
-    <div 
-      className="group cursor-pointer"
+    <button
+      type="button"
+      className="group w-full text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 rounded-xl disabled:cursor-default disabled:opacity-60"
       data-flip-id={flipId}
       onClick={onClick}
+      disabled={disabled}
     >
       <div className="relative mb-3">
         <ArtGrid paths={bucket.art_paths} hashes={bucket.art_hashes} />
@@ -172,7 +180,7 @@ function BucketCard({ bucket, onClick, flipId }: { bucket: Bucket; onClick?: () 
           <div className="text-xs text-slate-500">{bucket.count} songs</div>
         )}
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -191,7 +199,10 @@ export function Recommendations() {
 
   const bucketsRef = useRef<HTMLDivElement>(null);
 
-  const bucketsIdsKey = useMemo(() => `buckets:${buckets.map((b) => b.name).join(',')}`, [buckets]);
+  const bucketsIdsKey = useMemo(
+    () => `buckets:${buckets.map((b) => `${b.key}:${b.count}:${b.tracks.slice(0, 5).map((t) => t.id).join('-')}`).join(',')}`,
+    [buckets]
+  );
 
   useFlipAnimation(bucketsRef, bucketsIdsKey);
 

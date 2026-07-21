@@ -4,7 +4,15 @@ import { create } from 'zustand';
 import { closePodcastPlayer, closeAudiobookPlayer } from './uiStore';
 import { useToastStore } from './Toast';
 
-export type QueueTrack = { id: number; title: string | null; artist: string | null; album?: string | null };
+export type QueueTrack = {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  album?: string | null;
+  art_path?: string | null;
+  art_hash?: string | null;
+  duration_ms?: number | null;
+};
 
 type PlayerState = {
   queue: QueueTrack[];

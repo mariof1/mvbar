@@ -387,7 +387,15 @@ export async function getRecommendations(token: string) {
       subtitle?: string;
       reason?: string;
       count: number;
-      tracks: Array<{ id: number; title: string; artist: string }>;
+      tracks: Array<{
+        id: number;
+        title: string;
+        artist: string;
+        album: string | null;
+        art_path: string | null;
+        art_hash: string | null;
+        duration_ms: number | null;
+      }>;
       art_paths: string[];
       art_hashes: string[];
     }>;
