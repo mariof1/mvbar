@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { meili } from './meili.js';
 import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
+import { asciiFold } from './asciiFold.js';
 
 // ============================================================================
 // GENRE TAXONOMY (shared with recommendations)
@@ -266,6 +267,26 @@ function normalizeQuery(q: string): string {
   return q.toLowerCase().trim().replace(/\s+/g, ' ').replace(/['"]/g, '');
 }
 
+const SQL_FOLD_FROM = 'ĄĆĘŁŃÓŚŹŻąćęłńóśźż';
+const SQL_FOLD_TO = 'ACELNOSZZacelnoszz';
+
+function sqlFold(expr: string): string {
+  return `lower(translate(coalesce(${expr}, ''), '${SQL_FOLD_FROM}', '${SQL_FOLD_TO}'))`;
+}
+
+function entitySearchTerms(query: string): { lower: string; folded: string; stripped: string | null } | null {
+  const lower = query.toLowerCase().trim().replace(/\s+/g, ' ');
+  if (!lower) return null;
+
+  const folded = asciiFold(query).replace(/\s+/g, ' ').trim() || lower;
+  const stripped = folded.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+  return {
+    lower,
+    folded,
+    stripped: stripped && stripped !== folded ? stripped : null
+  };
+}
+
 export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/search', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
@@ -404,17 +425,20 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
           const params: any[] = [];
           let i = 1;
           const where: string[] = ["a.name is not null and a.name <> ''", "ta.role = 'artist'"];
+          const artistAsciiExpr = `lower(coalesce(nullif(a.ascii_name, ''), translate(coalesce(a.name, ''), '${SQL_FOLD_FROM}', '${SQL_FOLD_TO}')))`;
+          const terms = entitySearchTerms(entityTextQuery);
 
-          if (entityTextQuery.length > 0) {
-            const cleanQuery = entityTextQuery.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
-            params.push(`%${entityTextQuery.toLowerCase()}%`);
-            if (cleanQuery && cleanQuery !== entityTextQuery.toLowerCase()) {
-              params.push(`%${cleanQuery}%`);
-              where.push(`(lower(a.name) like $${i} or lower(regexp_replace(a.name, '[^a-zA-Z0-9 ]', '', 'g')) like $${i + 1})`);
-              i += 2;
-            } else {
-              where.push(`lower(a.name) like $${i++}`);
-            }
+          if (terms) {
+            const originalParam = i++;
+            const foldedParam = i++;
+            params.push(`%${terms.lower}%`, `%${terms.folded}%`);
+            const strippedParam = terms.stripped ? i++ : null;
+            if (terms.stripped) params.push(`%${terms.stripped}%`);
+            where.push(`(
+              lower(a.name) like $${originalParam}
+              or ${artistAsciiExpr} like $${foldedParam}
+              ${strippedParam ? `or regexp_replace(${artistAsciiExpr}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}` : ''}
+            )`);
           }
           if (allowed !== null) {
             params.push(allowed);
@@ -438,12 +462,15 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
             where.push(`exists (select 1 from unnest(string_to_array(coalesce(t.genre, ''), ';')) as g where lower(trim(g)) = any($${i++}))`);
           }
 
-          const orderBy = entityTextQuery.length > 0
+          const orderBy = terms
             ? `case
-                 when lower(a.name) = $1 then 0
-                 when lower(a.name) like $1 then 1
-                 when lower(a.name) like replace($1, '%', '') || '%' then 2
-                 else 3
+                 when lower(a.name) = replace($1, '%', '') then 0
+                 when ${artistAsciiExpr} = replace($2, '%', '') then 0
+                 when lower(a.name) like replace($1, '%', '') || '%' then 1
+                 when ${artistAsciiExpr} like replace($2, '%', '') || '%' then 1
+                 when lower(a.name) like $1 then 2
+                 when ${artistAsciiExpr} like $2 then 2
+                 else 4
                end, track_count desc, a.name asc`
             : 'track_count desc, a.name asc';
 
@@ -474,18 +501,24 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
           const params: any[] = [];
           let i = 1;
           const where: string[] = ["t.album is not null and t.album <> ''"];
+          const albumFoldExpr = sqlFold('t.album');
+          const albumArtistFoldExpr = sqlFold('coalesce(t.album_artist, t.artist)');
+          const terms = entitySearchTerms(entityTextQuery);
 
-          if (entityTextQuery.length > 0) {
-            const cleanQuery = entityTextQuery.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
-            params.push(`%${entityTextQuery.toLowerCase()}%`);
-            if (cleanQuery && cleanQuery !== entityTextQuery.toLowerCase()) {
-              params.push(`%${cleanQuery}%`);
-              where.push(`(lower(t.album) like $${i} or lower(coalesce(t.album_artist, t.artist)) like $${i} or lower(regexp_replace(t.album, '[^a-zA-Z0-9 ]', '', 'g')) like $${i + 1} or lower(regexp_replace(coalesce(t.album_artist, t.artist), '[^a-zA-Z0-9 ]', '', 'g')) like $${i + 1})`);
-              i += 2;
-            } else {
-              where.push(`(lower(t.album) like $${i} or lower(coalesce(t.album_artist, t.artist)) like $${i})`);
-              i++;
-            }
+          if (terms) {
+            const originalParam = i++;
+            const foldedParam = i++;
+            params.push(`%${terms.lower}%`, `%${terms.folded}%`);
+            const strippedParam = terms.stripped ? i++ : null;
+            if (terms.stripped) params.push(`%${terms.stripped}%`);
+            where.push(`(
+              lower(t.album) like $${originalParam}
+              or lower(coalesce(t.album_artist, t.artist)) like $${originalParam}
+              or ${albumFoldExpr} like $${foldedParam}
+              or ${albumArtistFoldExpr} like $${foldedParam}
+              ${strippedParam ? `or regexp_replace(${albumFoldExpr}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}` : ''}
+              ${strippedParam ? `or regexp_replace(${albumArtistFoldExpr}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}` : ''}
+            )`);
           }
           if (allowed !== null) {
             params.push(allowed);
@@ -556,24 +589,24 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
 
         // Playlists (name match only)
         if (entityTextQuery.length > 0) {
-          const pat = `%${entityTextQuery.toLowerCase()}%`;
-          const cleanQuery = entityTextQuery.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
-          const cleanPat = `%${cleanQuery}%`;
-          const useClean = cleanQuery && cleanQuery !== entityTextQuery.toLowerCase();
+          const terms = entitySearchTerms(entityTextQuery);
+          const playlistFoldExpr = sqlFold('name');
+          const playlistWhere = terms
+            ? `(lower(name) like $2 or ${playlistFoldExpr} like $3${terms.stripped ? ` or regexp_replace(${playlistFoldExpr}, '[^a-z0-9 ]', '', 'g') like $4` : ''})`
+            : 'false';
+          const playlistParams = terms
+            ? [userId, `%${terms.lower}%`, `%${terms.folded}%`, ...(terms.stripped ? [`%${terms.stripped}%`] : [])]
+            : [userId];
 
           const r = await db().query(
-            useClean
-              ? `select id::int, name, created_at from playlists where user_id = $1 and (lower(name) like $2 or lower(regexp_replace(name, '[^a-zA-Z0-9 ]', '', 'g')) like $3) order by id desc limit 12`
-              : `select id::int, name, created_at from playlists where user_id = $1 and lower(name) like $2 order by id desc limit 12`,
-            useClean ? [userId, pat, cleanPat] : [userId, pat]
+            `select id::int, name, created_at from playlists where user_id = $1 and ${playlistWhere} order by id desc limit 12`,
+            playlistParams
           );
           playlists.push(...r.rows.map((x: any) => ({ ...x, kind: 'playlist' })));
 
           const r2 = await db().query(
-            useClean
-              ? `select id::int, name, updated_at from smart_playlists where user_id = $1 and (lower(name) like $2 or lower(regexp_replace(name, '[^a-zA-Z0-9 ]', '', 'g')) like $3) order by updated_at desc limit 12`
-              : `select id::int, name, updated_at from smart_playlists where user_id = $1 and lower(name) like $2 order by updated_at desc limit 12`,
-            useClean ? [userId, pat, cleanPat] : [userId, pat]
+            `select id::int, name, updated_at from smart_playlists where user_id = $1 and ${playlistWhere} order by updated_at desc limit 12`,
+            playlistParams
           );
           playlists.push(...r2.rows.map((x: any) => ({ ...x, kind: 'smart' })));
         }
