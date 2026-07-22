@@ -58,6 +58,17 @@ interface SearchResult {
   episodeCount: number | null;
 }
 
+interface PodcastPreview {
+  title: string;
+  author: string | null;
+  description: string | null;
+  imageUrl: string | null;
+  link: string | null;
+  language: string | null;
+  lastBuildDate: string | null;
+  episodeCount: number | null;
+}
+
 // ============================================================================
 // SUBSCRIBE MODAL
 // ============================================================================
@@ -75,6 +86,12 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
   const [loading, setLoading] = useState(false);
   const [subscribing, setSubscribing] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [previewDialog, setPreviewDialog] = useState<{
+    result: SearchResult;
+    loading: boolean;
+    preview?: PodcastPreview;
+    error?: string;
+  } | null>(null);
 
   // Search podcasts via iTunes API
   const handleSearch = useCallback(async () => {
@@ -106,6 +123,28 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
       setError(err?.error || 'Failed to subscribe');
     } finally {
       setSubscribing(null);
+    }
+  };
+
+  const showSearchResultDetails = async (result: SearchResult) => {
+    setPreviewDialog({ result, loading: true });
+    try {
+      const res = await apiFetch(`/podcasts/preview?feedUrl=${encodeURIComponent(result.feedUrl)}`, {}, token!);
+      setPreviewDialog((current) => (
+        current?.result.feedUrl === result.feedUrl
+          ? { result, loading: false, preview: res.preview }
+          : current
+      ));
+    } catch (err: any) {
+      setPreviewDialog((current) => (
+        current?.result.feedUrl === result.feedUrl
+          ? {
+              result,
+              loading: false,
+              error: err?.data?.error || err?.error || err?.message || 'Unable to load podcast details',
+            }
+          : current
+      ));
     }
   };
 
@@ -185,7 +224,7 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
                 return (
                   <div
                     key={result.id}
-                    className="flex items-center gap-3 p-3 rounded-lg bg-slate-700/50 hover:bg-slate-700 transition-colors"
+                    className="flex items-start gap-3 p-3 rounded-lg bg-slate-700/50 hover:bg-slate-700 transition-colors"
                   >
                     <PodcastArtwork src={result.imageUrl} alt={result.title} className="w-14 h-14 flex-shrink-0 rounded-lg" />
                     <div className="flex-1 min-w-0">
@@ -195,19 +234,28 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
                         <p className="text-xs text-slate-500">{result.genre} • {result.episodeCount || '?'} episodes</p>
                       )}
                     </div>
-                    {isSubscribed ? (
-                      <span className="px-4 py-2 rounded-lg bg-slate-600 text-slate-400 text-sm font-medium flex-shrink-0">
-                        Subscribed
-                      </span>
-                    ) : (
+                    <div className="flex flex-shrink-0 flex-col gap-2 sm:flex-row">
                       <button
-                        onClick={() => subscribeToResult(result)}
-                        disabled={subscribing === result.id}
-                        className="px-4 py-2 rounded-lg bg-cyan-600 text-white text-sm font-medium hover:bg-cyan-500 transition-colors disabled:opacity-50 flex-shrink-0"
+                        type="button"
+                        onClick={() => showSearchResultDetails(result)}
+                        className="rounded-full border border-white/10 px-4 py-2 text-sm font-bold text-slate-200 transition hover:bg-white/10 hover:text-white"
                       >
-                        {subscribing === result.id ? '...' : 'Subscribe'}
+                        Details
                       </button>
-                    )}
+                      {isSubscribed ? (
+                        <span className="rounded-full bg-slate-600 px-4 py-2 text-sm font-bold text-slate-400">
+                          Subscribed
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => subscribeToResult(result)}
+                          disabled={subscribing === result.id}
+                          className="rounded-full bg-cyan-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-cyan-500 disabled:opacity-50"
+                        >
+                          {subscribing === result.id ? '...' : 'Subscribe'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -258,6 +306,47 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
               Close
             </button>
           </div>
+        )}
+
+        {previewDialog && (
+          <PodcastTextDialog
+            label="Podcast details"
+            title={previewDialog.preview?.title || previewDialog.result.title}
+            subtitle={previewDialog.preview?.author || previewDialog.result.author}
+            meta={[
+              previewDialog.preview?.language?.trim() ? previewDialog.preview.language.trim().toUpperCase() : null,
+              `${previewDialog.preview?.episodeCount ?? previewDialog.result.episodeCount ?? '?'} episodes`,
+              previewDialog.result.genre,
+            ].filter(Boolean).join(' - ')}
+            description={
+              previewDialog.loading
+                ? 'Loading podcast description...'
+                : previewDialog.error
+                  ? previewDialog.error
+                  : stripHtml(previewDialog.preview?.description || null)
+            }
+            onClose={() => setPreviewDialog(null)}
+            footer={
+              <>
+                <ChipButton onClick={() => setPreviewDialog(null)}>
+                  Close
+                </ChipButton>
+                {subscribedFeedUrls.has(previewDialog.result.feedUrl) ? (
+                  <span className="inline-flex h-10 items-center rounded-full bg-slate-800 px-4 text-sm font-bold text-slate-400">
+                    Subscribed
+                  </span>
+                ) : (
+                  <ChipButton
+                    tone="accent"
+                    onClick={() => subscribeToResult(previewDialog.result)}
+                    disabled={subscribing === previewDialog.result.id}
+                  >
+                    {subscribing === previewDialog.result.id ? 'Subscribing...' : 'Subscribe'}
+                  </ChipButton>
+                )}
+              </>
+            }
+          />
         )}
       </div>
     </div>
@@ -527,6 +616,7 @@ function PodcastTextDialog({
   subtitle,
   meta,
   description,
+  footer,
   onClose,
 }: {
   label: string;
@@ -534,6 +624,7 @@ function PodcastTextDialog({
   subtitle?: string | null;
   meta?: string | null;
   description?: string | null;
+  footer?: ReactNode;
   onClose: () => void;
 }) {
   return (
@@ -563,6 +654,11 @@ function PodcastTextDialog({
             {description?.trim() || 'No description available.'}
           </p>
         </div>
+        {footer && (
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-white/10 px-5 py-4">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );

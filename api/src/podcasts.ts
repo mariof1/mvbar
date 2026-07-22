@@ -223,11 +223,47 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       return reply.code(500).send({ ok: false, error: 'Search failed' });
     }
   });
-  
+
+  // ========================================================================
+  // PREVIEW PODCAST DETAILS BEFORE SUBSCRIBING
+  // ========================================================================
+
+  app.get('/api/podcasts/preview', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+
+    const { feedUrl } = req.query as { feedUrl?: string };
+    if (!feedUrl) return reply.code(400).send({ ok: false, error: 'feedUrl is required' });
+
+    try {
+      const parsedUrl = new URL(feedUrl);
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        return reply.code(400).send({ ok: false, error: 'Only HTTP and HTTPS feeds are supported' });
+      }
+
+      const parsed = await fetchAndParseRSS(feedUrl);
+      return {
+        ok: true,
+        preview: {
+          title: parsed.title,
+          author: parsed.author,
+          description: parsed.description,
+          imageUrl: parsed.imageUrl,
+          link: parsed.link,
+          language: parsed.language,
+          lastBuildDate: parsed.lastBuildDate,
+          episodeCount: parsed.episodes.length
+        }
+      };
+    } catch (error: any) {
+      req.log.warn({ error, feedUrl }, 'Podcast preview failed');
+      return reply.code(500).send({ ok: false, error: error.message || 'Preview failed' });
+    }
+  });
+
   // ========================================================================
   // SUBSCRIBE TO PODCAST
   // ========================================================================
-  
+
   app.post('/api/podcasts/subscribe', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     
