@@ -345,7 +345,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-slate-300">Podcasts</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {podcastHits.slice(0, 8).map((p) => (
+                  {podcastHits.map((p) => (
                     <button
                       key={p.id}
                       onClick={() => navigate({ type: 'podcast', podcastId: p.id })}
@@ -380,7 +380,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-slate-300">Podcast Episodes</div>
                 <div className="space-y-2">
-                  {podcastEpisodeHits.slice(0, 8).map((episode) => (
+                  {podcastEpisodeHits.map((episode) => (
                     <button
                       key={episode.id}
                       onClick={() => setPodcastEpisode(episode)}

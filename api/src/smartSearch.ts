@@ -329,13 +329,13 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
   const podcastParams: any[] = [userId];
   const podcastIndex = { value: 2 };
   const podcastConditions = terms
-    .map((term) => entityMatchCondition(['p.title', 'p.author', 'p.description'], term, podcastParams, podcastIndex))
+    .map((term) => entityMatchCondition(['p.title', 'p.author'], term, podcastParams, podcastIndex))
     .filter((condition): condition is string => Boolean(condition));
 
   const episodeParams: any[] = [userId];
   const episodeIndex = { value: 2 };
   const episodeConditions = terms
-    .map((term) => entityMatchCondition(['e.title', 'e.description', 'p.title'], term, episodeParams, episodeIndex))
+    .map((term) => entityMatchCondition(['e.title', 'p.title'], term, episodeParams, episodeIndex))
     .filter((condition): condition is string => Boolean(condition));
 
   if (podcastConditions.length === 0 && episodeConditions.length === 0) {
@@ -372,7 +372,7 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
               else 2
             end,
             p.title asc
-          limit 12
+          limit 24
         `,
           podcastParams
         )
@@ -416,7 +416,7 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
             end,
             e.published_at desc nulls last,
             e.created_at desc
-          limit 20
+          limit 50
         `,
           episodeParams
         )
