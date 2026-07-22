@@ -7,6 +7,7 @@ import { useFavorites } from './favoritesStore';
 import { useRouter } from './router';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
+import { useUi, type PodcastEpisode } from './uiStore';
 
 type Hit = {
   id: number;
@@ -45,11 +46,50 @@ type PlaylistHit = {
   kind?: 'playlist' | 'smart';
 };
 
+type PodcastHit = {
+  id: number;
+  title: string;
+  author: string | null;
+  description: string | null;
+  image_url: string | null;
+  image_path: string | null;
+  unplayed_count: number;
+};
+
+type PodcastEpisodeHit = PodcastEpisode & {
+  image_path?: string | null;
+  podcast_image_path?: string | null;
+};
+
 function getInitials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   const a = parts[0]?.[0] ?? '?';
   const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? '' : '';
   return (a + b).toUpperCase();
+}
+
+function stripHtml(value?: string | null) {
+  return (value ?? '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function podcastArtUrl(podcast: Pick<PodcastHit, 'id' | 'image_url' | 'image_path'>) {
+  return podcast.image_path ? `/api/podcast-art/${podcast.image_path}` : podcast.image_url || `/api/podcasts/${podcast.id}/art`;
+}
+
+function episodeArtUrl(episode: PodcastEpisodeHit) {
+  return episode.image_path
+    ? `/api/podcast-art/${episode.image_path}`
+    : episode.podcast_image_path
+      ? `/api/podcast-art/${episode.podcast_image_path}`
+      : episode.image_url
+        ? episode.image_url
+        : episode.podcast_image_url
+          ? episode.podcast_image_url
+          : `/api/podcasts/episodes/${episode.id}/art`;
 }
 
 interface SearchModalProps {
@@ -63,6 +103,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
   const navigate = useRouter((s) => s.navigate);
+  const setPodcastEpisode = useUi((s) => s.setPodcastEpisode);
   const favIds = useFavorites((s) => s.ids);
   const toggleFav = useFavorites((s) => s.toggle);
   const lastUpdate = useLibraryUpdates((s) => s.lastUpdate);
@@ -73,6 +114,8 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
   const [artistHits, setArtistHits] = useState<ArtistHit[]>([]);
   const [albumHits, setAlbumHits] = useState<AlbumHit[]>([]);
   const [playlistHits, setPlaylistHits] = useState<PlaylistHit[]>([]);
+  const [podcastHits, setPodcastHits] = useState<PodcastHit[]>([]);
+  const [podcastEpisodeHits, setPodcastEpisodeHits] = useState<PodcastEpisodeHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lastRefreshRef = useRef<number>(0);
@@ -95,6 +138,8 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
         setArtistHits([]);
         setAlbumHits([]);
         setPlaylistHits([]);
+        setPodcastHits([]);
+        setPodcastEpisodeHits([]);
         setError(null);
       }, 150);
       return () => clearTimeout(t);
@@ -129,6 +174,8 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
         setArtistHits([]);
         setAlbumHits([]);
         setPlaylistHits([]);
+        setPodcastHits([]);
+        setPodcastEpisodeHits([]);
       }
       return;
     }
@@ -155,6 +202,14 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
           art_track_id: a.art_track_id == null ? null : Number(a.art_track_id),
         })));
         setPlaylistHits((r.playlists ?? []).map((p: any) => ({ ...p, id: Number(p.id) })));
+        setPodcastHits((r.podcasts ?? []).map((p: any) => ({ ...p, id: Number(p.id), unplayed_count: Number(p.unplayed_count ?? 0) })));
+        setPodcastEpisodeHits((r.podcastEpisodes ?? []).map((e: any) => ({
+          ...e,
+          id: Number(e.id),
+          podcast_id: Number(e.podcast_id),
+          position_ms: Number(e.position_ms ?? 0),
+          played: Boolean(e.played),
+        })));
       } catch (e: any) {
         if (e?.status === 401) clear();
         setError(e?.message ?? 'Search failed');
@@ -179,9 +234,14 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
     onAddToQueue?.({ id: t.id, title: t.title, artist: t.display_artist || t.artist });
   }, [onAddToQueue]);
 
+  const handlePodcastEpisodePlay = useCallback((episode: PodcastEpisodeHit) => {
+    setPodcastEpisode(episode);
+    onClose();
+  }, [setPodcastEpisode, onClose]);
+
   if (!isOpen || !token) return null;
 
-  const hasResults = hits.length > 0 || artistHits.length > 0 || albumHits.length > 0 || playlistHits.length > 0;
+  const hasResults = hits.length > 0 || artistHits.length > 0 || albumHits.length > 0 || playlistHits.length > 0 || podcastHits.length > 0 || podcastEpisodeHits.length > 0;
   const hasQuery = q.trim().length > 0;
 
   return (
@@ -207,7 +267,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
               ref={inputRef}
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search songs, artists, albums..."
+              placeholder="Search songs, artists, albums, podcasts..."
               className="flex-1 bg-transparent text-white text-lg placeholder-slate-500 focus:outline-none"
               autoComplete="off"
               spellCheck={false}
@@ -355,6 +415,76 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                       <svg className="w-4 h-4 text-slate-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Podcasts */}
+            {podcastHits.length > 0 && (
+              <div className="px-5 py-3 border-b border-white/5">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Podcasts</div>
+                <div className="space-y-0.5">
+                  {podcastHits.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => handleNavigate({ type: 'podcast', podcastId: p.id })}
+                      className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left"
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-cyan-500/10 flex-shrink-0 flex items-center justify-center text-xs font-bold text-cyan-200 relative overflow-hidden">
+                        {getInitials(p.title)}
+                        <img
+                          src={podcastArtUrl(p)}
+                          alt=""
+                          className="absolute inset-0 w-full h-full object-cover"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-white truncate">{p.title}</div>
+                        <div className="text-xs text-slate-400 truncate">
+                          {[p.author, p.unplayed_count > 0 ? `${p.unplayed_count} unplayed` : null].filter(Boolean).join(' · ') || 'Podcast'}
+                        </div>
+                      </div>
+                      <svg className="w-4 h-4 text-slate-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Podcast Episodes */}
+            {podcastEpisodeHits.length > 0 && (
+              <div className="px-5 py-3 border-b border-white/5">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Podcast Episodes</div>
+                <div className="space-y-0.5">
+                  {podcastEpisodeHits.map((episode) => (
+                    <button
+                      key={episode.id}
+                      onClick={() => handlePodcastEpisodePlay(episode)}
+                      className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left"
+                    >
+                      <div className="w-10 h-10 rounded-lg bg-cyan-500/10 flex-shrink-0 flex items-center justify-center relative overflow-hidden">
+                        <svg className="w-4 h-4 text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 6v12m-4-9v6m8-6v6M5 9v6m14-6v6" />
+                        </svg>
+                        <img
+                          src={episodeArtUrl(episode)}
+                          alt=""
+                          className="absolute inset-0 w-full h-full object-cover"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-white truncate">{episode.title}</div>
+                        <div className="text-xs text-slate-400 truncate">{episode.podcast_title || 'Podcast'}</div>
+                        {episode.description && (
+                          <div className="text-xs text-slate-500 truncate">{stripHtml(episode.description)}</div>
+                        )}
+                      </div>
                     </button>
                   ))}
                 </div>
