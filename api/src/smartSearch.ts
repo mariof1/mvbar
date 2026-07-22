@@ -329,13 +329,13 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
   const podcastParams: any[] = [userId];
   const podcastIndex = { value: 2 };
   const podcastConditions = terms
-    .map((term) => entityMatchCondition(['p.title', 'p.author'], term, podcastParams, podcastIndex))
+    .map((term) => entityMatchCondition(['p.title', 'p.author', 'p.description'], term, podcastParams, podcastIndex))
     .filter((condition): condition is string => Boolean(condition));
 
   const episodeParams: any[] = [userId];
   const episodeIndex = { value: 2 };
   const episodeConditions = terms
-    .map((term) => entityMatchCondition(['e.title', 'p.title'], term, episodeParams, episodeIndex))
+    .map((term) => entityMatchCondition(['e.title', 'p.title', 'e.description', 'p.description'], term, episodeParams, episodeIndex))
     .filter((condition): condition is string => Boolean(condition));
 
   if (podcastConditions.length === 0 && episodeConditions.length === 0) {
@@ -367,9 +367,11 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
           group by p.id
           order by
             case
-              when ${sqlFold('p.title')} = $2 then 0
-              when ${sqlFold('p.title')} like $2 || '%' then 1
-              else 2
+              when ${sqlFold('p.title')} = replace($2, '%', '') then 0
+              when ${sqlFold('p.title')} like replace($2, '%', '') || '%' then 1
+              when ${sqlFold('p.title')} like $2 then 2
+              when ${sqlFold('p.author')} like $2 then 3
+              else 4
             end,
             p.title asc
           limit 24
@@ -409,10 +411,14 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
           where ${episodeConditions.join(' or ')}
           order by
             case
-              when ${sqlFold('e.title')} = $2 then 0
-              when ${sqlFold('e.title')} like $2 || '%' then 1
-              when ${sqlFold('p.title')} = $2 then 2
-              else 3
+              when ${sqlFold('e.title')} = replace($2, '%', '') then 0
+              when ${sqlFold('e.title')} like replace($2, '%', '') || '%' then 1
+              when ${sqlFold('p.title')} = replace($2, '%', '') then 2
+              when ${sqlFold('p.title')} like replace($2, '%', '') || '%' then 3
+              when ${sqlFold('e.title')} like $2 then 4
+              when ${sqlFold('p.title')} like $2 then 5
+              when ${sqlFold('e.description')} like $2 then 6
+              else 7
             end,
             e.published_at desc nulls last,
             e.created_at desc
