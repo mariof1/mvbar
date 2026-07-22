@@ -287,6 +287,145 @@ function entitySearchTerms(query: string): { lower: string; folded: string; stri
   };
 }
 
+function entityMatchCondition(fields: string[], terms: ReturnType<typeof entitySearchTerms>, params: any[], paramIndex: { value: number }): string | null {
+  if (!terms) return null;
+
+  const originalParam = paramIndex.value++;
+  const foldedParam = paramIndex.value++;
+  params.push(`%${terms.lower}%`, `%${terms.folded}%`);
+  const strippedParam = terms.stripped ? paramIndex.value++ : null;
+  if (terms.stripped) params.push(`%${terms.stripped}%`);
+
+  const parts = fields.flatMap((field) => {
+    const foldedField = sqlFold(field);
+    return [
+      `lower(coalesce(${field}, '')) like $${originalParam}`,
+      `${foldedField} like $${foldedParam}`,
+      ...(strippedParam ? [`regexp_replace(${foldedField}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}`] : [])
+    ];
+  });
+
+  return `(${parts.join(' or ')})`;
+}
+
+function uniquePodcastSearchTerms(q: string, parsedTextQuery: string): ReturnType<typeof entitySearchTerms>[] {
+  const seen = new Set<string>();
+  const candidates = [q, parsedTextQuery]
+    .map((value) => entitySearchTerms(value))
+    .filter((value): value is NonNullable<ReturnType<typeof entitySearchTerms>> => value !== null);
+
+  return candidates.filter((terms) => {
+    const key = terms.folded;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function searchPodcastEntities(userId: string, q: string, parsedTextQuery: string) {
+  const terms = uniquePodcastSearchTerms(q, parsedTextQuery);
+  if (terms.length === 0) return { podcasts: [], podcastEpisodes: [] };
+
+  const podcastParams: any[] = [userId];
+  const podcastIndex = { value: 2 };
+  const podcastConditions = terms
+    .map((term) => entityMatchCondition(['p.title', 'p.author', 'p.description'], term, podcastParams, podcastIndex))
+    .filter((condition): condition is string => Boolean(condition));
+
+  const episodeParams: any[] = [userId];
+  const episodeIndex = { value: 2 };
+  const episodeConditions = terms
+    .map((term) => entityMatchCondition(['e.title', 'e.description', 'p.title'], term, episodeParams, episodeIndex))
+    .filter((condition): condition is string => Boolean(condition));
+
+  if (podcastConditions.length === 0 && episodeConditions.length === 0) {
+    return { podcasts: [], podcastEpisodes: [] };
+  }
+
+  const [podcastsR, episodesR] = await Promise.all([
+    podcastConditions.length > 0
+      ? db().query(
+          `
+          select
+            p.id::int,
+            p.feed_url,
+            p.title,
+            p.author,
+            p.description,
+            p.image_url,
+            p.image_path,
+            p.link,
+            p.language,
+            p.last_fetched_at,
+            p.created_at,
+            sum(case when e.id is not null and coalesce(uep.played, false) = false then 1 else 0 end)::int as unplayed_count
+          from podcasts p
+          join user_podcast_subscriptions ups on ups.podcast_id = p.id and ups.user_id = $1
+          left join podcast_episodes e on e.podcast_id = p.id
+          left join user_episode_progress uep on uep.episode_id = e.id and uep.user_id = $1
+          where ${podcastConditions.join(' or ')}
+          group by p.id
+          order by
+            case
+              when ${sqlFold('p.title')} = $2 then 0
+              when ${sqlFold('p.title')} like $2 || '%' then 1
+              else 2
+            end,
+            p.title asc
+          limit 12
+        `,
+          podcastParams
+        )
+      : Promise.resolve({ rows: [] }),
+    episodeConditions.length > 0
+      ? db().query(
+          `
+          select
+            e.id::int,
+            e.podcast_id::int,
+            e.guid,
+            e.title,
+            e.description,
+            e.audio_url,
+            e.audio_type,
+            e.duration_ms,
+            e.file_size_bytes,
+            e.image_url,
+            e.image_path,
+            e.link,
+            e.published_at,
+            e.downloaded_path,
+            e.downloaded_at,
+            p.title as podcast_title,
+            p.image_url as podcast_image_url,
+            p.image_path as podcast_image_path,
+            coalesce(uep.position_ms, 0)::int as position_ms,
+            coalesce(uep.played, false) as played,
+            (e.downloaded_path is not null) as downloaded
+          from podcast_episodes e
+          join podcasts p on p.id = e.podcast_id
+          join user_podcast_subscriptions ups on ups.podcast_id = p.id and ups.user_id = $1
+          left join user_episode_progress uep on uep.episode_id = e.id and uep.user_id = $1
+          where ${episodeConditions.join(' or ')}
+          order by
+            case
+              when ${sqlFold('e.title')} = $2 then 0
+              when ${sqlFold('e.title')} like $2 || '%' then 1
+              when ${sqlFold('p.title')} = $2 then 2
+              else 3
+            end,
+            e.published_at desc nulls last,
+            e.created_at desc
+          limit 20
+        `,
+          episodeParams
+        )
+      : Promise.resolve({ rows: [] })
+  ]);
+
+  return { podcasts: podcastsR.rows, podcastEpisodes: episodesR.rows };
+}
+
 export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/search', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
@@ -297,7 +436,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
     const userId = req.user.userId;
 
     if (q.trim().length === 0) {
-      return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [] };
+      return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [], podcasts: [], podcastEpisodes: [] };
     }
 
     const index = meili().index('tracks');
@@ -418,6 +557,8 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
       const artists: any[] = [];
       const albums: any[] = [];
       const playlists: any[] = [];
+      let podcasts: any[] = [];
+      let podcastEpisodes: any[] = [];
 
       if (wantEntities) {
         // Artists
@@ -612,6 +753,12 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         }
       }
 
+      if (offset === 0) {
+        const podcastResults = await searchPodcastEntities(userId, q, parsed.textQuery);
+        podcasts = podcastResults.podcasts;
+        podcastEpisodes = podcastResults.podcastEpisodes;
+      }
+
       // Log search for recommendations (only meaningful queries)
       const normalized = normalizeQuery(q);
       if (normalized.length >= 3 && offset === 0) {
@@ -628,7 +775,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         if (!isPrefix) {
           await db().query(
             `INSERT INTO search_logs(user_id, query, query_normalized, result_count) VALUES ($1, $2, $3, $4)`,
-            [userId, q.trim(), normalized, res.estimatedTotalHits || 0]
+            [userId, q.trim(), normalized, (res.estimatedTotalHits || 0) + podcasts.length + podcastEpisodes.length]
           );
         }
       }
@@ -643,6 +790,8 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         artists,
         albums,
         playlists,
+        podcasts,
+        podcastEpisodes,
         parsed: {
           genreFamily: parsed.genreFamily,
           country: parsed.country,
@@ -653,7 +802,10 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('Index `tracks` not found')) {
-        return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [] };
+        const podcastResults = offset === 0
+          ? await searchPodcastEntities(userId, q, q)
+          : { podcasts: [], podcastEpisodes: [] };
+        return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [], ...podcastResults };
       }
       throw e;
     }
