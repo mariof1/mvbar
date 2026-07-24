@@ -97,6 +97,39 @@ function parseDuration(val: any): number | null {
   return null;
 }
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function normalizePodcastAudioUrl(raw: string): string {
+  const value = raw.trim();
+  if (!value) return value;
+
+  if (value.startsWith('//')) {
+    const candidate = `https:${value}`;
+    return isHttpUrl(candidate) ? candidate : value;
+  }
+
+  const singleSlashProtocol = value.match(/^(https?):\/(?!\/)(.+)$/i);
+  if (singleSlashProtocol) {
+    const candidate = `${singleSlashProtocol[1]}://${singleSlashProtocol[2]}`;
+    return isHttpUrl(candidate) ? candidate : value;
+  }
+
+  const embeddedAbsoluteUrl = value.match(/^https?:\/\/[^/?#]+\/((?:https?:)?\/{1,2}.+)$/i);
+  if (embeddedAbsoluteUrl) {
+    const candidate = normalizePodcastAudioUrl(embeddedAbsoluteUrl[1]);
+    return isHttpUrl(candidate) ? candidate : value;
+  }
+
+  return value;
+}
+
 async function fetchAndParseRSS(feedUrl: string): Promise<ParsedPodcast> {
   const response = await fetch(feedUrl, {
     headers: { 'User-Agent': 'mvbar/1.0 Podcast Client' }
@@ -140,7 +173,7 @@ async function fetchAndParseRSS(feedUrl: string): Promise<ParsedPodcast> {
       guid: String(guid),
       title: item.title?.['#text'] || item.title || 'Untitled Episode',
       description: item.description?.['#text'] || item.description || item['itunes:summary'] || null,
-      audioUrl: enclosure['@_url'] || item.link || '',
+      audioUrl: normalizePodcastAudioUrl(enclosure['@_url'] || item.link || ''),
       audioType: enclosure['@_type'] || 'audio/mpeg',
       durationMs: parseDuration(item['itunes:duration']),
       fileSizeBytes: enclosure['@_length'] ? parseInt(enclosure['@_length'], 10) : null,
@@ -548,7 +581,12 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     }
     
     // Otherwise redirect to audio URL
-    return reply.redirect(302, episode.audio_url);
+    const audioUrl = normalizePodcastAudioUrl(episode.audio_url);
+    if (audioUrl !== episode.audio_url) {
+      await db().query('UPDATE podcast_episodes SET audio_url = $1 WHERE id = $2', [audioUrl, episodeId]);
+      req.log.info({ episodeId }, 'Repaired malformed podcast episode audio URL');
+    }
+    return reply.redirect(302, audioUrl);
   });
   
   // ========================================================================
@@ -645,7 +683,13 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       await fs.mkdir(podcastDir, { recursive: true });
       
       // Determine file extension from URL or content type
-      const url = new URL(episode.audio_url);
+      const audioUrl = normalizePodcastAudioUrl(episode.audio_url);
+      if (audioUrl !== episode.audio_url) {
+        await db().query('UPDATE podcast_episodes SET audio_url = $1 WHERE id = $2', [audioUrl, episodeId]);
+        req.log.info({ episodeId }, 'Repaired malformed podcast episode audio URL before download');
+      }
+
+      const url = new URL(audioUrl);
       let ext = path.extname(url.pathname) || '.mp3';
       if (!ext.match(/^\.(mp3|m4a|ogg|opus|wav|aac)$/i)) ext = '.mp3';
       
@@ -653,9 +697,9 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       const filePath = path.join(podcastDir, filename);
       
       // Download the file
-      req.log.info({ episodeId, url: episode.audio_url }, 'Downloading podcast episode');
+      req.log.info({ episodeId, url: audioUrl }, 'Downloading podcast episode');
       
-      const response = await fetch(episode.audio_url, {
+      const response = await fetch(audioUrl, {
         headers: { 'User-Agent': 'mvbar/1.0 Podcast Client' }
       });
       
