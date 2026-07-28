@@ -5,22 +5,17 @@ import path from 'node:path';
 import { db } from './db.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import logger from './logger.js';
+import { resolveInside } from './pathSafety.js';
 
 const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 const LRCLIB_API = 'https://lrclib.net/api/get';
 
 function safeJoinLyrics(relPath: string) {
-  const abs = path.resolve(LYRICS_DIR, relPath);
-  const base = path.resolve(LYRICS_DIR);
-  if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(LYRICS_DIR, relPath);
 }
 
 function safeJoinMount(mountPath: string, relPath: string) {
-  const abs = path.resolve(mountPath, relPath);
-  const base = path.resolve(mountPath);
-  if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(mountPath, relPath);
 }
 
 function isSyncedLyrics(text: string): boolean {

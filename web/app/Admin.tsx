@@ -144,13 +144,15 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
     setScanProgress((prev) => ({
       ...prev,
       ok: true,
-      status: wsScanProgress.status === 'indexing' ? 'indexing' : (wsScanProgress.scanning ? 'scanning' : 'idle'),
+      status: (wsScanProgress.status || (wsScanProgress.scanning ? 'scanning' : 'idle')) as ScanProgress['status'],
       mountPath: wsScanProgress.mountPath || prev?.mountPath,
       libraryIndex: wsScanProgress.libraryIndex || prev?.libraryIndex,
       libraryTotal: wsScanProgress.libraryTotal || prev?.libraryTotal,
       filesProcessed: wsScanProgress.filesProcessed,
       filesFound: wsScanProgress.filesFound,
       currentFile: wsScanProgress.currentFile,
+      error: wsScanProgress.error || undefined,
+      failedFiles: wsScanProgress.failedFiles,
     }));
 
     // Reset triggered flag when scan completes
@@ -160,7 +162,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
   }, [wsScanProgress]);
 
   useEffect(() => {
-    if (scanProgress?.status === 'idle') setScanCanceling(false);
+    if (scanProgress?.status === 'idle' || scanProgress?.status === 'error') setScanCanceling(false);
   }, [scanProgress?.status]);
 
   // Live updates: Refresh stats and activity when library changes (throttled)
@@ -323,14 +325,24 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
 
       {/* Scan Progress Banner */}
       {(scanTriggered || (scanProgress && scanProgress.status !== 'idle')) && (
-        <div className="p-4 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 rounded-xl">
+        <div className={`p-4 border rounded-xl ${
+          scanProgress?.status === 'error'
+            ? 'bg-red-500/10 border-red-500/30'
+            : 'bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border-cyan-500/20'
+        }`}>
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-cyan-500/20 rounded-full flex items-center justify-center">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                scanProgress?.status === 'error' ? 'bg-red-500/20' : 'bg-cyan-500/20'
+              }`}>
                 {scanProgress?.status === 'scanning' || scanTriggered ? (
                   <svg className="w-5 h-5 text-cyan-400 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : scanProgress?.status === 'error' ? (
+                  <svg className="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86l-8.82 15.28A2 2 0 003.2 22h17.6a2 2 0 001.73-2.86L13.71 3.86a2 2 0 00-3.42 0z" />
                   </svg>
                 ) : (
                   <svg className="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -344,12 +356,16 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                     ? 'Starting Scan...' 
                     : scanProgress?.status === 'scanning' 
                       ? 'Scanning Library...' 
-                      : 'Indexing...'}
+                      : scanProgress?.status === 'error'
+                        ? 'Library Scan Failed'
+                        : 'Indexing...'}
                 </div>
                 <div className="text-sm text-slate-400">
                   {scanTriggered && (!scanProgress || scanProgress.status === 'idle')
                     ? 'Waiting for worker to start...'
-                    : <>
+                    : scanProgress?.status === 'error'
+                      ? (scanProgress.error || 'The scan could not be completed.')
+                      : <>
                         {scanProgress?.mountPath ? <span>Library: <span className="text-slate-200">{scanProgress.mountPath}</span></span> : null}
                         {scanProgress?.libraryIndex && scanProgress?.libraryTotal ? (
                           <span className="ml-2">({scanProgress.libraryIndex}/{scanProgress.libraryTotal})</span>
@@ -371,7 +387,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                   {Math.round((scanProgress.filesProcessed / scanProgress.filesFound) * 100)}%
                 </div>
               )}
-              {(scanTriggered || (scanProgress && scanProgress.status !== 'idle')) && (
+              {(scanTriggered || scanProgress?.status === 'scanning' || scanProgress?.status === 'indexing') && (
                 <button
                   onClick={async () => {
                     try {
@@ -393,7 +409,9 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
           {/* Progress Bar */}
           <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
             <div 
-              className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-300"
+              className={`h-full transition-all duration-300 ${
+                scanProgress?.status === 'error' ? 'bg-red-500' : 'bg-gradient-to-r from-cyan-500 to-blue-500'
+              }`}
               style={{ width: `${scanProgress && scanProgress.filesFound > 0 ? (scanProgress.filesProcessed / scanProgress.filesFound) * 100 : 0}%` }}
             />
           </div>

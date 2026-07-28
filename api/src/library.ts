@@ -1,18 +1,33 @@
 import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
 import { audit, db, redis } from './db.js';
-import * as scans from './scanRepo.js';
 import { allowedLibrariesForUser } from './access.js';
 import { store } from './store.js';
 import { access, constants } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
+import { resolveInside } from './pathSafety.js';
+
+const LIBRARY_READ_ONLY = process.env.LIBRARY_READ_ONLY === '1';
+const LIBRARY_PROBE_TIMEOUT_MS = 3000;
 
 function safeJoinMount(mountPath: string, relPath: string) {
-  const abs = path.resolve(mountPath, relPath);
-  const base = path.resolve(mountPath);
-  if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(mountPath, relPath);
+}
+
+async function probeAccess(target: string, mode?: number): Promise<boolean | null> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      access(target, mode)
+        .then(() => true)
+        .catch(() => false),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), LIBRARY_PROBE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 type Id3Frame = { id: string; data: Buffer; flags: Buffer; txxxDescription?: string };
@@ -407,9 +422,16 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
     const qs = req.query as { force?: string };
     const force = qs.force === 'true';
-    const jobId = await scans.enqueueScan(req.user.userId, force);
+    const jobId = `scan-${Date.now()}`;
+    const listeners = await redis().publish(
+      'library:commands',
+      JSON.stringify({ command: 'rescan', by: req.user.userId, force })
+    );
+    if (listeners === 0) {
+      return reply.code(503).send({ ok: false, error: 'Library worker is unavailable' });
+    }
     await audit('scan_enqueued', { jobId, by: req.user.userId, force });
-    return { ok: true, jobId };
+    return { ok: true, jobId, message: force ? 'Force full scan triggered' : 'Rescan triggered' };
   });
 
   // Trigger immediate rescan via Redis pub/sub
@@ -419,7 +441,13 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     const forceQs = qs.force === 'true';
     const forceBody = Boolean((req.body as any)?.force);
     const force = forceQs || forceBody;
-    await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: req.user.userId, force }));
+    const listeners = await redis().publish(
+      'library:commands',
+      JSON.stringify({ command: 'rescan', by: req.user.userId, force })
+    );
+    if (listeners === 0) {
+      return reply.code(503).send({ ok: false, error: 'Library worker is unavailable' });
+    }
     await audit('rescan_triggered', { by: req.user.userId, force });
     return { ok: true, message: force ? 'Force full scan triggered' : 'Rescan triggered' };
   });
@@ -436,15 +464,15 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/admin/library/writable', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
     const r = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries order by mount_path asc');
+    if (LIBRARY_READ_ONLY) {
+      const libraries = r.rows.map((library) => ({ ...library, writable: false }));
+      return { ok: true, anyWritable: false, writableMounts: [], libraries };
+    }
 
     const results = await Promise.all(
       r.rows.map(async (l) => {
-        try {
-          await access(l.mount_path, constants.W_OK);
-          return { id: l.id, mount_path: l.mount_path, writable: true };
-        } catch {
-          return { id: l.id, mount_path: l.mount_path, writable: false };
-        }
+        const writable = await probeAccess(l.mount_path, constants.W_OK) === true;
+        return { id: l.id, mount_path: l.mount_path, writable };
       })
     );
 
@@ -455,6 +483,9 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   // Edit track metadata (MP3 only) for writable libraries
   app.post('/api/admin/tracks/:id/metadata', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    if (LIBRARY_READ_ONLY) {
+      return reply.code(403).send({ ok: false, error: 'Library writes are disabled' });
+    }
 
     const id = Number((req.params as { id: string }).id);
     if (!Number.isFinite(id)) return reply.code(400).send({ ok: false, error: 'Invalid track id' });
@@ -484,9 +515,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     // Must be writable
-    try {
-      await access(row.mount_path, constants.W_OK);
-    } catch {
+    if (await probeAccess(row.mount_path, constants.W_OK) !== true) {
       return reply.code(400).send({ ok: false, error: `Library mount is not writable: ${row.mount_path}` });
     }
 
@@ -575,8 +604,19 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
 
   app.get('/api/admin/library/scan/status', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
-    const job = await scans.getLatestJob();
-    return { ok: true, job };
+    const raw = await redis().get('scan:progress');
+    if (!raw) return { ok: true, job: null };
+    try {
+      const progress = JSON.parse(raw);
+      const state = progress.status === 'error'
+        ? 'failed'
+        : progress.status === 'scanning' || progress.status === 'indexing'
+          ? 'running'
+          : 'done';
+      return { ok: true, job: { ...progress, state } };
+    } catch {
+      return { ok: true, job: null };
+    }
   });
 
   app.get('/api/admin/libraries', async (req, reply) => {
@@ -585,25 +625,19 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const libraries = await Promise.all(
       r.rows.map(async (l) => {
-        let mounted = true;
-        try {
-          await access(l.mount_path);
-        } catch {
-          mounted = false;
-        }
+        const mounted = await probeAccess(l.mount_path);
 
         let writable = false;
-        try {
-          await access(l.mount_path, constants.W_OK);
-          writable = true;
-        } catch {}
+        if (!LIBRARY_READ_ONLY && mounted === true) {
+          writable = await probeAccess(l.mount_path, constants.W_OK) === true;
+        }
 
         return {
           id: l.id,
           mount_path: l.mount_path,
-          mounted,
+          mounted: mounted ?? undefined,
           writable,
-          read_only: mounted && !writable,
+          read_only: mounted === true ? !writable : undefined,
         };
       })
     );
@@ -624,14 +658,12 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!lib) return reply.code(404).send({ ok: false, error: 'Library not found' });
 
     const force = ((req.query as any)?.force ?? '') === 'true';
-    let mounted = true;
-    try {
-      await access(lib.mount_path);
-    } catch {
-      mounted = false;
-    }
-    if (mounted && !force) {
-      return reply.code(400).send({ ok: false, error: 'Library is mounted; pass ?force=true to delete anyway' });
+    const mounted = await probeAccess(lib.mount_path);
+    if (mounted !== false && !force) {
+      const error = mounted === true
+        ? 'Library is mounted; pass ?force=true to delete anyway'
+        : 'Library mount status could not be verified; pass ?force=true to delete anyway';
+      return reply.code(400).send({ ok: false, error });
     }
 
     const cntR = await db().query<{ count: number }>('select count(*)::int as count from tracks where library_id=$1 and deleted_at is null', [id]);

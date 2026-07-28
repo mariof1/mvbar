@@ -659,13 +659,15 @@ export async function prefetchLyrics(token: string, trackId: number) {
 // Scan progress
 export type ScanProgress = {
   ok: boolean;
-  status: 'idle' | 'scanning' | 'indexing' | 'unknown';
+  status: 'idle' | 'scanning' | 'indexing' | 'error' | 'unknown';
   mountPath?: string;
   libraryIndex?: number;
   libraryTotal?: number;
   filesFound: number;
   filesProcessed: number;
   currentFile?: string;
+  error?: string;
+  failedFiles?: number;
   queueSize?: number;
   startedAt?: number;
 };

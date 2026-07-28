@@ -1,15 +1,13 @@
 import { spawn } from 'node:child_process';
-import { mkdir, rename, rm } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from './db.js';
+import { resolveInside } from './pathSafety.js';
 
 const HLS_DIR = process.env.HLS_DIR ?? '/hls';
 
 function safeJoinMount(mountPath: string, relPath: string) {
-  const abs = path.resolve(mountPath, relPath);
-  const base = path.resolve(mountPath);
-  if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(mountPath, relPath);
 }
 
 function run(cmd: string, args: string[]) {
@@ -36,43 +34,60 @@ export async function transcodeTrackToHls(trackId: number, cacheKey: string) {
   const input = safeJoinMount(row.mount_path, row.path);
 
   const outDir = path.join(HLS_DIR, cacheKey);
+  try {
+    const entries = await readdir(HLS_DIR, { withFileTypes: true });
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory() && entry.name.startsWith(`${cacheKey}.tmp_`))
+        .map((entry) => rm(path.join(HLS_DIR, entry.name), { recursive: true, force: true }))
+    );
+  } catch {
+    // The HLS root may not exist on the first request.
+  }
+
   const tmpDir = path.join(HLS_DIR, `${cacheKey}.tmp_${Date.now()}`);
   await mkdir(tmpDir, { recursive: true });
 
   const manifest = path.join(tmpDir, 'index.m3u8');
   const seg = path.join(tmpDir, 'seg_%05d.ts');
 
-  // Simple VOD HLS audio (AAC). Works on iOS/Safari; web clients can later add hls.js.
-  await run('ffmpeg', [
-    '-hide_banner',
-    '-loglevel',
-    'error',
-    '-i',
-    input,
-    '-vn',
-    '-c:a',
-    'aac',
-    '-b:a',
-    '192k',
-    '-f',
-    'hls',
-    '-hls_time',
-    '6',
-    '-hls_playlist_type',
-    'vod',
-    '-hls_segment_filename',
-    seg,
-    manifest
-  ]);
-
-  // Atomic publish.
+  let published = false;
   try {
-    await rename(tmpDir, outDir);
-  } catch {
-    // outDir already exists — remove it and retry
-    try { await rm(outDir, { recursive: true, force: true }); } catch {}
-    await rename(tmpDir, outDir);
-  }
+    // Simple VOD HLS audio (AAC). Works on iOS/Safari; web clients can later add hls.js.
+    await run('ffmpeg', [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-i',
+      input,
+      '-vn',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '192k',
+      '-f',
+      'hls',
+      '-hls_time',
+      '6',
+      '-hls_playlist_type',
+      'vod',
+      '-hls_segment_filename',
+      seg,
+      manifest
+    ]);
 
-  return cacheKey;
+    // Atomic publish.
+    try {
+      await rename(tmpDir, outDir);
+    } catch {
+      try { await rm(outDir, { recursive: true, force: true }); } catch {}
+      await rename(tmpDir, outDir);
+    }
+    published = true;
+    return cacheKey;
+  } finally {
+    if (!published) {
+      try { await rm(tmpDir, { recursive: true, force: true }); } catch {}
+    }
+  }
 }

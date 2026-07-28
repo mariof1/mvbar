@@ -2,7 +2,36 @@ import { meili } from './meili.js';
 import { db } from './db.js';
 import { asciiFold, stripPunctuation } from './tagRules.js';
 
+const INDEX_TASK_TIMEOUT_MS = Math.max(5000, Number(process.env.MEILI_TASK_TIMEOUT_MS ?? '300000'));
+// Bump when rowToDoc or indexed search fields change so startup rebuilds stale documents.
+export const TRACK_INDEX_VERSION = 1;
+
+function errorCode(error: unknown) {
+  return typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code ?? '')
+    : '';
+}
+
+async function waitForTask(
+  client: ReturnType<typeof meili>,
+  task: { taskUid: number },
+  allowedFailureCodes: string[] = []
+) {
+  const completed = await client.tasks.waitForTask(task.taskUid, {
+    timeout: INDEX_TASK_TIMEOUT_MS,
+    interval: 100,
+  });
+  if (completed.status === 'succeeded') return completed;
+
+  const code = errorCode(completed.error);
+  if (allowedFailureCodes.includes(code)) return completed;
+
+  const message = completed.error?.message ?? `Meilisearch task ${completed.uid} ${completed.status}`;
+  throw new Error(message);
+}
+
 export type TrackDoc = {
+  index_version: number;
   id: number;
   library_id: number;
   path: string;
@@ -36,13 +65,14 @@ export type TrackDoc = {
 export async function ensureTracksIndex() {
   const client = meili();
   try {
-    await client.createIndex('tracks', { primaryKey: 'id' });
-  } catch {
-    // ignore if exists
+    const task = await client.createIndex('tracks', { primaryKey: 'id' });
+    await waitForTask(client, task, ['index_already_exists']);
+  } catch (error) {
+    if (errorCode(error) !== 'index_already_exists') throw error;
   }
 
   const index = client.index('tracks');
-  await index.updateSettings({
+  const settingsTask = await index.updateSettings({
     searchableAttributes: [
       'title', 'artist', 'album_artist', 'album', 'genre', 'country', 'path',
       'title_ascii', 'artist_ascii', 'album_artist_ascii', 'album_ascii',
@@ -50,7 +80,7 @@ export async function ensureTracksIndex() {
       'composer', 'mood'
     ],
     displayedAttributes: [
-      'id', 'library_id', 'path', 'ext', 'title', 'artist', 'album_artist', 'album',
+      'index_version', 'id', 'library_id', 'path', 'ext', 'title', 'artist', 'album_artist', 'album',
       'duration_ms', 'genre', 'country', 'year', 'language', 'composer', 'mood', 'bpm', 'initial_key'
     ],
     filterableAttributes: [
@@ -68,12 +98,13 @@ export async function ensureTracksIndex() {
     // The *_clean fields already strip punctuation, so queries still match.
     pagination: { maxTotalHits: 5000 },
   });
+  await waitForTask(client, settingsTask);
 }
 
 const TRACK_COLS = `id, library_id, path, ext, title, artist, album_artist, album, duration_ms, genre, country, year, language, composer, mood, bpm, initial_key`;
 
 type TrackRow = {
-  id: number; library_id: number; path: string; ext: string;
+  id: number | string; library_id: number | string; path: string; ext: string;
   title: string | null; artist: string | null; album_artist: string | null;
   album: string | null; duration_ms: number | null; genre: string | null;
   country: string | null; year: number | null; language: string | null;
@@ -81,9 +112,12 @@ type TrackRow = {
   initial_key: string | null;
 };
 
-function rowToDoc(row: TrackRow): TrackDoc {
+export function rowToDoc(row: TrackRow): TrackDoc {
   return {
     ...row,
+    index_version: TRACK_INDEX_VERSION,
+    id: Number(row.id),
+    library_id: Number(row.library_id),
     title_ascii: row.title ? asciiFold(row.title) : null,
     artist_ascii: row.artist ? asciiFold(row.artist) : null,
     album_artist_ascii: row.album_artist ? asciiFold(row.album_artist) : null,
@@ -114,18 +148,67 @@ export async function indexChangedTracks(
     );
     const docs = r.rows.map(rowToDoc);
     if (docs.length > 0) {
-      await index.addDocuments(docs);
+      const batchSize = 5000;
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const task = await index.addDocuments(docs.slice(i, i + batchSize));
+        await waitForTask(client, task);
+      }
       indexed = docs.length;
     }
   }
 
   let deleted = 0;
   if (deletedIds.length > 0) {
-    await index.deleteDocuments(deletedIds);
+    const batchSize = 5000;
+    for (let i = 0; i < deletedIds.length; i += batchSize) {
+      const task = await index.deleteDocuments(deletedIds.slice(i, i + batchSize));
+      await waitForTask(client, task);
+    }
     deleted = deletedIds.length;
   }
 
   return { indexed, deleted };
+}
+
+async function getIndexedTrackState(index: ReturnType<ReturnType<typeof meili>['index']>) {
+  const ids = new Set<number>();
+  let currentVersion = true;
+  let offset = 0;
+  for (;;) {
+    const batch = await index.getDocuments({ limit: 1000, offset, fields: ['id', 'index_version'] });
+    for (const doc of batch.results) {
+      ids.add(Number(doc.id));
+      if (Number(doc.index_version) !== TRACK_INDEX_VERSION) currentVersion = false;
+    }
+    if (batch.results.length < 1000) break;
+    offset += 1000;
+  }
+  return { ids, currentVersion };
+}
+
+export async function getTrackIndexStatus() {
+  const index = meili().index('tracks');
+  const [databaseResult, indexStats] = await Promise.all([
+    db().query<{ count: number }>('SELECT count(*)::int AS count FROM active_tracks'),
+    index.getStats(),
+  ]);
+  const database = databaseResult.rows[0]?.count ?? 0;
+  const indexed = indexStats.numberOfDocuments;
+  if (database !== indexed) {
+    return { database, index: indexed, consistent: false };
+  }
+
+  const [databaseIdsResult, indexedState] = await Promise.all([
+    db().query<{ id: number }>('SELECT id FROM active_tracks'),
+    getIndexedTrackState(index),
+  ]);
+  const consistent = indexedState.currentVersion
+    && databaseIdsResult.rows.every((row) => indexedState.ids.has(Number(row.id)));
+  return {
+    database,
+    index: indexed,
+    consistent,
+  };
 }
 
 /**
@@ -141,32 +224,26 @@ export async function indexAllTracks() {
   const client = meili();
   const index = client.index('tracks');
   if (docs.length === 0) {
-    await index.deleteAllDocuments();
+    const task = await index.deleteAllDocuments();
+    await waitForTask(client, task);
     return { indexed: 0 };
   }
 
   // Upsert in batches so Meilisearch doesn't choke on huge payloads
   const BATCH = 5000;
   for (let i = 0; i < docs.length; i += BATCH) {
-    await index.addDocuments(docs.slice(i, i + BATCH));
+    const task = await index.addDocuments(docs.slice(i, i + BATCH));
+    await waitForTask(client, task);
   }
 
-  // Prune stale documents only when the indexed count exceeds what the DB has.
-  const stats = await index.getStats();
-  if (stats.numberOfDocuments > docs.length) {
-    const currentIds = new Set(docs.map(d => d.id));
-    const staleIds: number[] = [];
-    let offset = 0;
-    for (;;) {
-      const batch = await index.getDocuments({ limit: 1000, offset, fields: ['id'] });
-      for (const doc of batch.results) {
-        if (!currentIds.has(doc.id as number)) staleIds.push(doc.id as number);
-      }
-      if (batch.results.length < 1000) break;
-      offset += 1000;
-    }
-    if (staleIds.length > 0) {
-      await index.deleteDocuments(staleIds);
+  const currentIds = new Set(docs.map(d => d.id));
+  const indexedState = await getIndexedTrackState(index);
+  const staleIds = [...indexedState.ids].filter((id) => !currentIds.has(id));
+  if (staleIds.length > 0) {
+    const batchSize = 5000;
+    for (let i = 0; i < staleIds.length; i += batchSize) {
+      const task = await index.deleteDocuments(staleIds.slice(i, i + batchSize));
+      await waitForTask(client, task);
     }
   }
 

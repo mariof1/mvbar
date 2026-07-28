@@ -390,9 +390,19 @@ export async function initDb() {
     end;
   end $$;`);
 
-  // Migrate to mount-based libraries (default: /music)
-  await pool.query("insert into libraries(mount_path) values ('/music') on conflict (mount_path) do nothing");
-  await pool.query("update tracks set library_id = (select id from libraries where mount_path='/music') where library_id is null");
+  // Migrate to mount-based libraries using the first configured music root.
+  const defaultLibraryMount = (process.env.MUSIC_DIRS ?? process.env.MUSIC_DIR ?? '/music')
+    .split(',')
+    .map((value) => value.trim())
+    .find(Boolean) ?? '/music';
+  await pool.query(
+    'insert into libraries(mount_path) values ($1) on conflict (mount_path) do nothing',
+    [defaultLibraryMount]
+  );
+  await pool.query(
+    'update tracks set library_id = (select id from libraries where mount_path=$1) where library_id is null',
+    [defaultLibraryMount]
+  );
 
   await pool.query(`do $$
   begin
@@ -411,9 +421,14 @@ export async function initDb() {
     end;
   end $$;`);
 
-  // Ensure existing non-admin users have access to default library
+  // Ensure existing non-admin users have access to the configured default library.
   await pool.query(
-    "insert into user_libraries(user_id, library_id) select u.id, (select id from libraries where mount_path='/music') from users u where u.role='user' on conflict do nothing"
+    `insert into user_libraries(user_id, library_id)
+     select u.id, (select id from libraries where mount_path=$1)
+     from users u
+     where u.role='user'
+     on conflict do nothing`,
+    [defaultLibraryMount]
   );
 
   // Add missing track columns used by views/queries

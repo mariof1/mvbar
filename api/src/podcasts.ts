@@ -9,6 +9,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { resolveInside } from './pathSafety.js';
 import { db } from './db.js';
 import { XMLParser } from 'fast-xml-parser';
 import crypto from 'crypto';
@@ -767,10 +768,7 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
   // ========================================================================
   
   function safeJoinPodcastArt(relPath: string) {
-    const abs = path.resolve(PODCAST_ART_DIR, relPath);
-    const base = path.resolve(PODCAST_ART_DIR);
-    if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-    return abs;
+    return resolveInside(PODCAST_ART_DIR, relPath);
   }
 
   // Canonical endpoint for cached podcast art (stable URL so browser caches once per hash)

@@ -8,6 +8,7 @@ import { runFastScan } from './fastScan.js';
 import { runTempoBackfillBatch } from './tempoBackfill.js';
 import { startPodcastRefresh } from './podcastRefresh.js';
 import { scanAudiobooks } from './audiobookScanner.js';
+import { ensureTracksIndex, getTrackIndexStatus, indexAllTracks } from './indexer.js';
 import logger from './logger.js';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
@@ -31,6 +32,10 @@ const tempoBackfillIntervalMs = parseInt(process.env.TEMPO_BACKFILL_INTERVAL_MS 
 logger.success('worker', 'Started', { musicDirs, useFastScan, rescanIntervalMs });
 
 await initDb();
+const recoveredTranscodes = await transcodeJobs.recoverInterruptedTranscodeJobs();
+if (recoveredTranscodes > 0) {
+  logger.info('transcode', `Recovered ${recoveredTranscodes} interrupted job${recoveredTranscodes === 1 ? '' : 's'}`);
+}
 
 // Ensure libraries exist in DB so we can link tracks
 for (const dir of musicDirs) {
@@ -42,9 +47,31 @@ for (const dir of musicDirs) {
   );
 }
 
+try {
+  await ensureTracksIndex();
+  let searchStatus = await getTrackIndexStatus();
+  if (!searchStatus.consistent) {
+    logger.info(
+      'search',
+      `Reconciling search index at startup (${searchStatus.index} indexed, ${searchStatus.database} active)`
+    );
+    await indexAllTracks();
+    searchStatus = await getTrackIndexStatus();
+  }
+  if (!searchStatus.consistent) {
+    throw new Error(
+      `Search index startup check failed (${searchStatus.index} indexed, ${searchStatus.database} active)`
+    );
+  }
+  logger.success('search', `Search index ready (${searchStatus.index} documents)`);
+} catch (error) {
+  logger.warn('search', `Startup search reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+}
+
 // Periodic rescan function - more reliable than real-time watching on NFS
 let scanInProgress = false;
 let cancelRequested = false;
+let pendingRescanForce: boolean | null = null;
 
 // Listen for rescan/cancel commands from API (must be active during long scans)
 const subscriber = new Redis(REDIS_URL);
@@ -57,8 +84,14 @@ subscriber.on('message', async (channel, message) => {
   try {
     const cmd = JSON.parse(message);
     if (cmd.command === 'rescan') {
-      logger.info('scan', `Manual rescan triggered by ${cmd.by || 'unknown'}${cmd.force ? ' (FORCE FULL)' : ''}`);
-      periodicRescan(cmd.force === true);
+      const force = cmd.force === true;
+      if (scanInProgress) {
+        pendingRescanForce = pendingRescanForce === true || force;
+        logger.info('scan', `Manual rescan queued by ${cmd.by || 'unknown'}${force ? ' (FORCE FULL)' : ''}`);
+      } else {
+        logger.info('scan', `Manual rescan triggered by ${cmd.by || 'unknown'}${force ? ' (FORCE FULL)' : ''}`);
+        void periodicRescan(force);
+      }
     } else if (cmd.command === 'cancel_scan') {
       cancelRequested = true;
       logger.info('scan', `Scan cancel requested by ${cmd.by || 'unknown'}`);
@@ -105,11 +138,32 @@ async function periodicRescan(force: boolean = false) {
       }
     }
   } catch (e) {
-    logger.error('scan', `Periodic scan failed: ${e instanceof Error ? e.message : String(e)}`);
+    const message = e instanceof Error ? e.message : String(e);
+    logger.error('scan', `Periodic scan failed: ${message}`);
+    let previousProgress: Record<string, unknown> = {};
+    try {
+      const raw = await publisher.get('scan:progress');
+      if (raw) previousProgress = JSON.parse(raw);
+    } catch { /* ignore malformed or unavailable progress state */ }
+    const progress = {
+      ...previousProgress,
+      status: 'error',
+      currentFile: 'Scan failed',
+      error: message,
+    };
+    try {
+      await publisher.set('scan:progress', JSON.stringify(progress));
+      await publisher.publish('library:updates', JSON.stringify({ event: 'scan:progress', ...progress, ts: Date.now() }));
+    } catch { /* ignore reporting failures */ }
   } finally {
+    const queuedForce = pendingRescanForce;
+    pendingRescanForce = null;
     scanInProgress = false;
     cancelRequested = false;
     try { publisher.disconnect(); } catch { /* */ }
+    if (queuedForce !== null) {
+      setImmediate(() => void periodicRescan(queuedForce));
+    }
   }
 }
 

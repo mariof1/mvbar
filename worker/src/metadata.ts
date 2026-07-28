@@ -130,7 +130,7 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const album = sanitize(m.common.album);
   let albumartist = sanitize(m.common.albumartist);
   let durationMs = m.format.duration ? Math.round(m.format.duration * 1000) : null;
-  if (!durationMs && needDuration) durationMs = await ffprobeDurationMs(filePath);
+  if (!durationMs) durationMs = await ffprobeDurationMs(filePath);
   const year = m.common.year ?? null;
   
   // Track and disc numbers
@@ -145,7 +145,8 @@ export async function readTags(filePath: string): Promise<TagResult> {
   
   // BPM
   const bpmRaw = commonAny.bpm ?? nativeValues(m, ['tbpm', 'TBPM', 'bpm', 'BPM'])[0];
-  const bpm = bpmRaw ? Math.round(Number(bpmRaw)) : null;
+  const bpmNumber = Number(bpmRaw);
+  const bpm = Number.isFinite(bpmNumber) && bpmNumber > 0 ? Math.round(bpmNumber) : null;
   
   // Initial key (musical key)
   const initialKey = sanitize(nativeValues(m, ['tkey', 'TKEY', 'key', 'initialkey', 'INITIALKEY'])[0] ?? commonAny.key);

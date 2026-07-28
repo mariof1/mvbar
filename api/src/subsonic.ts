@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { resolveInside } from './pathSafety.js';
 import { audit, db, redis } from './db.js';
 import logger from './logger.js';
 import { allowedLibrariesForUser } from './access.js';
@@ -181,10 +182,7 @@ function sendResponse(reply: FastifyReply, data: SubsonicResponse, format = 'xml
 }
 
 function safeJoin(baseDir: string, relPath: string) {
-  const abs = path.resolve(baseDir, relPath);
-  const base = path.resolve(baseDir);
-  if (abs !== base && !abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(baseDir, relPath, true);
 }
 
 function mimeFromExt(ext: string | null | undefined) {

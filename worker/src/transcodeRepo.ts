@@ -12,6 +12,21 @@ function isMissingTranscodeJobsTable(e: unknown) {
   return msg.includes('relation "transcode_jobs" does not exist');
 }
 
+export async function recoverInterruptedTranscodeJobs() {
+  try {
+    const result = await db().query<{ id: number }>(
+      `update transcode_jobs
+       set state='queued', started_at=null, finished_at=null, error=null
+       where state='running'
+       returning id`
+    );
+    return result.rowCount ?? 0;
+  } catch (e) {
+    if (isMissingTranscodeJobsTable(e)) return 0;
+    throw e;
+  }
+}
+
 export async function claimNextTranscodeJob() {
   try {
     const r = await db().query<TranscodeJob>(

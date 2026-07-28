@@ -5,14 +5,12 @@ import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from './db.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
+import { resolveInside } from './pathSafety.js';
 
 const HLS_DIR = process.env.HLS_DIR ?? '/hls';
 
 function safeJoin(baseDir: string, rel: string) {
-  const abs = path.resolve(baseDir, rel);
-  const base = path.resolve(baseDir);
-  if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(baseDir, rel);
 }
 
 async function getTrackRow(trackId: number) {

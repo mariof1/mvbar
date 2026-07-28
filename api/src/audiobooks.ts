@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { resolveInside } from './pathSafety.js';
 import { db } from './db.js';
 
 const AUDIOBOOK_ART_DIR = process.env.AUDIOBOOK_ART_DIR ?? '/data/cache/audiobook-art';
@@ -280,9 +281,12 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
     const row = r.rows[0];
     if (!row?.cover_path) return reply.code(404).send({ ok: false });
 
-    const base = path.resolve(AUDIOBOOK_ART_DIR);
-    const abs = path.resolve(AUDIOBOOK_ART_DIR, row.cover_path);
-    if (!abs.startsWith(base + path.sep)) return reply.code(400).send({ ok: false });
+    let abs: string;
+    try {
+      abs = resolveInside(AUDIOBOOK_ART_DIR, row.cover_path);
+    } catch {
+      return reply.code(400).send({ ok: false });
+    }
 
     let st;
     try {

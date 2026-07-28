@@ -135,7 +135,7 @@ await app.register(preferencesPlugin);
 await app.register(deviceLogsPlugin);
 await app.register(telegramPlugin);
 
-const host = '0.0.0.0';
+const host = process.env.HOST ?? '0.0.0.0';
 await app.listen({ port: config.port, host });
 
 // Start avatar sync scheduler for Google users

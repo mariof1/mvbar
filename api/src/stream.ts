@@ -8,21 +8,16 @@ import { db } from './db.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import { config } from './config.js';
 import type { Role } from './store.js';
+import { resolveInside } from './pathSafety.js';
 
 const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
 
 function safeJoinMount(mountPath: string, relPath: string) {
-  const abs = path.resolve(mountPath, relPath);
-  const base = path.resolve(mountPath);
-  if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(mountPath, relPath);
 }
 
 function safeJoinArt(relPath: string) {
-  const abs = path.resolve(ART_DIR, relPath);
-  const base = path.resolve(ART_DIR);
-  if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(ART_DIR, relPath);
 }
 
 type TrackStreamRow = {

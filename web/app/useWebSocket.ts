@@ -65,6 +65,8 @@ type ScanProgressUpdate = {
     filesFound?: number;
     filesProcessed?: number;
     currentFile?: string;
+    error?: string;
+    failedFiles?: number;
     durationMs?: number;
     newFiles?: number;
     skipped?: number;
@@ -172,6 +174,8 @@ interface ScanProgressStore {
   filesFound: number;
   filesProcessed: number;
   currentFile: string;
+  error: string;
+  failedFiles: number;
   scanning: boolean;
   setProgress: (data: ScanProgressUpdate['data']) => void;
 }
@@ -184,6 +188,8 @@ export const useScanProgress = create<ScanProgressStore>((set) => ({
   filesFound: 0,
   filesProcessed: 0,
   currentFile: '',
+  error: '',
+  failedFiles: 0,
   scanning: false,
   setProgress: (data) => set({
     status: data.status ?? '',
@@ -193,6 +199,8 @@ export const useScanProgress = create<ScanProgressStore>((set) => ({
     filesFound: data.filesFound ?? 0,
     filesProcessed: data.filesProcessed ?? 0,
     currentFile: data.currentFile ?? '',
+    error: data.error ?? '',
+    failedFiles: data.failedFiles ?? 0,
     scanning: data.status === 'scanning',
   }),
 }));
