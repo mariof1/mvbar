@@ -255,7 +255,7 @@ export async function upsertTrack(params: {
       // Batch insert artists - first insert all artist names at once
       if (artistsToInsert.length > 0) {
         const uniqueNames = [...new Set(artistsToInsert.map(a => a.name))];
-        const asciiNames = uniqueNames.map(name => asciiFold(name) || null);
+        const asciiNames = uniqueNames.map(name => asciiFold(name));
         // Batch upsert all artists and get their IDs
         const artistIdRes = await client.query<{ id: number; name: string }>(
           `insert into artists(name, ascii_name)

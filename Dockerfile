@@ -69,6 +69,7 @@ RUN apk add --no-cache \
 
 ENV NODE_ENV=production \
     TZ=Europe/London \
+    UV_THREADPOOL_SIZE=32 \
     API_PORT=3001 \
     WEB_PORT=3000 \
     MEILI_PORT=7700 \

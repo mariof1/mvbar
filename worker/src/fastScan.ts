@@ -530,7 +530,7 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
          ON CONFLICT (name) DO UPDATE
          SET ascii_name = EXCLUDED.ascii_name
          RETURNING id, name`,
-        [artistNames, artistNames.map((name) => asciiFold(name) || null)]
+        [artistNames, artistNames.map((name) => asciiFold(name))]
       );
       for (const artist of artistResult.rows) artistIdByName.set(artist.name, Number(artist.id));
     }
@@ -634,7 +634,7 @@ async function refreshArtistAsciiNames(): Promise<number> {
     'SELECT id, name, ascii_name FROM artists WHERE name IS NOT NULL'
   );
   const changed = result.rows
-    .map((artist) => ({ id: artist.id, asciiName: asciiFold(artist.name) || null }))
+    .map((artist) => ({ id: artist.id, asciiName: asciiFold(artist.name) }))
     .filter((artist, index) => artist.asciiName !== result.rows[index].ascii_name);
   if (changed.length === 0) return 0;
 

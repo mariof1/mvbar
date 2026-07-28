@@ -674,19 +674,23 @@ export async function initDb() {
     try {
       let totalUpdated = 0;
       while (true) {
-        const artistsToUpdate = await dbPool.query<{ id: number; name: string }>(
+        const artistsToUpdate = await dbPool.query<{ id: number | string; name: string }>(
           `SELECT id, name FROM artists WHERE ascii_name IS NULL AND name IS NOT NULL LIMIT 500`
         );
         if (artistsToUpdate.rows.length === 0) break;
         if (totalUpdated === 0) {
           console.log(`[db] Populating ascii_name for artists (background)...`);
         }
-        for (const artist of artistsToUpdate.rows) {
-          const ascii = asciiFold(artist.name);
-          if (ascii) {
-            await dbPool.query('UPDATE artists SET ascii_name = $1 WHERE id = $2', [ascii, artist.id]);
-          }
-        }
+        await dbPool.query(
+          `UPDATE artists AS artist
+              SET ascii_name = incoming.ascii_name
+             FROM unnest($1::bigint[], $2::text[]) AS incoming(id, ascii_name)
+            WHERE artist.id = incoming.id`,
+          [
+            artistsToUpdate.rows.map((artist) => artist.id),
+            artistsToUpdate.rows.map((artist) => asciiFold(artist.name)),
+          ]
+        );
         totalUpdated += artistsToUpdate.rows.length;
       }
       if (totalUpdated > 0) {
