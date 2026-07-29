@@ -10,11 +10,12 @@ import {
 } from './apiClient';
 
 type ActivityFilter = 'all' | 'active' | 'no-plays';
+type ListeningTab = 'music' | 'podcasts' | 'audiobooks';
 
 const emptyOverview: AdminUserAuditOverview = {
   ok: true,
   users: [],
-  totals: { users: 0, active7d: 0, plays7d: 0, estimatedListeningMs: 0 },
+  totals: { users: 0, active7d: 0, activity7d: 0, estimatedListeningMs: 0 },
 };
 
 function dateTime(value: string | null) {
@@ -53,6 +54,10 @@ function longDuration(value: number) {
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+function countLabel(value: number, singular: string, plural = `${singular}s`) {
+  return `${value.toLocaleString()} ${value === 1 ? singular : plural}`;
 }
 
 function mostRecentActivity(user: AdminUserAuditSummary) {
@@ -107,6 +112,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
   const [detail, setDetail] = useState<AdminUserAuditDetail | null>(null);
   const [query, setQuery] = useState('');
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
+  const [listeningTab, setListeningTab] = useState<ListeningTab>('music');
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [moreLoading, setMoreLoading] = useState(false);
@@ -165,7 +171,9 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     return overview.users.filter((user) => {
       if (normalized && !user.email.toLowerCase().includes(normalized)) return false;
-      if (activityFilter === 'no-plays') return user.totalPlays === 0;
+      if (activityFilter === 'no-plays') {
+        return user.totalPlays + user.podcastEpisodeCount + user.audiobookCount === 0;
+      }
       if (activityFilter === 'active') {
         const activity = mostRecentActivity(user);
         return activity ? new Date(activity).getTime() >= sevenDaysAgo : false;
@@ -175,7 +183,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
   }, [activityFilter, overview.users, query]);
 
   const selectedUser = overview.users.find((user) => user.id === selectedUserId) ?? null;
-  const maxDailyPlays = Math.max(1, ...(detail?.dailyPlays.map((day) => day.count) ?? [0]));
+  const maxDailyActivity = Math.max(1, ...(detail?.dailyActivity.map((day) => day.count) ?? [0]));
 
   async function loadMoreHistory() {
     if (!detail || moreLoading || detail.history.length >= detail.historyTotal) return;
@@ -223,12 +231,12 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
         <Metric label="Users" value={overview.totals.users.toLocaleString()} accent="bg-cyan-400" />
         <Metric label="Active in 7 days" value={overview.totals.active7d.toLocaleString()} accent="bg-emerald-400" />
-        <Metric label="Plays in 7 days" value={overview.totals.plays7d.toLocaleString()} accent="bg-fuchsia-400" />
+        <Metric label="Activity in 7 days" value={overview.totals.activity7d.toLocaleString()} accent="bg-fuchsia-400" />
         <Metric
           label="Estimated listening"
           value={longDuration(overview.totals.estimatedListeningMs)}
           accent="bg-amber-400"
-          title="Sum of full track durations represented in listening history"
+          title="Music durations plus saved podcast and audiobook progress"
         />
       </div>
 
@@ -250,7 +258,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
               {([
                 ['all', 'All'],
                 ['active', 'Active'],
-                ['no-plays', 'No plays'],
+                ['no-plays', 'No listening'],
               ] as Array<[ActivityFilter, string]>).map(([value, label]) => (
                 <button
                   key={value}
@@ -296,8 +304,8 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <div className="text-sm font-medium text-slate-200">{user.plays7d}</div>
-                    <div className="text-[10px] text-slate-500">7d plays</div>
+                    <div className="text-sm font-medium text-slate-200">{user.activity7d}</div>
+                    <div className="text-[10px] text-slate-500">7d activity</div>
                   </div>
                 </button>
               );
@@ -324,6 +332,13 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                     }`}>
                       {detail.user.role}
                     </span>
+                    <span className="px-2 py-0.5 rounded text-xs bg-cyan-500/10 text-cyan-300">
+                      {detail.user.authProvider === 'google'
+                        ? 'Google'
+                        : detail.user.authProvider === 'google_password'
+                          ? 'Google + password'
+                          : 'Password'}
+                    </span>
                   </div>
                   <div className="text-xs text-slate-500 mt-1">Joined {dateTime(detail.user.createdAt)}</div>
                 </div>
@@ -332,21 +347,27 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                   <div className="text-sm text-slate-200 mt-1">{dateTime(detail.user.lastActiveAt)}</div>
                   {detail.user.lastActiveIp && <div className="text-xs font-mono text-slate-500 mt-1">{detail.user.lastActiveIp}</div>}
                   <div className="text-xs text-slate-500 mt-2">
-                    {detail.user.lastLoginAt ? `Signed in ${dateTime(detail.user.lastLoginAt)}` : 'No sign-in recorded'}
+                    {detail.user.lastLoginAt
+                      ? `Signed in ${dateTime(detail.user.lastLoginAt)}`
+                      : detail.user.authProvider === 'google'
+                        ? 'Google account; no sign-in recorded'
+                        : 'No sign-in recorded'}
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 divide-slate-800 border-b border-slate-700/50">
+              <div className="grid grid-cols-2 lg:grid-cols-3 divide-x divide-y divide-slate-800 border-b border-slate-700/50">
                 {[
-                  ['Last listened', relativeTime(detail.user.lastPlayedAt)],
-                  ['Total plays', detail.user.totalPlays.toLocaleString()],
+                  ['Last listened', relativeTime(detail.user.lastListenedAt)],
+                  ['Music', countLabel(detail.user.totalPlays, 'play')],
+                  ['Podcasts', countLabel(detail.user.podcastEpisodeCount, 'episode')],
+                  ['Audiobooks', countLabel(detail.user.audiobookCount, 'book')],
                   ['Estimated time', longDuration(detail.user.estimatedListeningMs)],
                   ['Saved', `${detail.user.favoriteCount} loved / ${detail.user.playlistCount} lists`],
                 ].map(([label, value]) => (
                   <div key={label} className="px-4 py-3 min-w-0">
                     <div className="text-xs text-slate-500">{label}</div>
-                    <div className="text-sm font-medium text-white mt-1 truncate" title={label === 'Estimated time' ? 'Sum of full track durations represented in history' : undefined}>
+                    <div className="text-sm font-medium text-white mt-1 truncate" title={label === 'Estimated time' ? 'Music durations plus saved podcast and audiobook progress' : undefined}>
                       {value}
                     </div>
                   </div>
@@ -359,11 +380,11 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                   <span className="text-xs text-slate-500">14 days</span>
                 </div>
                 <div className="h-24 flex items-end gap-1.5">
-                  {detail.dailyPlays.map((day) => (
-                    <div key={day.date} className="h-full flex-1 min-w-0 flex flex-col items-center justify-end gap-1" title={`${day.date}: ${day.count} plays`}>
+                  {detail.dailyActivity.map((day) => (
+                    <div key={day.date} className="h-full flex-1 min-w-0 flex flex-col items-center justify-end gap-1" title={`${day.date}: ${day.count} activities`}>
                       <div
                         className={`w-full max-w-7 rounded-t-sm ${day.count > 0 ? 'bg-cyan-400/80' : 'bg-slate-800'}`}
-                        style={{ height: `${Math.max(day.count > 0 ? 8 : 3, (day.count / maxDailyPlays) * 70)}px` }}
+                        style={{ height: `${Math.max(day.count > 0 ? 8 : 3, (day.count / maxDailyActivity) * 70)}px` }}
                       />
                       <span className="text-[9px] text-slate-600">
                         {new Intl.DateTimeFormat(undefined, { weekday: 'narrow' }).format(new Date(`${day.date}T12:00:00`))}
@@ -375,12 +396,30 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
 
               <div className="grid lg:grid-cols-[minmax(0,1.5fr)_minmax(220px,0.7fr)]">
                 <div className="min-w-0 lg:border-r border-slate-700/50">
-                  <div className="px-4 sm:px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+                  <div className="px-4 sm:px-5 py-3 border-b border-slate-800 space-y-3">
                     <h4 className="text-sm font-medium text-slate-200">Listening history</h4>
-                    <span className="text-xs text-slate-500">{detail.historyTotal.toLocaleString()} plays</span>
+                    <div className="grid grid-cols-3 p-1 bg-slate-950/50 rounded-lg" role="tablist" aria-label="Listening history type">
+                      {([
+                        ['music', 'Music', detail.historyTotal],
+                        ['podcasts', 'Podcasts', detail.user.podcastEpisodeCount],
+                        ['audiobooks', 'Audiobooks', detail.user.audiobookCount],
+                      ] as Array<[ListeningTab, string, number]>).map(([value, label, count]) => (
+                        <button
+                          key={value}
+                          role="tab"
+                          aria-selected={listeningTab === value}
+                          onClick={() => setListeningTab(value)}
+                          className={`min-w-0 h-9 px-2 rounded-md text-xs font-medium truncate ${
+                            listeningTab === value ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {label} <span className="text-[10px] opacity-70">{count.toLocaleString()}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <div className="divide-y divide-slate-800">
-                    {detail.history.map((item) => (
+                    {listeningTab === 'music' && detail.history.map((item) => (
                       <div key={item.historyId} className="px-4 sm:px-5 py-3 flex items-center gap-3">
                         <img
                           src={`/api/library/tracks/${item.trackId}/art`}
@@ -402,11 +441,63 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                         </div>
                       </div>
                     ))}
-                    {detail.history.length === 0 && (
-                      <div className="py-10 text-center text-sm text-slate-500">No listening history</div>
+                    {listeningTab === 'podcasts' && detail.podcastHistory.map((item) => (
+                      <div key={item.episodeId} className="px-4 sm:px-5 py-3 flex items-center gap-3">
+                        <img
+                          src={`/api/podcasts/episodes/${item.episodeId}/art`}
+                          alt=""
+                          className="w-10 h-10 rounded object-cover bg-slate-800 shrink-0"
+                          onError={(event) => {
+                            event.currentTarget.style.visibility = 'hidden';
+                          }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-white truncate">{item.episodeTitle}</div>
+                          <div className="text-xs text-slate-500 truncate mt-0.5">{item.podcastTitle}</div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-xs text-slate-400">{relativeTime(item.updatedAt)}</div>
+                          <div className={`text-[10px] mt-1 ${item.played ? 'text-emerald-400' : 'text-slate-600'}`}>
+                            {item.played ? 'Completed' : `${duration(item.positionMs)} / ${duration(item.durationMs)}`}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {listeningTab === 'audiobooks' && detail.audiobookHistory.map((item) => (
+                      <div key={item.audiobookId} className="px-4 sm:px-5 py-3 flex items-center gap-3">
+                        <img
+                          src={`/api/audiobook-art/${item.audiobookId}`}
+                          alt=""
+                          className="w-10 h-10 rounded object-cover bg-slate-800 shrink-0"
+                          onError={(event) => {
+                            event.currentTarget.style.visibility = 'hidden';
+                          }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-white truncate">{item.bookTitle}</div>
+                          <div className="text-xs text-slate-500 truncate mt-0.5">
+                            {[item.author, item.chapterTitle].filter(Boolean).join(' · ')}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-xs text-slate-400">{relativeTime(item.updatedAt)}</div>
+                          <div className={`text-[10px] mt-1 ${item.finished ? 'text-emerald-400' : 'text-slate-600'}`}>
+                            {item.finished ? 'Completed' : `${duration(item.positionMs)} / ${duration(item.chapterDurationMs)}`}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {listeningTab === 'music' && detail.history.length === 0 && (
+                      <div className="py-10 text-center text-sm text-slate-500">No music history</div>
+                    )}
+                    {listeningTab === 'podcasts' && detail.podcastHistory.length === 0 && (
+                      <div className="py-10 text-center text-sm text-slate-500">No podcast activity</div>
+                    )}
+                    {listeningTab === 'audiobooks' && detail.audiobookHistory.length === 0 && (
+                      <div className="py-10 text-center text-sm text-slate-500">No audiobook activity</div>
                     )}
                   </div>
-                  {detail.history.length < detail.historyTotal && (
+                  {listeningTab === 'music' && detail.history.length < detail.historyTotal && (
                     <div className="p-3 border-t border-slate-800">
                       <button
                         onClick={() => void loadMoreHistory()}
@@ -415,6 +506,16 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                       >
                         {moreLoading ? 'Loading' : 'Load more'}
                       </button>
+                    </div>
+                  )}
+                  {listeningTab === 'podcasts' && detail.podcastHistory.length < detail.user.podcastEpisodeCount && (
+                    <div className="px-4 py-3 border-t border-slate-800 text-center text-xs text-slate-500">
+                      Showing the latest {detail.podcastHistory.length.toLocaleString()} episodes
+                    </div>
+                  )}
+                  {listeningTab === 'audiobooks' && detail.audiobookHistory.length < detail.user.audiobookCount && (
+                    <div className="px-4 py-3 border-t border-slate-800 text-center text-xs text-slate-500">
+                      Showing the latest {detail.audiobookHistory.length.toLocaleString()} books
                     </div>
                   )}
                 </div>
@@ -434,7 +535,9 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                             <div className="text-xs text-slate-300">
                               {successful
                                 ? signIn.method === 'google'
-                                  ? 'Signed in with Google'
+                                  ? signIn.backfilledFrom === 'account_creation'
+                                    ? 'First Google sign-in'
+                                    : 'Signed in with Google'
                                   : signIn.method === 'password'
                                     ? 'Signed in with password'
                                     : 'Signed in'

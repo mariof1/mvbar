@@ -99,6 +99,7 @@ export type AdminUserAuditSummary = {
   id: string;
   email: string;
   role: 'admin' | 'user';
+  authProvider: 'google' | 'google_password' | 'password';
   approvalStatus: string;
   avatarPath: string | null;
   createdAt: string;
@@ -108,8 +109,21 @@ export type AdminUserAuditSummary = {
   lastLoginIp: string | null;
   loginCount: number;
   lastPlayedAt: string | null;
+  lastPodcastAt: string | null;
+  lastAudiobookAt: string | null;
+  lastListenedAt: string | null;
   totalPlays: number;
   plays7d: number;
+  podcastEpisodeCount: number;
+  podcastCompletedCount: number;
+  podcasts7d: number;
+  audiobookCount: number;
+  audiobookCompletedCount: number;
+  audiobooks7d: number;
+  activity7d: number;
+  musicListeningMs: number;
+  podcastListeningMs: number;
+  audiobookListeningMs: number;
   estimatedListeningMs: number;
   favoriteCount: number;
   playlistCount: number;
@@ -121,7 +135,7 @@ export type AdminUserAuditOverview = {
   totals: {
     users: number;
     active7d: number;
-    plays7d: number;
+    activity7d: number;
     estimatedListeningMs: number;
   };
 };
@@ -139,13 +153,36 @@ export type AdminUserAuditDetail = {
     playedAt: string;
   }>;
   historyTotal: number;
+  podcastHistory: Array<{
+    episodeId: number;
+    podcastId: number;
+    episodeTitle: string;
+    podcastTitle: string;
+    durationMs: number | null;
+    positionMs: number;
+    played: boolean;
+    updatedAt: string;
+  }>;
+  audiobookHistory: Array<{
+    audiobookId: number;
+    bookTitle: string;
+    author: string | null;
+    bookDurationMs: number;
+    chapterId: number;
+    chapterTitle: string;
+    chapterDurationMs: number | null;
+    positionMs: number;
+    finished: boolean;
+    updatedAt: string;
+  }>;
   signIns: Array<{
     ts: string;
     event: 'login_ok' | 'login_failed' | 'login_locked';
     ip: string | null;
     method: 'password' | 'google' | null;
+    backfilledFrom: string | null;
   }>;
-  dailyPlays: Array<{ date: string; count: number }>;
+  dailyActivity: Array<{ date: string; count: number }>;
   limit: number;
   offset: number;
 };

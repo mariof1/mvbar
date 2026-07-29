@@ -96,6 +96,28 @@ export async function initDb() {
     on audit_events ((lower(meta->>'email')), (meta->>'sessionIat'))
     where event = 'login_ok' and meta ? 'sessionIat'
   `);
+  await pool.query(`
+    insert into audit_events(ts, event, meta)
+    select
+      u.created_at,
+      'login_ok',
+      jsonb_build_object(
+        'email', u.email,
+        'method', 'google',
+        'sessionIat', floor(extract(epoch from u.created_at))::bigint,
+        'backfilledFrom', 'account_creation'
+      )
+    from users u
+    where u.google_id is not null
+      and u.password_hash is null
+      and not exists (
+        select 1
+        from audit_events ae
+        where ae.event = 'login_ok'
+          and lower(ae.meta->>'email') = lower(u.email)
+      )
+    on conflict do nothing
+  `);
 
   await pool.query(`
     create table if not exists scan_jobs (

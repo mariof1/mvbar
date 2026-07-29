@@ -25,6 +25,7 @@ declare module 'fastify' {
         sessionVersion: number;
         authMethod?: 'password' | 'google';
         issuedAt?: number;
+        email?: string;
       } | null;
     };
   }
@@ -67,6 +68,7 @@ function verifyToken(token: string) {
     sv?: number;
     amr?: 'password' | 'google';
     iat?: number;
+    email?: string;
   };
   return {
     userId: payload.sub,
@@ -74,6 +76,7 @@ function verifyToken(token: string) {
     sessionVersion: payload.sv ?? 0,
     authMethod: payload.amr,
     issuedAt: payload.iat,
+    email: payload.email,
   };
 }
 
@@ -148,7 +151,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
 
     req.user = verified;
     const inferredMethod = verified.authMethod
-      ?? (user.google_id && !user.password_hash ? 'google' : undefined);
+      ?? (user.google_id && (verified.email || !user.password_hash) ? 'google' : undefined);
     if (inferredMethod && verified.issuedAt) {
       const sessionKey = `${user.id}:${verified.issuedAt}`;
       if (!recordedLoginSessions.has(sessionKey)) {
