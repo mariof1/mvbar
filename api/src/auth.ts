@@ -12,8 +12,20 @@ import { notifyAdmins } from './telegram.js';
 declare module 'fastify' {
   interface FastifyInstance {
     auth: {
-      signToken: (userId: string, role: Role, sessionVersion: number) => string;
-      verifyToken: (token: string) => { userId: string; role: Role; sessionVersion: number } | null;
+      signToken: (
+        userId: string,
+        role: Role,
+        sessionVersion: number,
+        authMethod?: 'password' | 'google',
+        issuedAt?: number
+      ) => string;
+      verifyToken: (token: string) => {
+        userId: string;
+        role: Role;
+        sessionVersion: number;
+        authMethod?: 'password' | 'google';
+        issuedAt?: number;
+      } | null;
     };
   }
 
@@ -26,10 +38,16 @@ import crypto from 'node:crypto';
 
 const ACTIVE_WRITE_INTERVAL_MS = 5 * 60_000;
 
-function signToken(userId: string, role: Role, sessionVersion: number) {
+function signToken(
+  userId: string,
+  role: Role,
+  sessionVersion: number,
+  authMethod: 'password' | 'google' = 'password',
+  issuedAt = Math.floor(Date.now() / 1000)
+) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const payload = Buffer.from(
-    JSON.stringify({ sub: userId, role, sv: sessionVersion, iat: Math.floor(Date.now() / 1000) })
+    JSON.stringify({ sub: userId, role, sv: sessionVersion, amr: authMethod, iat: issuedAt })
   ).toString('base64url');
   const data = `${header}.${payload}`;
   const sig = crypto.createHmac('sha256', config.jwtSecret).update(data).digest('base64url');
@@ -43,13 +61,26 @@ function verifyToken(token: string) {
   const data = `${h}.${p}`;
   const expected = crypto.createHmac('sha256', config.jwtSecret).update(data).digest('base64url');
   if (expected !== s) return null;
-  const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8')) as { sub: string; role: Role; sv?: number };
-  return { userId: payload.sub, role: payload.role, sessionVersion: payload.sv ?? 0 };
+  const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8')) as {
+    sub: string;
+    role: Role;
+    sv?: number;
+    amr?: 'password' | 'google';
+    iat?: number;
+  };
+  return {
+    userId: payload.sub,
+    role: payload.role,
+    sessionVersion: payload.sv ?? 0,
+    authMethod: payload.amr,
+    issuedAt: payload.iat,
+  };
 }
 
 export const authPlugin: FastifyPluginAsync = fp(async (app) => {
   await app.register(cookie);
   const lastActiveWrites = new Map<string, number>();
+  const recordedLoginSessions = new Set<string>();
 
   async function markActive(userId: string, ip: string, force = false) {
     const now = Date.now();
@@ -116,6 +147,19 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     if (user.session_version !== verified.sessionVersion) return;
 
     req.user = verified;
+    const inferredMethod = verified.authMethod
+      ?? (user.google_id && !user.password_hash ? 'google' : undefined);
+    if (inferredMethod && verified.issuedAt) {
+      const sessionKey = `${user.id}:${verified.issuedAt}`;
+      if (!recordedLoginSessions.has(sessionKey)) {
+        await users.ensureSessionLogin({
+          email: user.email,
+          method: inferredMethod,
+          sessionIat: verified.issuedAt,
+        });
+        recordedLoginSessions.add(sessionKey);
+      }
+    }
     await markActive(verified.userId, req.ip);
   });
 
@@ -152,7 +196,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const user = await users.getUserByEmail(email);
 
-    if (!user || !verifyPassword(password, user.password_hash)) {
+    if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
       const next = state ?? { count: 0, lastFailedAt: 0 };
       next.count += 1;
       next.lastFailedAt = now;
@@ -164,8 +208,9 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     store.failedLoginsByKey.delete(key);
-    const token = signToken(user.id, user.role, user.session_version);
-    await audit('login_ok', { email, ip });
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const token = signToken(user.id, user.role, user.session_version, 'password', issuedAt);
+    await users.ensureSessionLogin({ email, method: 'password', sessionIat: issuedAt, ip });
     await markActive(user.id, ip, true);
     notifyAdmins('user_login', `User logged in:\n• Email: ${email}\n• IP: ${ip}`);
 

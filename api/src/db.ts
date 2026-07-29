@@ -91,6 +91,11 @@ export async function initDb() {
     on audit_events ((lower(meta->>'email')), ts desc)
     where event in ('login_ok', 'login_failed', 'login_locked')
   `);
+  await pool.query(`
+    create unique index if not exists audit_events_login_session_idx
+    on audit_events ((lower(meta->>'email')), (meta->>'sessionIat'))
+    where event = 'login_ok' and meta ? 'sessionIat'
+  `);
 
   await pool.query(`
     create table if not exists scan_jobs (

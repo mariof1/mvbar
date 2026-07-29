@@ -183,9 +183,9 @@ export const userAuditPlugin: FastifyPluginAsync = fp(async (app) => {
         'select count(*)::int as count from play_history where user_id = $1',
         [id]
       ),
-      db().query<{ ts: Date | string; event: string; ip: string | null }>(
+      db().query<{ ts: Date | string; event: string; ip: string | null; method: string | null }>(
         `
-        select ts, event, meta->>'ip' as ip
+        select ts, event, meta->>'ip' as ip, meta->>'method' as method
         from audit_events
         where event in ('login_ok', 'login_failed', 'login_locked')
           and lower(meta->>'email') = lower($1)
@@ -227,7 +227,12 @@ export const userAuditPlugin: FastifyPluginAsync = fp(async (app) => {
         playedAt: row.played_at,
       })),
       historyTotal: Number(countResult.rows[0]?.count ?? 0),
-      signIns: signInResult.rows.map((row) => ({ ts: row.ts, event: row.event, ip: row.ip })),
+      signIns: signInResult.rows.map((row) => ({
+        ts: row.ts,
+        event: row.event,
+        ip: row.ip,
+        method: row.method === 'google' || row.method === 'password' ? row.method : null,
+      })),
       dailyPlays: dailyResult.rows.map((row) => ({ date: row.date, count: Number(row.count) })),
       limit,
       offset,

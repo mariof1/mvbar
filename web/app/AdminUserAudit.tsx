@@ -331,7 +331,9 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                   <div className="text-xs uppercase text-slate-500">Last active</div>
                   <div className="text-sm text-slate-200 mt-1">{dateTime(detail.user.lastActiveAt)}</div>
                   {detail.user.lastActiveIp && <div className="text-xs font-mono text-slate-500 mt-1">{detail.user.lastActiveIp}</div>}
-                  <div className="text-xs text-slate-500 mt-2">Signed in {dateTime(detail.user.lastLoginAt)}</div>
+                  <div className="text-xs text-slate-500 mt-2">
+                    {detail.user.lastLoginAt ? `Signed in ${dateTime(detail.user.lastLoginAt)}` : 'No sign-in recorded'}
+                  </div>
                 </div>
               </div>
 
@@ -429,7 +431,17 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                         <div key={`${signIn.ts}-${index}`} className="px-4 py-3 flex items-start gap-2">
                           <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${successful ? 'bg-emerald-400' : 'bg-red-400'}`} />
                           <div className="min-w-0">
-                            <div className="text-xs text-slate-300">{successful ? 'Signed in' : signIn.event === 'login_locked' ? 'Locked attempt' : 'Failed attempt'}</div>
+                            <div className="text-xs text-slate-300">
+                              {successful
+                                ? signIn.method === 'google'
+                                  ? 'Signed in with Google'
+                                  : signIn.method === 'password'
+                                    ? 'Signed in with password'
+                                    : 'Signed in'
+                                : signIn.event === 'login_locked'
+                                  ? 'Locked attempt'
+                                  : 'Failed attempt'}
+                            </div>
                             <div className="text-[10px] text-slate-500 mt-1">{dateTime(signIn.ts)}</div>
                             {signIn.ip && <div className="text-[10px] font-mono text-slate-600 truncate mt-0.5">{signIn.ip}</div>}
                           </div>

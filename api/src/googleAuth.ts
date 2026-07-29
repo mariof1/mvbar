@@ -10,6 +10,7 @@ import { db } from './db.js';
 import { config } from './config.js';
 import { notifyAdmins } from './telegram.js';
 import { broadcastToAdmins } from './websocket.js';
+import * as users from './userRepo.js';
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
@@ -89,10 +90,13 @@ async function downloadAvatar(url: string, userId: string): Promise<string | nul
 }
 
 // Generate JWT token (same as auth.ts)
-function signJwt(payload: object, expiresInSeconds = 86400 * 7): string {
+function signJwt(
+  payload: object,
+  expiresInSeconds = 86400 * 7,
+  issuedAt = Math.floor(Date.now() / 1000)
+): string {
   const header = { alg: 'HS256', typ: 'JWT' };
-  const now = Math.floor(Date.now() / 1000);
-  const fullPayload = { ...payload, iat: now, exp: now + expiresInSeconds };
+  const fullPayload = { ...payload, iat: issuedAt, exp: issuedAt + expiresInSeconds };
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
   const unsigned = `${b64(header)}.${b64(fullPayload)}`;
   const sig = crypto.createHmac('sha256', JWT_SECRET).update(unsigned).digest('base64url');
@@ -246,12 +250,23 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
         }
 
         // Generate JWT token
+        const issuedAt = Math.floor(Date.now() / 1000);
         const token = signJwt({
           sub: user.id,
           email: user.email,
           role: user.role,
           sv: user.session_version,
-        });
+          amr: 'google',
+        }, undefined, issuedAt);
+        await Promise.all([
+          users.ensureSessionLogin({
+            email: user.email,
+            method: 'google',
+            sessionIat: issuedAt,
+            ip: request.ip,
+          }),
+          users.markUserActive(user.id, request.ip),
+        ]);
 
         // Set cookie and redirect
         reply.setCookie(config.cookieName, token, {
@@ -646,12 +661,23 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
         }
 
         // Generate JWT token
+        const issuedAt = Math.floor(Date.now() / 1000);
         const token = signJwt({
           sub: user.id,
           email: user.email,
           role: user.role,
           sv: user.session_version,
-        });
+          amr: 'google',
+        }, undefined, issuedAt);
+        await Promise.all([
+          users.ensureSessionLogin({
+            email: user.email,
+            method: 'google',
+            sessionIat: issuedAt,
+            ip: request.ip,
+          }),
+          users.markUserActive(user.id, request.ip),
+        ]);
 
         return {
           ok: true,

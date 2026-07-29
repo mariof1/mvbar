@@ -139,7 +139,12 @@ export type AdminUserAuditDetail = {
     playedAt: string;
   }>;
   historyTotal: number;
-  signIns: Array<{ ts: string; event: 'login_ok' | 'login_failed' | 'login_locked'; ip: string | null }>;
+  signIns: Array<{
+    ts: string;
+    event: 'login_ok' | 'login_failed' | 'login_locked';
+    ip: string | null;
+    method: 'password' | 'google' | null;
+  }>;
   dailyPlays: Array<{ date: string; count: number }>;
   limit: number;
   offset: number;

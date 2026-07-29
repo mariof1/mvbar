@@ -4,10 +4,11 @@ import type { Role } from './store.js';
 export type DbUser = {
   id: string;
   email: string;
-  password_hash: string;
+  password_hash: string | null;
   role: Role;
   session_version: number;
   avatar_path?: string | null;
+  google_id?: string | null;
 };
 
 export async function countUsers() {
@@ -25,7 +26,7 @@ export async function getUserByEmail(email: string) {
 
 export async function getUserById(id: string) {
   const r = await db().query<DbUser>(
-    'select id, email, password_hash, role, session_version, avatar_path from users where id=$1',
+    'select id, email, password_hash, role, session_version, avatar_path, google_id from users where id=$1',
     [id]
   );
   return r.rows[0] ?? null;
@@ -35,6 +36,30 @@ export async function markUserActive(userId: string, ip: string) {
   await db().query(
     'update users set last_seen_at=now(), last_seen_ip=$2 where id=$1',
     [userId, ip]
+  );
+}
+
+export async function ensureSessionLogin(params: {
+  email: string;
+  method: 'password' | 'google';
+  sessionIat: number;
+  ip?: string | null;
+}) {
+  await db().query(
+    `
+    insert into audit_events(ts, event, meta)
+    values (
+      to_timestamp($1),
+      'login_ok',
+      jsonb_build_object(
+        'email', $2::text,
+        'method', $3::text,
+        'sessionIat', $1::bigint
+      ) || case when $4::text is null then '{}'::jsonb else jsonb_build_object('ip', $4::text) end
+    )
+    on conflict do nothing
+    `,
+    [params.sessionIat, params.email, params.method, params.ip ?? null]
   );
 }
 
