@@ -1,0 +1,1385 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.IO.Compression;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Windows.Forms;
+
+[assembly: AssemblyTitle("MVBar Standalone")]
+[assembly: AssemblyDescription("Self-contained MVBar host for Windows")]
+[assembly: AssemblyCompany("MVBar")]
+[assembly: AssemblyProduct("MVBar")]
+[assembly: AssemblyVersion("1.0.0.0")]
+
+internal static class Program
+{
+    private const string BuildId = "__MVBAR_BUILD_ID__";
+    private const string PayloadMagic = "MVBARPK1";
+    private static readonly Dictionary<string, Process> Services =
+        new Dictionary<string, Process>(StringComparer.OrdinalIgnoreCase);
+    private static readonly List<ServiceLog> Logs = new List<ServiceLog>();
+    private static IntPtr jobHandle = IntPtr.Zero;
+    private static bool shuttingDown;
+    private static string homeRoot;
+    private static string appRoot;
+    private static string dataRoot;
+    private static string logRoot;
+    private static string pgDataRoot;
+    private static string pgCtlPath;
+
+    [STAThread]
+    private static int Main()
+    {
+        Console.Title = "MVBar Standalone";
+        Console.OutputEncoding = Encoding.UTF8;
+
+        bool ownsMutex;
+        using (var mutex = new Mutex(true, @"Local\MVBarStandalone", out ownsMutex))
+        {
+            if (!ownsMutex)
+            {
+                OpenExistingInstance();
+                return 0;
+            }
+
+            try
+            {
+                Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs eventArgs)
+                {
+                    eventArgs.Cancel = true;
+                    Shutdown();
+                };
+                AppDomain.CurrentDomain.ProcessExit += delegate { Shutdown(); };
+
+                Run();
+                return 0;
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine();
+                Console.Error.WriteLine("MVBar could not start:");
+                Console.Error.WriteLine(error.Message);
+                TryShowMessage("MVBar could not start.\r\n\r\n" + error.Message +
+                    "\r\n\r\nSee the logs under:\r\n" + logRoot, "MVBar");
+                Shutdown();
+                return 1;
+            }
+        }
+    }
+
+    private static void Run()
+    {
+        if (!Environment.Is64BitOperatingSystem)
+        {
+            throw new InvalidOperationException("MVBar Standalone requires 64-bit Windows.");
+        }
+
+        homeRoot = Environment.GetEnvironmentVariable("MVBAR_HOME");
+        if (String.IsNullOrWhiteSpace(homeRoot))
+        {
+            homeRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MVBar");
+        }
+        homeRoot = Path.GetFullPath(homeRoot);
+        appRoot = EnsurePayloadExtracted();
+        dataRoot = Path.Combine(homeRoot, "data");
+        logRoot = Path.Combine(homeRoot, "logs");
+        pgDataRoot = Path.Combine(dataRoot, "postgres");
+
+        CreateDataDirectories();
+        var config = LoadOrCreateConfig();
+        ConfigureEnvironment(config);
+        CreateJob();
+
+        int pgPort = FindFreePort(55432);
+        int redisPort = FindFreePort(56379);
+        int meiliPort = FindFreePort(57700);
+        int apiPort = FindFreePort(53001);
+        int webPort = FindFreePort(53000);
+        int publicPort = FindAvailablePort(ParsePort(Get(config, "PORT", "8080"), 8080), 30);
+        string listenHost = Get(config, "LISTEN_HOST", "127.0.0.1");
+
+        string nodePath = AppPath("runtime", "node", "node.exe");
+        string pgBin = AppPath("runtime", "postgres", "bin");
+        string postgresPath = Path.Combine(pgBin, "postgres.exe");
+        pgCtlPath = Path.Combine(pgBin, "pg_ctl.exe");
+        string initDbPath = Path.Combine(pgBin, "initdb.exe");
+        string psqlPath = Path.Combine(pgBin, "psql.exe");
+        string createUserPath = Path.Combine(pgBin, "createuser.exe");
+        string createDbPath = Path.Combine(pgBin, "createdb.exe");
+        string garnetPath = AppPath("runtime", "garnet", "GarnetServer.exe");
+        string meiliPath = AppPath("runtime", "meili", "meilisearch.exe");
+        string ffmpegBin = AppPath("runtime", "ffmpeg");
+
+        RequireFiles(new[]
+        {
+            nodePath, postgresPath, pgCtlPath, initDbPath, psqlPath,
+            createUserPath, createDbPath, garnetPath, meiliPath,
+            Path.Combine(ffmpegBin, "ffmpeg.exe"),
+            Path.Combine(ffmpegBin, "ffprobe.exe"),
+            AppPath("app", "api", "dist", "index.js"),
+            AppPath("app", "worker", "dist", "index.js"),
+            AppPath("app", "web", "server.js"),
+            AppPath("app", "proxy.js")
+        });
+
+        Environment.SetEnvironmentVariable(
+            "PATH",
+            ffmpegBin + ";" + pgBin + ";" + Environment.GetEnvironmentVariable("PATH"));
+
+        Console.WriteLine("MVBar Standalone " + BuildId);
+        Console.WriteLine("Data: " + dataRoot);
+        Console.WriteLine("Logs: " + logRoot);
+        Console.WriteLine();
+
+        InitializePostgres(initDbPath);
+        StartService("postgres", postgresPath,
+            Args("-D", pgDataRoot, "-p", pgPort.ToString(), "-h", "127.0.0.1"),
+            homeRoot, null);
+        WaitForTcp("127.0.0.1", pgPort, 60);
+        WaitForPostgres(psqlPath, pgPort, 90);
+        PrepareDatabase(psqlPath, createUserPath, createDbPath, pgPort, config);
+
+        var common = BuildCommonEnvironment(config, pgPort, redisPort, meiliPort);
+
+        string garnetData = Path.Combine(dataRoot, "garnet");
+        StartService("garnet", garnetPath,
+            Args(
+                "--bind", "127.0.0.1",
+                "--port", redisPort.ToString(),
+                "--memory", "256m",
+                "--index", "32m",
+                "--checkpointdir", garnetData,
+                "--aof",
+                "--recover"),
+            homeRoot, common);
+        WaitForTcp("127.0.0.1", redisPort, 60);
+
+        var meiliEnvironment = CopyEnvironment(common);
+        meiliEnvironment["MEILI_HTTP_ADDR"] = "127.0.0.1:" + meiliPort;
+        meiliEnvironment["MEILI_DB_PATH"] = Path.Combine(dataRoot, "meili");
+        meiliEnvironment["MEILI_ENV"] = "production";
+        meiliEnvironment["MEILI_NO_ANALYTICS"] = "true";
+        StartService("meilisearch", meiliPath, "", homeRoot, meiliEnvironment);
+        WaitForHttp("http://127.0.0.1:" + meiliPort + "/health", 120);
+
+        var apiEnvironment = CopyEnvironment(common);
+        apiEnvironment["PORT"] = apiPort.ToString();
+        apiEnvironment["HOST"] = "127.0.0.1";
+        StartService("api", nodePath, Args("dist/index.js"),
+            AppPath("app", "api"), apiEnvironment);
+        WaitForHttp("http://127.0.0.1:" + apiPort + "/health", 180);
+
+        StartService("worker", nodePath, Args("dist/index.js"),
+            AppPath("app", "worker"), common);
+        Thread.Sleep(1500);
+        EnsureRunning("worker");
+
+        var webEnvironment = CopyEnvironment(common);
+        webEnvironment["PORT"] = webPort.ToString();
+        webEnvironment["HOSTNAME"] = "127.0.0.1";
+        webEnvironment["API_INTERNAL_BASE"] = "http://127.0.0.1:" + apiPort;
+        StartService("web", nodePath, Args("server.js"),
+            AppPath("app", "web"), webEnvironment);
+        WaitForHttp("http://127.0.0.1:" + webPort + "/", 180);
+
+        var proxyEnvironment = CopyEnvironment(common);
+        proxyEnvironment["MVBAR_PROXY_HOST"] = listenHost;
+        proxyEnvironment["MVBAR_PROXY_PORT"] = publicPort.ToString();
+        proxyEnvironment["MVBAR_API_PORT"] = apiPort.ToString();
+        proxyEnvironment["MVBAR_WEB_PORT"] = webPort.ToString();
+        StartService("proxy", nodePath, Args(AppPath("app", "proxy.js")),
+            appRoot, proxyEnvironment);
+        WaitForHttp("http://127.0.0.1:" + publicPort + "/health", 60);
+
+        string url = "http://127.0.0.1:" + publicPort + "/";
+        File.WriteAllText(Path.Combine(homeRoot, "runtime.url"), url, Encoding.UTF8);
+        Console.WriteLine();
+        Console.WriteLine("MVBar is ready: " + url);
+        Console.WriteLine("Administrator: " + Get(config, "ADMIN_EMAIL", "admin@local"));
+        Console.WriteLine("Credentials: " + Path.Combine(homeRoot, "credentials.txt"));
+        Console.WriteLine("Press Ctrl+C or close this window to stop MVBar.");
+
+        if (Get(config, "_FIRST_RUN", "0") == "1" &&
+            Environment.GetEnvironmentVariable("MVBAR_HEADLESS") != "1")
+        {
+            TryShowMessage(
+                "MVBar is ready.\r\n\r\nAdministrator: " +
+                Get(config, "ADMIN_EMAIL", "admin@local") +
+                "\r\nPassword: " + Get(config, "ADMIN_PASSWORD", "") +
+                "\r\n\r\nThese details are also saved in:\r\n" +
+                Path.Combine(homeRoot, "credentials.txt"),
+                "MVBar first run");
+        }
+
+        if (Environment.GetEnvironmentVariable("MVBAR_HEADLESS") != "1")
+        {
+            OpenUrl(url);
+        }
+        MonitorServices();
+    }
+
+    private static Dictionary<string, string> LoadOrCreateConfig()
+    {
+        string configPath = Path.Combine(homeRoot, "config.env");
+        bool firstRun = !File.Exists(configPath);
+        var config = firstRun
+            ? CreateDefaultConfig()
+            : ParseConfig(File.ReadAllLines(configPath, Encoding.UTF8));
+
+        if (firstRun)
+        {
+            Directory.CreateDirectory(homeRoot);
+            WriteConfig(configPath, config);
+        }
+
+        config["_FIRST_RUN"] = firstRun ? "1" : "0";
+        string credentialsPath = Path.Combine(homeRoot, "credentials.txt");
+        if (firstRun || !File.Exists(credentialsPath))
+        {
+            File.WriteAllText(
+                credentialsPath,
+                "MVBar Standalone administrator\r\n" +
+                "Email: " + Get(config, "ADMIN_EMAIL", "admin@local") + "\r\n" +
+                "Password: " + Get(config, "ADMIN_PASSWORD", "") + "\r\n",
+                Encoding.UTF8);
+        }
+        return config;
+    }
+
+    private static Dictionary<string, string> CreateDefaultConfig()
+    {
+        string music = Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string audiobooks = Path.Combine(profile, "Audiobooks");
+        Directory.CreateDirectory(music);
+        Directory.CreateDirectory(audiobooks);
+
+        var config = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        config["ADMIN_EMAIL"] = "admin@local";
+        config["ADMIN_PASSWORD"] = RandomText(22);
+        config["DATABASE_PASSWORD"] = RandomText(28);
+        config["JWT_SECRET"] = RandomHex(48);
+        config["MEILI_MASTER_KEY"] = RandomHex(32);
+        config["MUSIC_DIRS"] = music;
+        config["AUDIOBOOK_DIRS"] = audiobooks;
+        config["LISTEN_HOST"] = "127.0.0.1";
+        config["PORT"] = "8080";
+        return config;
+    }
+
+    private static void WriteConfig(string path, Dictionary<string, string> config)
+    {
+        var lines = new List<string>();
+        lines.Add("# MVBar Standalone settings");
+        lines.Add("# Multiple media folders are comma separated.");
+        string[] keys =
+        {
+            "ADMIN_EMAIL", "ADMIN_PASSWORD", "DATABASE_PASSWORD", "JWT_SECRET",
+            "MEILI_MASTER_KEY", "MUSIC_DIRS", "AUDIOBOOK_DIRS", "LISTEN_HOST", "PORT"
+        };
+        foreach (string key in keys)
+        {
+            lines.Add(key + "=" + Get(config, key, ""));
+        }
+        File.WriteAllLines(path, lines.ToArray(), Encoding.UTF8);
+    }
+
+    private static Dictionary<string, string> ParseConfig(string[] lines)
+    {
+        var config = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string rawLine in lines)
+        {
+            string line = rawLine.Trim();
+            if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            int separator = line.IndexOf('=');
+            if (separator <= 0)
+            {
+                continue;
+            }
+            string key = line.Substring(0, separator).Trim();
+            string value = line.Substring(separator + 1).Trim();
+            if (value.Length >= 2 &&
+                ((value[0] == '"' && value[value.Length - 1] == '"') ||
+                 (value[0] == '\'' && value[value.Length - 1] == '\'')))
+            {
+                value = value.Substring(1, value.Length - 2);
+            }
+            config[key] = value;
+        }
+        return config;
+    }
+
+    private static void ConfigureEnvironment(Dictionary<string, string> config)
+    {
+        Environment.SetEnvironmentVariable("NODE_ENV", "production");
+        Environment.SetEnvironmentVariable("JWT_SECRET", Get(config, "JWT_SECRET", ""));
+        Environment.SetEnvironmentVariable("ADMIN_EMAIL", Get(config, "ADMIN_EMAIL", "admin@local"));
+        Environment.SetEnvironmentVariable("ADMIN_PASSWORD", Get(config, "ADMIN_PASSWORD", ""));
+        Environment.SetEnvironmentVariable("MEILI_MASTER_KEY", Get(config, "MEILI_MASTER_KEY", ""));
+        Environment.SetEnvironmentVariable("MUSIC_DIRS", Get(config, "MUSIC_DIRS", ""));
+        Environment.SetEnvironmentVariable("AUDIOBOOK_DIRS", Get(config, "AUDIOBOOK_DIRS", ""));
+        Environment.SetEnvironmentVariable("COOKIE_SECURE", "false");
+        Environment.SetEnvironmentVariable("TRUST_PROXY", "true");
+        Environment.SetEnvironmentVariable("LIBRARY_READ_ONLY", "1");
+        Environment.SetEnvironmentVariable("FAST_SCAN", "1");
+        Environment.SetEnvironmentVariable("UV_THREADPOOL_SIZE", "16");
+        Environment.SetEnvironmentVariable("SCAN_CONCURRENCY", "8");
+        Environment.SetEnvironmentVariable("METADATA_TIMEOUT_MS", "300000");
+        Environment.SetEnvironmentVariable("RESCAN_INTERVAL_MS", "3600000");
+        Environment.SetEnvironmentVariable("TEMPO_DETECT", "0");
+        Environment.SetEnvironmentVariable("LOG_LEVEL", "info");
+        Environment.SetEnvironmentVariable("APP_VERSION", "standalone-" + BuildId);
+        Environment.SetEnvironmentVariable("GIT_COMMIT", BuildId);
+        Environment.SetEnvironmentVariable("GIT_BRANCH", "windows-standalone");
+        Environment.SetEnvironmentVariable("BUILD_DATE", DateTime.UtcNow.ToString("o"));
+    }
+
+    private static Dictionary<string, string> BuildCommonEnvironment(
+        Dictionary<string, string> config,
+        int pgPort,
+        int redisPort,
+        int meiliPort)
+    {
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string dbPassword = Get(config, "DATABASE_PASSWORD", "");
+        environment["DATABASE_URL"] =
+            "postgresql://mvbar:" + dbPassword + "@127.0.0.1:" + pgPort + "/mvbar";
+        environment["REDIS_URL"] = "redis://127.0.0.1:" + redisPort;
+        environment["MEILI_HOST"] = "http://127.0.0.1:" + meiliPort;
+        environment["MEILI_MASTER_KEY"] = Get(config, "MEILI_MASTER_KEY", "");
+        environment["JWT_SECRET"] = Get(config, "JWT_SECRET", "");
+        environment["ADMIN_EMAIL"] = Get(config, "ADMIN_EMAIL", "admin@local");
+        environment["ADMIN_PASSWORD"] = Get(config, "ADMIN_PASSWORD", "");
+        environment["MUSIC_DIRS"] = Get(config, "MUSIC_DIRS", "");
+        environment["AUDIOBOOK_DIRS"] = Get(config, "AUDIOBOOK_DIRS", "");
+        environment["LYRICS_DIR"] = Path.Combine(dataRoot, "cache", "lyrics");
+        environment["ART_DIR"] = Path.Combine(dataRoot, "cache", "art");
+        environment["AVATARS_DIR"] = Path.Combine(dataRoot, "cache", "avatars");
+        environment["HLS_DIR"] = Path.Combine(dataRoot, "hls");
+        environment["PODCAST_DIR"] = Path.Combine(dataRoot, "podcasts");
+        environment["PODCAST_ART_DIR"] = Path.Combine(dataRoot, "cache", "podcast-art");
+        environment["AUDIOBOOK_ART_DIR"] = Path.Combine(dataRoot, "cache", "audiobook-art");
+        environment["DEVICE_LOG_DIR"] = Path.Combine(dataRoot, "device-logs");
+        environment["COOKIE_SECURE"] = "false";
+        environment["TRUST_PROXY"] = "true";
+        environment["LIBRARY_READ_ONLY"] = "1";
+        environment["FAST_SCAN"] = "1";
+        environment["UV_THREADPOOL_SIZE"] = "16";
+        environment["SCAN_CONCURRENCY"] = "8";
+        environment["METADATA_TIMEOUT_MS"] = "300000";
+        environment["RESCAN_INTERVAL_MS"] = "3600000";
+        environment["TEMPO_DETECT"] = "0";
+        environment["NODE_ENV"] = "production";
+        environment["APP_VERSION"] = "standalone-" + BuildId;
+        environment["GIT_COMMIT"] = BuildId;
+        environment["GIT_BRANCH"] = "windows-standalone";
+        environment["BUILD_DATE"] = DateTime.UtcNow.ToString("o");
+        return environment;
+    }
+
+    private static void CreateDataDirectories()
+    {
+        string[] directories =
+        {
+            dataRoot,
+            logRoot,
+            Path.Combine(dataRoot, "postgres"),
+            Path.Combine(dataRoot, "garnet"),
+            Path.Combine(dataRoot, "meili"),
+            Path.Combine(dataRoot, "cache", "lyrics"),
+            Path.Combine(dataRoot, "cache", "art"),
+            Path.Combine(dataRoot, "cache", "avatars"),
+            Path.Combine(dataRoot, "cache", "podcast-art"),
+            Path.Combine(dataRoot, "cache", "audiobook-art"),
+            Path.Combine(dataRoot, "hls"),
+            Path.Combine(dataRoot, "podcasts"),
+            Path.Combine(dataRoot, "device-logs")
+        };
+        foreach (string directory in directories)
+        {
+            Directory.CreateDirectory(directory);
+        }
+    }
+
+    private static void InitializePostgres(string initDbPath)
+    {
+        if (File.Exists(Path.Combine(pgDataRoot, "PG_VERSION")))
+        {
+            return;
+        }
+
+        Console.WriteLine("Initializing PostgreSQL...");
+        ToolResult result = RunTool(
+            initDbPath,
+            Args(
+                "--pgdata", pgDataRoot,
+                "--username", "postgres",
+                "--auth", "trust",
+                "--encoding", "UTF8",
+                "--locale", "C"),
+            homeRoot,
+            180);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                "PostgreSQL initialization failed.\r\n" + result.Error);
+        }
+    }
+
+    private static void PrepareDatabase(
+        string psqlPath,
+        string createUserPath,
+        string createDbPath,
+        int port,
+        Dictionary<string, string> config)
+    {
+        string baseArgs = Args(
+            "-h", "127.0.0.1",
+            "-p", port.ToString(),
+            "-U", "postgres",
+            "-d", "postgres");
+        ToolResult role = RunTool(
+            psqlPath,
+            baseArgs + " " + Args("-tAc", "SELECT 1 FROM pg_roles WHERE rolname='mvbar'"),
+            homeRoot,
+            30);
+        if (role.Output.Trim() != "1")
+        {
+            RequireSuccess(
+                RunTool(
+                    createUserPath,
+                    Args(
+                        "-h", "127.0.0.1",
+                        "-p", port.ToString(),
+                        "-U", "postgres",
+                        "--login", "mvbar"),
+                    homeRoot,
+                    30),
+                "create the MVBar database user");
+        }
+
+        string dbPassword = Get(config, "DATABASE_PASSWORD", "");
+        RequireSuccess(
+            RunTool(
+                psqlPath,
+                baseArgs + " " + Args(
+                    "-c", "ALTER ROLE mvbar PASSWORD '" + SqlLiteral(dbPassword) + "';"),
+                homeRoot,
+                30),
+            "set the MVBar database password");
+
+        ToolResult database = RunTool(
+            psqlPath,
+            baseArgs + " " + Args("-tAc", "SELECT 1 FROM pg_database WHERE datname='mvbar'"),
+            homeRoot,
+            30);
+        if (database.Output.Trim() != "1")
+        {
+            RequireSuccess(
+                RunTool(
+                    createDbPath,
+                    Args(
+                        "-h", "127.0.0.1",
+                        "-p", port.ToString(),
+                        "-U", "postgres",
+                        "--owner", "mvbar",
+                        "mvbar"),
+                    homeRoot,
+                    30),
+                "create the MVBar database");
+        }
+    }
+
+    private static void StartService(
+        string name,
+        string filePath,
+        string arguments,
+        string workingDirectory,
+        Dictionary<string, string> environment)
+    {
+        Console.WriteLine("Starting " + name + "...");
+        var startInfo = new ProcessStartInfo();
+        startInfo.FileName = filePath;
+        startInfo.Arguments = arguments;
+        startInfo.WorkingDirectory = workingDirectory;
+        startInfo.UseShellExecute = false;
+        startInfo.CreateNoWindow = true;
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        if (environment != null)
+        {
+            foreach (KeyValuePair<string, string> item in environment)
+            {
+                startInfo.EnvironmentVariables[item.Key] = item.Value;
+            }
+        }
+
+        var log = new ServiceLog(Path.Combine(logRoot, name + ".log"));
+        var process = new Process();
+        process.StartInfo = startInfo;
+        process.EnableRaisingEvents = true;
+        process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs eventArgs)
+        {
+            if (eventArgs.Data != null)
+            {
+                log.Write("OUT", eventArgs.Data);
+            }
+        };
+        process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs eventArgs)
+        {
+            if (eventArgs.Data != null)
+            {
+                log.Write("ERR", eventArgs.Data);
+            }
+        };
+
+        if (!process.Start())
+        {
+            log.Dispose();
+            throw new InvalidOperationException("Could not start " + name + ".");
+        }
+        AssignToJob(process);
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        Services[name] = process;
+        Logs.Add(log);
+    }
+
+    private static void MonitorServices()
+    {
+        while (!shuttingDown)
+        {
+            Thread.Sleep(1000);
+            foreach (KeyValuePair<string, Process> item in Services)
+            {
+                if (item.Value.HasExited)
+                {
+                    throw new InvalidOperationException(
+                        item.Key + " stopped unexpectedly with exit code " +
+                        item.Value.ExitCode + ". See " +
+                        Path.Combine(logRoot, item.Key + ".log"));
+                }
+            }
+        }
+    }
+
+    private static void EnsureRunning(string name)
+    {
+        Process process;
+        if (!Services.TryGetValue(name, out process) || process.HasExited)
+        {
+            throw new InvalidOperationException(
+                name + " stopped while starting. See " +
+                Path.Combine(logRoot, name + ".log"));
+        }
+    }
+
+    private static void Shutdown()
+    {
+        if (shuttingDown)
+        {
+            return;
+        }
+        shuttingDown = true;
+
+        string[] order =
+        {
+            "proxy", "web", "worker", "api", "meilisearch", "garnet"
+        };
+        foreach (string name in order)
+        {
+            Process process;
+            if (Services.TryGetValue(name, out process))
+            {
+                TryStopProcess(process);
+            }
+        }
+
+        if (!String.IsNullOrEmpty(pgCtlPath) &&
+            File.Exists(pgCtlPath) &&
+            !String.IsNullOrEmpty(pgDataRoot) &&
+            File.Exists(Path.Combine(pgDataRoot, "PG_VERSION")))
+        {
+            try
+            {
+                RunTool(pgCtlPath, Args("-D", pgDataRoot, "-m", "fast", "stop"), homeRoot, 20);
+            }
+            catch
+            {
+                Process postgres;
+                if (Services.TryGetValue("postgres", out postgres))
+                {
+                    TryStopProcess(postgres);
+                }
+            }
+        }
+
+        if (jobHandle != IntPtr.Zero)
+        {
+            CloseHandle(jobHandle);
+            jobHandle = IntPtr.Zero;
+        }
+        foreach (ServiceLog log in Logs)
+        {
+            log.Dispose();
+        }
+    }
+
+    private static void TryStopProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+                process.WaitForExit(5000);
+            }
+        }
+        catch
+        {
+            // Job cleanup is the final fallback.
+        }
+    }
+
+    private static ToolResult RunTool(
+        string filePath,
+        string arguments,
+        string workingDirectory,
+        int timeoutSeconds)
+    {
+        var output = new StringBuilder();
+        var error = new StringBuilder();
+        var startInfo = new ProcessStartInfo();
+        startInfo.FileName = filePath;
+        startInfo.Arguments = arguments;
+        startInfo.WorkingDirectory = workingDirectory;
+        startInfo.UseShellExecute = false;
+        startInfo.CreateNoWindow = true;
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        using (var process = new Process())
+        {
+            process.StartInfo = startInfo;
+            process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs eventArgs)
+            {
+                if (eventArgs.Data != null)
+                {
+                    lock (output)
+                    {
+                        output.AppendLine(eventArgs.Data);
+                    }
+                }
+            };
+            process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs eventArgs)
+            {
+                if (eventArgs.Data != null)
+                {
+                    lock (error)
+                    {
+                        error.AppendLine(eventArgs.Data);
+                    }
+                }
+            };
+            process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            if (!process.WaitForExit(timeoutSeconds * 1000))
+            {
+                process.Kill();
+                throw new TimeoutException(Path.GetFileName(filePath) + " timed out.");
+            }
+            process.WaitForExit();
+            return new ToolResult(process.ExitCode, output.ToString(), error.ToString());
+        }
+    }
+
+    private static void WaitForTcp(string host, int port, int timeoutSeconds)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            using (var client = new TcpClient())
+            {
+                try
+                {
+                    IAsyncResult attempt = client.BeginConnect(host, port, null, null);
+                    if (attempt.AsyncWaitHandle.WaitOne(500) && client.Connected)
+                    {
+                        client.EndConnect(attempt);
+                        return;
+                    }
+                }
+                catch
+                {
+                }
+            }
+            Thread.Sleep(250);
+        }
+        throw new TimeoutException("Timed out waiting for " + host + ":" + port + ".");
+    }
+
+    private static void WaitForHttp(string url, int timeoutSeconds)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var request = (HttpWebRequest)WebRequest.Create(url);
+                request.Timeout = 3000;
+                request.ReadWriteTimeout = 3000;
+                request.Proxy = null;
+                using (var response = (HttpWebResponse)request.GetResponse())
+                {
+                    if ((int)response.StatusCode >= 200 && (int)response.StatusCode < 500)
+                    {
+                        return;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            Thread.Sleep(500);
+        }
+        throw new TimeoutException("Timed out waiting for " + url + ".");
+    }
+
+    private static void WaitForPostgres(string psqlPath, int port, int timeoutSeconds)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                ToolResult result = RunTool(
+                    psqlPath,
+                    Args(
+                        "-h", "127.0.0.1",
+                        "-p", port.ToString(),
+                        "-U", "postgres",
+                        "-d", "postgres",
+                        "-tAc", "SELECT 1"),
+                    homeRoot,
+                    5);
+                if (result.ExitCode == 0 && result.Output.Trim() == "1")
+                {
+                    return;
+                }
+            }
+            catch
+            {
+            }
+            Thread.Sleep(500);
+        }
+        throw new TimeoutException("Timed out waiting for PostgreSQL to accept queries.");
+    }
+
+    private static int FindFreePort(int preferred)
+    {
+        if (PortIsAvailable(preferred))
+        {
+            return preferred;
+        }
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+
+    private static int FindAvailablePort(int preferred, int attempts)
+    {
+        for (int index = 0; index < attempts; index++)
+        {
+            int port = preferred + index;
+            if (port < 65536 && PortIsAvailable(port))
+            {
+                return port;
+            }
+        }
+        return FindFreePort(0);
+    }
+
+    private static bool PortIsAvailable(int port)
+    {
+        if (port <= 0 || port > 65535)
+        {
+            return false;
+        }
+        try
+        {
+            foreach (IPEndPoint endpoint in
+                IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners())
+            {
+                if (endpoint.Port == port)
+                {
+                    return false;
+                }
+            }
+        }
+        catch
+        {
+            // The bind attempt below remains the final authority.
+        }
+        TcpListener listener = null;
+        try
+        {
+            listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (listener != null)
+            {
+                listener.Stop();
+            }
+        }
+    }
+
+    private static string EnsurePayloadExtracted()
+    {
+        string applicationsRoot = Path.Combine(homeRoot, "app");
+        string versionRoot = Path.Combine(applicationsRoot, BuildId);
+        string marker = Path.Combine(versionRoot, ".complete");
+        if (File.Exists(marker))
+        {
+            return versionRoot;
+        }
+
+        Directory.CreateDirectory(applicationsRoot);
+        string temporaryRoot = versionRoot + ".extracting-" +
+            Process.GetCurrentProcess().Id;
+        if (Directory.Exists(temporaryRoot))
+        {
+            Directory.Delete(temporaryRoot, true);
+        }
+        Directory.CreateDirectory(temporaryRoot);
+
+        Console.WriteLine("Preparing MVBar for first use...");
+        string executablePath = Assembly.GetExecutingAssembly().Location;
+        using (var executable = new FileStream(
+            executablePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            long payloadLength = ReadPayloadLength(executable);
+            long payloadOffset = executable.Length - 16 - payloadLength;
+            if (payloadLength <= 0 || payloadOffset <= 0)
+            {
+                throw new InvalidDataException("The embedded MVBar payload is invalid.");
+            }
+
+            using (var payload = new SegmentStream(executable, payloadOffset, payloadLength))
+            using (var archive = new ZipArchive(payload, ZipArchiveMode.Read, false))
+            {
+                ExtractArchive(archive, temporaryRoot);
+            }
+        }
+
+        File.WriteAllText(Path.Combine(temporaryRoot, ".complete"), BuildId, Encoding.UTF8);
+        if (Directory.Exists(versionRoot))
+        {
+            Directory.Delete(versionRoot, true);
+        }
+        Directory.Move(temporaryRoot, versionRoot);
+        CleanupOldVersions(applicationsRoot, versionRoot);
+        return versionRoot;
+    }
+
+    private static long ReadPayloadLength(FileStream executable)
+    {
+        if (executable.Length < 16)
+        {
+            throw new InvalidDataException("No embedded MVBar payload was found.");
+        }
+        var magic = new byte[8];
+        executable.Seek(-8, SeekOrigin.End);
+        ReadExactly(executable, magic, 0, magic.Length);
+        if (!String.Equals(
+            Encoding.ASCII.GetString(magic),
+            PayloadMagic,
+            StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("No embedded MVBar payload was found.");
+        }
+
+        var lengthBytes = new byte[8];
+        executable.Seek(-16, SeekOrigin.End);
+        ReadExactly(executable, lengthBytes, 0, lengthBytes.Length);
+        return BitConverter.ToInt64(lengthBytes, 0);
+    }
+
+    private static void ExtractArchive(ZipArchive archive, string destination)
+    {
+        string root = Path.GetFullPath(destination);
+        if (!root.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal))
+        {
+            root += Path.DirectorySeparatorChar;
+        }
+
+        foreach (ZipArchiveEntry entry in archive.Entries)
+        {
+            string relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+            string target = Path.GetFullPath(Path.Combine(root, relative));
+            if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("Unsafe path in embedded payload: " + entry.FullName);
+            }
+            if (String.IsNullOrEmpty(entry.Name))
+            {
+                Directory.CreateDirectory(target);
+                continue;
+            }
+            string parent = Path.GetDirectoryName(target);
+            if (!String.IsNullOrEmpty(parent))
+            {
+                Directory.CreateDirectory(parent);
+            }
+            using (Stream input = entry.Open())
+            using (var output = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                input.CopyTo(output);
+            }
+            File.SetLastWriteTime(target, entry.LastWriteTime.LocalDateTime);
+        }
+    }
+
+    private static void CleanupOldVersions(string applicationsRoot, string currentRoot)
+    {
+        foreach (string directory in Directory.GetDirectories(applicationsRoot))
+        {
+            if (String.Equals(
+                Path.GetFullPath(directory),
+                Path.GetFullPath(currentRoot),
+                StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            try
+            {
+                Directory.Delete(directory, true);
+            }
+            catch
+            {
+                // An older version can be removed on a future start.
+            }
+        }
+    }
+
+    private static void OpenExistingInstance()
+    {
+        string root = Environment.GetEnvironmentVariable("MVBAR_HOME");
+        if (String.IsNullOrWhiteSpace(root))
+        {
+            root = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MVBar");
+        }
+        string urlPath = Path.Combine(root, "runtime.url");
+        if (File.Exists(urlPath))
+        {
+            OpenUrl(File.ReadAllText(urlPath, Encoding.UTF8).Trim());
+        }
+        else
+        {
+            TryShowMessage("MVBar is already starting.", "MVBar");
+        }
+    }
+
+    private static void OpenUrl(string url)
+    {
+        if (String.IsNullOrWhiteSpace(url))
+        {
+            return;
+        }
+        try
+        {
+            var startInfo = new ProcessStartInfo(url);
+            startInfo.UseShellExecute = true;
+            Process.Start(startInfo);
+        }
+        catch
+        {
+            Console.WriteLine("Open this address in a browser: " + url);
+        }
+    }
+
+    private static void TryShowMessage(string message, string title)
+    {
+        try
+        {
+            MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void RequireFiles(IEnumerable<string> paths)
+    {
+        foreach (string path in paths)
+        {
+            if (!File.Exists(path))
+            {
+                throw new FileNotFoundException("A bundled runtime file is missing.", path);
+            }
+        }
+    }
+
+    private static void RequireSuccess(ToolResult result, string action)
+    {
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                "Could not " + action + ".\r\n" + result.Error);
+        }
+    }
+
+    private static string AppPath(params string[] parts)
+    {
+        string path = appRoot;
+        foreach (string part in parts)
+        {
+            path = Path.Combine(path, part);
+        }
+        return path;
+    }
+
+    private static string Get(
+        Dictionary<string, string> values,
+        string key,
+        string fallback)
+    {
+        string value;
+        return values.TryGetValue(key, out value) && !String.IsNullOrWhiteSpace(value)
+            ? value
+            : fallback;
+    }
+
+    private static Dictionary<string, string> CopyEnvironment(
+        Dictionary<string, string> source)
+    {
+        return new Dictionary<string, string>(source, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static int ParsePort(string value, int fallback)
+    {
+        int port;
+        return Int32.TryParse(value, out port) && port > 0 && port < 65536
+            ? port
+            : fallback;
+    }
+
+    private static string RandomText(int length)
+    {
+        const string characters =
+            "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        var bytes = new byte[length];
+        var result = new char[length];
+        using (var random = new RNGCryptoServiceProvider())
+        {
+            random.GetBytes(bytes);
+        }
+        for (int index = 0; index < result.Length; index++)
+        {
+            result[index] = characters[bytes[index] % characters.Length];
+        }
+        return new string(result);
+    }
+
+    private static string RandomHex(int byteCount)
+    {
+        var bytes = new byte[byteCount];
+        using (var random = new RNGCryptoServiceProvider())
+        {
+            random.GetBytes(bytes);
+        }
+        var result = new StringBuilder(byteCount * 2);
+        foreach (byte value in bytes)
+        {
+            result.Append(value.ToString("x2"));
+        }
+        return result.ToString();
+    }
+
+    private static string SqlLiteral(string value)
+    {
+        return value.Replace("'", "''");
+    }
+
+    private static string Args(params string[] values)
+    {
+        var result = new StringBuilder();
+        foreach (string value in values)
+        {
+            if (result.Length > 0)
+            {
+                result.Append(' ');
+            }
+            result.Append(QuoteArgument(value));
+        }
+        return result.ToString();
+    }
+
+    private static string QuoteArgument(string value)
+    {
+        if (value == null)
+        {
+            return "\"\"";
+        }
+        if (value.Length > 0 &&
+            value.IndexOfAny(new[] { ' ', '\t', '\r', '\n', '"' }) < 0)
+        {
+            return value;
+        }
+        return "\"" + value.Replace("\"", "\\\"") + "\"";
+    }
+
+    private static void ReadExactly(Stream stream, byte[] buffer, int offset, int count)
+    {
+        while (count > 0)
+        {
+            int read = stream.Read(buffer, offset, count);
+            if (read <= 0)
+            {
+                throw new EndOfStreamException();
+            }
+            offset += read;
+            count -= read;
+        }
+    }
+
+    private static void CreateJob()
+    {
+        jobHandle = CreateJobObject(IntPtr.Zero, null);
+        if (jobHandle == IntPtr.Zero)
+        {
+            throw new InvalidOperationException("Could not create the MVBar process group.");
+        }
+
+        var information = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        int length = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        IntPtr pointer = Marshal.AllocHGlobal(length);
+        try
+        {
+            Marshal.StructureToPtr(information, pointer, false);
+            if (!SetInformationJobObject(
+                jobHandle,
+                JobObjectInfoType.ExtendedLimitInformation,
+                pointer,
+                (uint)length))
+            {
+                throw new InvalidOperationException("Could not configure the MVBar process group.");
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(pointer);
+        }
+    }
+
+    private static void AssignToJob(Process process)
+    {
+        if (!AssignProcessToJobObject(jobHandle, process.Handle))
+        {
+            process.Kill();
+            throw new InvalidOperationException(
+                "Could not supervise " + process.ProcessName + ".");
+        }
+    }
+
+    private sealed class ServiceLog : IDisposable
+    {
+        private readonly object sync = new object();
+        private readonly StreamWriter writer;
+
+        internal ServiceLog(string path)
+        {
+            writer = new StreamWriter(path, true, new UTF8Encoding(false));
+            writer.AutoFlush = true;
+            writer.WriteLine();
+            writer.WriteLine("=== " + DateTime.Now.ToString("o") + " ===");
+        }
+
+        internal void Write(string stream, string text)
+        {
+            lock (sync)
+            {
+                writer.WriteLine(
+                    DateTime.Now.ToString("HH:mm:ss.fff") + " [" + stream + "] " + text);
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (sync)
+            {
+                writer.Dispose();
+            }
+        }
+    }
+
+    private sealed class ToolResult
+    {
+        internal readonly int ExitCode;
+        internal readonly string Output;
+        internal readonly string Error;
+
+        internal ToolResult(int exitCode, string output, string error)
+        {
+            ExitCode = exitCode;
+            Output = output;
+            Error = error;
+        }
+    }
+
+    private sealed class SegmentStream : Stream
+    {
+        private readonly Stream source;
+        private readonly long start;
+        private readonly long length;
+        private long position;
+
+        internal SegmentStream(Stream source, long start, long length)
+        {
+            this.source = source;
+            this.start = start;
+            this.length = length;
+            source.Seek(start, SeekOrigin.Begin);
+        }
+
+        public override bool CanRead { get { return true; } }
+        public override bool CanSeek { get { return true; } }
+        public override bool CanWrite { get { return false; } }
+        public override long Length { get { return length; } }
+        public override long Position
+        {
+            get { return position; }
+            set { Seek(value, SeekOrigin.Begin); }
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            long remaining = length - position;
+            if (remaining <= 0)
+            {
+                return 0;
+            }
+            if (count > remaining)
+            {
+                count = (int)remaining;
+            }
+            source.Seek(start + position, SeekOrigin.Begin);
+            int read = source.Read(buffer, offset, count);
+            position += read;
+            return read;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            long target;
+            if (origin == SeekOrigin.Begin)
+            {
+                target = offset;
+            }
+            else if (origin == SeekOrigin.Current)
+            {
+                target = position + offset;
+            }
+            else
+            {
+                target = length + offset;
+            }
+            if (target < 0 || target > length)
+            {
+                throw new IOException("Attempted to seek outside the embedded payload.");
+            }
+            position = target;
+            return position;
+        }
+
+        public override void Flush() { }
+        public override void SetLength(long value) { throw new NotSupportedException(); }
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            throw new NotSupportedException();
+        }
+    }
+
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+
+    private enum JobObjectInfoType
+    {
+        ExtendedLimitInformation = 9
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public IntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateJobObject(IntPtr securityAttributes, string name);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool SetInformationJobObject(
+        IntPtr job,
+        JobObjectInfoType informationClass,
+        IntPtr information,
+        uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+}

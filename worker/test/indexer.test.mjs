@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { rowToDoc, TRACK_INDEX_VERSION } from '../dist/indexer.js';
+import { meiliErrorCode, rowToDoc, TRACK_INDEX_VERSION } from '../dist/indexer.js';
+
+test('meiliErrorCode reads API errors nested under cause', () => {
+  const error = Object.assign(new Error('Index not found'), {
+    cause: { code: 'index_not_found' },
+  });
+
+  assert.equal(meiliErrorCode(error), 'index_not_found');
+  assert.equal(meiliErrorCode({ code: 'invalid_api_key' }), 'invalid_api_key');
+  assert.equal(meiliErrorCode(new Error('network failure')), '');
+});
 
 test('rowToDoc normalizes PostgreSQL bigint identifiers', () => {
   const doc = rowToDoc({

@@ -6,10 +6,19 @@ const INDEX_TASK_TIMEOUT_MS = Math.max(5000, Number(process.env.MEILI_TASK_TIMEO
 // Bump when rowToDoc or indexed search fields change so startup rebuilds stale documents.
 export const TRACK_INDEX_VERSION = 1;
 
-function errorCode(error: unknown) {
-  return typeof error === 'object' && error !== null && 'code' in error
-    ? String((error as { code?: unknown }).code ?? '')
-    : '';
+export function meiliErrorCode(error: unknown) {
+  if (typeof error !== 'object' || error === null) return '';
+
+  const direct = error as { code?: unknown; errorCode?: unknown; cause?: unknown };
+  const directCode = direct.code ?? direct.errorCode;
+  if (directCode) return String(directCode);
+
+  if (typeof direct.cause === 'object' && direct.cause !== null) {
+    const cause = direct.cause as { code?: unknown; errorCode?: unknown };
+    return String(cause.code ?? cause.errorCode ?? '');
+  }
+
+  return '';
 }
 
 async function waitForTask(
@@ -23,7 +32,7 @@ async function waitForTask(
   });
   if (completed.status === 'succeeded') return completed;
 
-  const code = errorCode(completed.error);
+  const code = meiliErrorCode(completed.error);
   if (allowedFailureCodes.includes(code)) return completed;
 
   const message = completed.error?.message ?? `Meilisearch task ${completed.uid} ${completed.status}`;
@@ -67,7 +76,7 @@ export async function ensureTracksIndex() {
   try {
     await client.getIndex('tracks');
   } catch (error) {
-    if (errorCode(error) !== 'index_not_found') throw error;
+    if (meiliErrorCode(error) !== 'index_not_found') throw error;
     const task = await client.createIndex('tracks', { primaryKey: 'id' });
     await waitForTask(client, task);
   }
