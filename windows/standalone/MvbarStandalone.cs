@@ -866,12 +866,9 @@ internal static class Program
         }
 
         Directory.CreateDirectory(applicationsRoot);
+        CleanupStaleExtractions(applicationsRoot);
         string temporaryRoot = versionRoot + ".extracting-" +
-            Process.GetCurrentProcess().Id;
-        if (Directory.Exists(temporaryRoot))
-        {
-            Directory.Delete(temporaryRoot, true);
-        }
+            Guid.NewGuid().ToString("N");
         Directory.CreateDirectory(temporaryRoot);
 
         Console.WriteLine("Preparing MVBar for first use...");
@@ -894,13 +891,72 @@ internal static class Program
         }
 
         File.WriteAllText(Path.Combine(temporaryRoot, ".complete"), BuildId, Encoding.UTF8);
-        if (Directory.Exists(versionRoot))
-        {
-            Directory.Delete(versionRoot, true);
-        }
-        Directory.Move(temporaryRoot, versionRoot);
+        PromoteExtractedPayload(temporaryRoot, versionRoot);
         CleanupOldVersions(applicationsRoot, versionRoot);
         return versionRoot;
+    }
+
+    private static void PromoteExtractedPayload(string temporaryRoot, string versionRoot)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(60);
+        Exception lastError = null;
+        int delayMilliseconds = 250;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                if (Directory.Exists(versionRoot))
+                {
+                    if (File.Exists(Path.Combine(versionRoot, ".complete")))
+                    {
+                        TryDeleteDirectory(temporaryRoot);
+                        return;
+                    }
+                    Directory.Delete(versionRoot, true);
+                }
+                Directory.Move(temporaryRoot, versionRoot);
+                return;
+            }
+            catch (IOException error)
+            {
+                lastError = error;
+            }
+            catch (UnauthorizedAccessException error)
+            {
+                lastError = error;
+            }
+
+            Thread.Sleep(delayMilliseconds);
+            delayMilliseconds = Math.Min(delayMilliseconds * 2, 2000);
+        }
+
+        throw new InvalidOperationException(
+            "Windows kept the completed MVBar payload locked for 60 seconds. " +
+            "Close antivirus scan dialogs and run the EXE again. Completed files remain at: " +
+            temporaryRoot,
+            lastError);
+    }
+
+    private static void CleanupStaleExtractions(string applicationsRoot)
+    {
+        string pattern = BuildId + ".extracting-*";
+        foreach (string directory in Directory.GetDirectories(applicationsRoot, pattern))
+        {
+            TryDeleteDirectory(directory);
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            Directory.Delete(path, true);
+        }
+        catch
+        {
+            // A stale folder can be retried on a future launch.
+        }
     }
 
     private static long ReadPayloadLength(FileStream executable)
