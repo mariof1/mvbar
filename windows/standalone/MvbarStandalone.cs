@@ -30,7 +30,7 @@ internal static class Program
     private static readonly object ShutdownSync = new object();
     private static readonly object LauncherLogSync = new object();
     private static IntPtr jobHandle = IntPtr.Zero;
-    private static bool shuttingDown;
+    private static volatile bool shuttingDown;
     private static LauncherForm launcherForm;
     private static string homeRoot;
     private static string appRoot;
@@ -246,6 +246,10 @@ internal static class Program
         }
         catch (Exception error)
         {
+            if (shuttingDown)
+            {
+                return;
+            }
             LogLauncher("FATAL", error.ToString());
             Shutdown();
             UpdateLauncher(delegate(LauncherForm form)
@@ -689,8 +693,16 @@ internal static class Program
         while (!shuttingDown)
         {
             Thread.Sleep(1000);
+            if (shuttingDown)
+            {
+                break;
+            }
             foreach (KeyValuePair<string, Process> item in Services)
             {
+                if (shuttingDown)
+                {
+                    break;
+                }
                 if (item.Value.HasExited)
                 {
                     throw new InvalidOperationException(
