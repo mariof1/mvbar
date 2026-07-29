@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   adminCreateUser,
   adminDeleteUser,
@@ -576,6 +576,9 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
               </div>
               <code className="flex-1 text-sm text-slate-300 font-mono">{lib.mount_path}</code>
               <div className="flex items-center gap-2">
+                <span className="text-xs px-2 py-1 rounded-md bg-slate-700/30 text-slate-300 border border-slate-700/40">
+                  {lib.media_type === 'audiobook' ? 'audiobooks' : 'music'}
+                </span>
                 {lib.mounted === false ? (
                   <span className="text-xs px-2 py-1 rounded-md bg-red-500/10 text-red-400 border border-red-500/20">unmounted</span>
                 ) : (
@@ -652,7 +655,11 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
 function UsersTab({ token, clear, currentUserId }: { token: string; clear: () => void; currentUserId?: string }) {
   const [users, setUsers] = useState<Array<{ id: string; email: string; role: string; avatar_path?: string }>>([]);
   const [pendingUsers, setPendingUsers] = useState<Array<{ id: string; email: string; created_at: string; avatar_path?: string }>>([]);
-  const [libraries, setLibraries] = useState<Array<{ id: number; mount_path: string }>>([]);
+  const [libraries, setLibraries] = useState<Array<{
+    id: number;
+    mount_path: string;
+    media_type: 'music' | 'audiobook';
+  }>>([]);
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [userLibraryIds, setUserLibraryIds] = useState<number[]>([]);
   const [newEmail, setNewEmail] = useState('');
@@ -1178,6 +1185,9 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
                             <div className={`font-mono text-sm truncate ${hasAccess ? 'text-white' : 'text-slate-400'}`}>
                               {lib.mount_path}
                             </div>
+                            <div className="text-[10px] uppercase text-slate-500 mt-1">
+                              {lib.media_type === 'audiobook' ? 'Audiobooks' : 'Music'}
+                            </div>
                           </div>
                           <div className={`text-xs px-2 py-0.5 rounded ${
                             hasAccess ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-500'
@@ -1371,16 +1381,16 @@ function DeviceLogsTab({ token }: { token: string }) {
   const [filter, setFilter] = useState('');
   const [uploadUrl, setUploadUrl] = useState('');
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     setLoading(true);
     try {
       const data = await apiFetch('/admin/device-logs', { method: 'GET' }, token);
       if (data.ok) setLogs(data.logs);
     } catch { /* */ }
     setLoading(false);
-  };
+  }, [token]);
 
-  useEffect(() => { fetchLogs(); }, []);
+  useEffect(() => { void fetchLogs(); }, [fetchLogs]);
 
   useEffect(() => {
     const proto = window.location.protocol;
@@ -1556,7 +1566,7 @@ function NotificationsTab({ token }: { token: string }) {
   const [events, setEvents] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const data = await apiFetch('/telegram/settings', { method: 'GET' }, token);
@@ -1570,9 +1580,9 @@ function NotificationsTab({ token }: { token: string }) {
       }
     } catch { /* */ }
     setLoading(false);
-  }
+  }, [token]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   async function save() {
     setSaving(true);

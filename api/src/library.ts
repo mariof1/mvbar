@@ -463,7 +463,9 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   // Whether any mounted library is writable inside the container
   app.get('/api/admin/library/writable', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
-    const r = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries order by mount_path asc');
+    const r = await db().query<{ id: number; mount_path: string; media_type: string }>(
+      'select id, mount_path, media_type from libraries order by media_type, mount_path asc'
+    );
     if (LIBRARY_READ_ONLY) {
       const libraries = r.rows.map((library) => ({ ...library, writable: false }));
       return { ok: true, anyWritable: false, writableMounts: [], libraries };
@@ -472,7 +474,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     const results = await Promise.all(
       r.rows.map(async (l) => {
         const writable = await probeAccess(l.mount_path, constants.W_OK) === true;
-        return { id: l.id, mount_path: l.mount_path, writable };
+        return { id: l.id, mount_path: l.mount_path, media_type: l.media_type, writable };
       })
     );
 
@@ -621,7 +623,9 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
 
   app.get('/api/admin/libraries', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
-    const r = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries order by mount_path asc');
+    const r = await db().query<{ id: number; mount_path: string; media_type: string }>(
+      'select id, mount_path, media_type from libraries order by media_type, mount_path asc'
+    );
 
     const libraries = await Promise.all(
       r.rows.map(async (l) => {
@@ -635,6 +639,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
         return {
           id: l.id,
           mount_path: l.mount_path,
+          media_type: l.media_type,
           mounted: mounted ?? undefined,
           writable,
           read_only: mounted === true ? !writable : undefined,

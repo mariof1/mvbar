@@ -65,10 +65,11 @@ export type TrackDoc = {
 export async function ensureTracksIndex() {
   const client = meili();
   try {
-    const task = await client.createIndex('tracks', { primaryKey: 'id' });
-    await waitForTask(client, task, ['index_already_exists']);
+    await client.getIndex('tracks');
   } catch (error) {
-    if (errorCode(error) !== 'index_already_exists') throw error;
+    if (errorCode(error) !== 'index_not_found') throw error;
+    const task = await client.createIndex('tracks', { primaryKey: 'id' });
+    await waitForTask(client, task);
   }
 
   const index = client.index('tracks');

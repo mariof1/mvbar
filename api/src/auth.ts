@@ -8,6 +8,7 @@ import * as users from './userRepo.js';
 import { db } from './db.js';
 import cookie from '@fastify/cookie';
 import { notifyAdmins } from './telegram.js';
+import { clientInfoFromRequest, type ClientInfo } from './clientInfo.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -56,45 +57,75 @@ function signToken(
 }
 
 function verifyToken(token: string) {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-  const [h, p, s] = parts;
-  const data = `${h}.${p}`;
-  const expected = crypto.createHmac('sha256', config.jwtSecret).update(data).digest('base64url');
-  if (expected !== s) return null;
-  const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8')) as {
-    sub: string;
-    role: Role;
-    sv?: number;
-    amr?: 'password' | 'google';
-    iat?: number;
-    email?: string;
-  };
-  return {
-    userId: payload.sub,
-    role: payload.role,
-    sessionVersion: payload.sv ?? 0,
-    authMethod: payload.amr,
-    issuedAt: payload.iat,
-    email: payload.email,
-  };
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [h, p, s] = parts;
+    const data = `${h}.${p}`;
+    const expected = crypto.createHmac('sha256', config.jwtSecret).update(data).digest('base64url');
+    const expectedBuffer = Buffer.from(expected);
+    const suppliedBuffer = Buffer.from(s);
+    if (
+      expectedBuffer.length !== suppliedBuffer.length
+      || !crypto.timingSafeEqual(expectedBuffer, suppliedBuffer)
+    ) return null;
+    const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8')) as {
+      sub: string;
+      role: Role;
+      sv?: number;
+      amr?: 'password' | 'google';
+      iat?: number;
+      email?: string;
+    };
+    if (!payload.sub || (payload.role !== 'admin' && payload.role !== 'user')) return null;
+    return {
+      userId: payload.sub,
+      role: payload.role,
+      sessionVersion: payload.sv ?? 0,
+      authMethod: payload.amr,
+      issuedAt: payload.iat,
+      email: payload.email,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export const authPlugin: FastifyPluginAsync = fp(async (app) => {
   await app.register(cookie);
   const lastActiveWrites = new Map<string, number>();
-  const recordedLoginSessions = new Set<string>();
+  const clientActivityWrites = new Map<string, number>();
+  const recordedLoginSessions = new Map<string, number>();
 
-  async function markActive(userId: string, ip: string, force = false) {
+  function pruneActivityCache(cache: Map<string, number>, now: number) {
+    if (cache.size < 10_000) return;
+    const cutoff = now - 24 * 60 * 60_000;
+    for (const [key, timestamp] of cache) {
+      if (timestamp < cutoff) cache.delete(key);
+    }
+  }
+
+  async function markActive(userId: string, ip: string, client: ClientInfo, force = false) {
     const now = Date.now();
-    const previous = lastActiveWrites.get(userId) ?? 0;
-    if (!force && now - previous < ACTIVE_WRITE_INTERVAL_MS) return;
+    const clientKey = `${userId}:${client.id}`;
+    const updateUser = force || now - (lastActiveWrites.get(userId) ?? 0) >= ACTIVE_WRITE_INTERVAL_MS;
+    const trackClient = client.reported || client.type === 'web';
+    const updateClient = trackClient
+      && (force || now - (clientActivityWrites.get(clientKey) ?? 0) >= ACTIVE_WRITE_INTERVAL_MS);
+    if (!updateUser && !updateClient) return;
 
-    lastActiveWrites.set(userId, now);
+    if (updateUser) lastActiveWrites.set(userId, now);
+    if (updateClient) clientActivityWrites.set(clientKey, now);
+    pruneActivityCache(lastActiveWrites, now);
+    pruneActivityCache(clientActivityWrites, now);
     try {
-      await users.markUserActive(userId, ip);
+      await Promise.all([
+        updateUser ? users.markUserActive(userId, ip) : Promise.resolve(),
+        updateClient ? users.touchClientActivity(userId, ip, client) : Promise.resolve(),
+      ]);
     } catch (error) {
-      lastActiveWrites.delete(userId);
+      if (updateUser) lastActiveWrites.delete(userId);
+      if (updateClient) clientActivityWrites.delete(clientKey);
       app.log.warn({ err: error, userId }, 'failed to update user activity');
     }
   }
@@ -150,6 +181,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     if (user.session_version !== verified.sessionVersion) return;
 
     req.user = verified;
+    const client = clientInfoFromRequest(req);
     const inferredMethod = verified.authMethod
       ?? (user.google_id && (verified.email || !user.password_hash) ? 'google' : undefined);
     if (inferredMethod && verified.issuedAt) {
@@ -159,11 +191,14 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
           email: user.email,
           method: inferredMethod,
           sessionIat: verified.issuedAt,
+          ip: req.ip,
+          client,
         });
-        recordedLoginSessions.add(sessionKey);
+        recordedLoginSessions.set(sessionKey, Date.now());
+        pruneActivityCache(recordedLoginSessions, Date.now());
       }
     }
-    await markActive(verified.userId, req.ip);
+    await markActive(verified.userId, req.ip, client);
   });
 
   // routes
@@ -175,18 +210,16 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     const ip = req.ip;
     const now = Date.now();
 
-    // Check if IP is whitelisted (bypass rate limiting)
-    if (!store.rateLimitBypassIPs.has(ip)) {
-      // lightweight rate limit (per IP)
-      const rlKey = `rl:${ip}`;
-      const rl = store.failedLoginsByKey.get(rlKey);
-      if (!rl || now - rl.lastFailedAt > 60_000) {
-        store.failedLoginsByKey.set(rlKey, { count: 1, lastFailedAt: now });
-      } else {
-        rl.count += 1;
-        rl.lastFailedAt = now;
-        if (rl.count > 5) return reply.code(429).send({ ok: false, error: 'rate_limited' });
-      }
+    const bypassRateLimit = store.rateLimitBypassIPs.has(ip);
+    const rlKey = `rl:${ip}`;
+    const ipFailures = store.failedLoginsByKey.get(rlKey);
+    if (
+      !bypassRateLimit
+      && ipFailures
+      && now - ipFailures.lastFailedAt <= 60_000
+      && ipFailures.count >= 5
+    ) {
+      return reply.code(429).send({ ok: false, error: 'rate_limited' });
     }
 
     // account lockout (per IP + email)
@@ -200,6 +233,14 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     const user = await users.getUserByEmail(email);
 
     if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
+      if (!bypassRateLimit) {
+        if (!ipFailures || now - ipFailures.lastFailedAt > 60_000) {
+          store.failedLoginsByKey.set(rlKey, { count: 1, lastFailedAt: now });
+        } else {
+          ipFailures.count += 1;
+          ipFailures.lastFailedAt = now;
+        }
+      }
       const next = state ?? { count: 0, lastFailedAt: 0 };
       next.count += 1;
       next.lastFailedAt = now;
@@ -211,10 +252,12 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     store.failedLoginsByKey.delete(key);
+    store.failedLoginsByKey.delete(rlKey);
     const issuedAt = Math.floor(Date.now() / 1000);
     const token = signToken(user.id, user.role, user.session_version, 'password', issuedAt);
-    await users.ensureSessionLogin({ email, method: 'password', sessionIat: issuedAt, ip });
-    await markActive(user.id, ip, true);
+    const client = clientInfoFromRequest(req);
+    await users.ensureSessionLogin({ email, method: 'password', sessionIat: issuedAt, ip, client });
+    await markActive(user.id, ip, client, true);
     notifyAdmins('user_login', `User logged in:\n• Email: ${email}\n• IP: ${ip}`);
 
     // Save password for Subsonic token auth

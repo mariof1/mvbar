@@ -40,11 +40,34 @@ if (recoveredTranscodes > 0) {
 // Ensure libraries exist in DB so we can link tracks
 for (const dir of musicDirs) {
   await db().query(
-    `INSERT INTO libraries (mount_path, created_at)
-     VALUES ($1, NOW())
-     ON CONFLICT (mount_path) DO NOTHING`,
+    `INSERT INTO libraries (mount_path, media_type, created_at)
+     VALUES ($1, 'music', NOW())
+     ON CONFLICT (mount_path) DO UPDATE SET media_type = 'music'`,
     [dir]
   );
+}
+
+for (const dir of audiobookDirs) {
+  const inserted = await db().query<{ id: number | string }>(
+    `INSERT INTO libraries (mount_path, media_type, created_at)
+     VALUES ($1, 'audiobook', NOW())
+     ON CONFLICT (mount_path) DO NOTHING
+     RETURNING id`,
+    [dir]
+  );
+  if (inserted.rows[0]) {
+    await db().query(
+      `INSERT INTO user_libraries(user_id, library_id)
+       SELECT id, $1 FROM users
+       ON CONFLICT DO NOTHING`,
+      [inserted.rows[0].id]
+    );
+  } else {
+    await db().query(
+      `UPDATE libraries SET media_type = 'audiobook' WHERE mount_path = $1`,
+      [dir]
+    );
+  }
 }
 
 try {

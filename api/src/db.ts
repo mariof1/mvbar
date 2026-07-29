@@ -109,7 +109,6 @@ export async function initDb() {
       )
     from users u
     where u.google_id is not null
-      and u.password_hash is null
       and not exists (
         select 1
         from audit_events ae
@@ -239,8 +238,17 @@ export async function initDb() {
     create table if not exists libraries (
       id bigserial primary key,
       mount_path text not null unique,
+      media_type text not null default 'music',
       created_at timestamptz not null default now()
     );
+  `);
+  await pool.query("alter table libraries add column if not exists media_type text not null default 'music'");
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE libraries ADD CONSTRAINT libraries_media_type_check
+        CHECK (media_type in ('music', 'audiobook'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
   `);
 
   await pool.query(`
@@ -690,6 +698,97 @@ export async function initDb() {
     );
   `);
   await pool.query('create index if not exists user_audiobook_progress_user_idx on user_audiobook_progress(user_id)');
+
+  await pool.query(`
+    create table if not exists media_activity (
+      id bigserial primary key,
+      user_id text not null references users(id) on delete cascade,
+      media_type text not null check (media_type in ('podcast', 'audiobook')),
+      item_id bigint not null,
+      parent_id bigint,
+      event_type text not null check (event_type in ('progress', 'completed')),
+      position_ms bigint not null default 0,
+      listened_ms bigint not null default 0,
+      bucket_start timestamptz not null,
+      updated_at timestamptz not null default now(),
+      ip text,
+      client_type text,
+      client_id text,
+      unique(user_id, media_type, item_id, bucket_start)
+    );
+  `);
+  await pool.query(
+    'create index if not exists media_activity_user_updated_idx on media_activity(user_id, updated_at desc)'
+  );
+  await pool.query(
+    'create index if not exists media_activity_type_item_idx on media_activity(media_type, item_id, updated_at desc)'
+  );
+  await pool.query(`
+    insert into media_activity (
+      user_id, media_type, item_id, parent_id, event_type,
+      position_ms, listened_ms, bucket_start, updated_at
+    )
+    select
+      uep.user_id,
+      'podcast',
+      uep.episode_id,
+      pe.podcast_id,
+      case when uep.played then 'completed' else 'progress' end,
+      greatest(uep.position_ms, 0),
+      case
+        when pe.duration_ms is not null and pe.duration_ms > 0 then
+          least(pe.duration_ms, greatest(uep.position_ms, case when uep.played then pe.duration_ms else 0 end))
+        else greatest(uep.position_ms, 0)
+      end,
+      date_bin('5 minutes', uep.updated_at, timestamptz '2001-01-01'),
+      uep.updated_at
+    from user_episode_progress uep
+    join podcast_episodes pe on pe.id = uep.episode_id
+    where uep.position_ms > 0 or uep.played
+    on conflict do nothing
+  `);
+  await pool.query(`
+    insert into media_activity (
+      user_id, media_type, item_id, parent_id, event_type,
+      position_ms, listened_ms, bucket_start, updated_at
+    )
+    select
+      uap.user_id,
+      'audiobook',
+      uap.audiobook_id,
+      uap.chapter_id,
+      case when uap.finished then 'completed' else 'progress' end,
+      greatest(uap.position_ms, 0),
+      case
+        when uap.finished and a.duration_ms > 0 then a.duration_ms
+        else greatest(uap.position_ms, 0)
+      end,
+      date_bin('5 minutes', uap.updated_at, timestamptz '2001-01-01'),
+      uap.updated_at
+    from user_audiobook_progress uap
+    join audiobooks a on a.id = uap.audiobook_id
+    where uap.position_ms > 0 or uap.finished
+    on conflict do nothing
+  `);
+
+  await pool.query(`
+    create table if not exists user_client_activity (
+      user_id text not null references users(id) on delete cascade,
+      client_id text not null,
+      client_type text not null,
+      app_version text,
+      device_name text,
+      platform text,
+      user_agent text,
+      first_seen_at timestamptz not null default now(),
+      last_seen_at timestamptz not null default now(),
+      last_seen_ip text,
+      primary key (user_id, client_id)
+    );
+  `);
+  await pool.query(
+    'create index if not exists user_client_activity_user_seen_idx on user_client_activity(user_id, last_seen_at desc)'
+  );
 
   // ========================================================================
   // USER PREFERENCES

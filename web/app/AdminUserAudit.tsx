@@ -60,6 +60,14 @@ function countLabel(value: number, singular: string, plural = `${singular}s`) {
   return `${value.toLocaleString()} ${value === 1 ? singular : plural}`;
 }
 
+function clientLabel(value: string | null) {
+  if (!value) return 'Unknown client';
+  if (value === 'android') return 'Android';
+  if (value === 'wear') return 'Wear OS';
+  if (value === 'web') return 'Web';
+  return value.replace(/[-_]/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function mostRecentActivity(user: AdminUserAuditSummary) {
   return user.lastActiveAt;
 }
@@ -348,7 +356,9 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                   {detail.user.lastActiveIp && <div className="text-xs font-mono text-slate-500 mt-1">{detail.user.lastActiveIp}</div>}
                   <div className="text-xs text-slate-500 mt-2">
                     {detail.user.lastLoginAt
-                      ? `Signed in ${dateTime(detail.user.lastLoginAt)}`
+                      ? detail.user.lastLoginSource === 'account_creation'
+                        ? `First known sign-in ${dateTime(detail.user.lastLoginAt)}`
+                        : `Last known sign-in ${dateTime(detail.user.lastLoginAt)}`
                       : detail.user.authProvider === 'google'
                         ? 'Google account; no sign-in recorded'
                         : 'No sign-in recorded'}
@@ -401,8 +411,8 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                     <div className="grid grid-cols-3 p-1 bg-slate-950/50 rounded-lg" role="tablist" aria-label="Listening history type">
                       {([
                         ['music', 'Music', detail.historyTotal],
-                        ['podcasts', 'Podcasts', detail.user.podcastEpisodeCount],
-                        ['audiobooks', 'Audiobooks', detail.user.audiobookCount],
+                        ['podcasts', 'Podcasts', detail.podcastHistoryTotal],
+                        ['audiobooks', 'Audiobooks', detail.audiobookHistoryTotal],
                       ] as Array<[ListeningTab, string, number]>).map(([value, label, count]) => (
                         <button
                           key={value}
@@ -442,7 +452,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                       </div>
                     ))}
                     {listeningTab === 'podcasts' && detail.podcastHistory.map((item) => (
-                      <div key={item.episodeId} className="px-4 sm:px-5 py-3 flex items-center gap-3">
+                      <div key={item.activityId} className="px-4 sm:px-5 py-3 flex items-center gap-3">
                         <img
                           src={`/api/podcasts/episodes/${item.episodeId}/art`}
                           alt=""
@@ -457,14 +467,16 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                         </div>
                         <div className="text-right shrink-0">
                           <div className="text-xs text-slate-400">{relativeTime(item.updatedAt)}</div>
-                          <div className={`text-[10px] mt-1 ${item.played ? 'text-emerald-400' : 'text-slate-600'}`}>
-                            {item.played ? 'Completed' : `${duration(item.positionMs)} / ${duration(item.durationMs)}`}
+                          <div className={`text-[10px] mt-1 ${item.completed ? 'text-emerald-400' : 'text-slate-600'}`}>
+                            {item.completed
+                              ? 'Completed'
+                              : `${duration(item.positionMs)} · listened ${duration(item.listenedMs)}`}
                           </div>
                         </div>
                       </div>
                     ))}
                     {listeningTab === 'audiobooks' && detail.audiobookHistory.map((item) => (
-                      <div key={item.audiobookId} className="px-4 sm:px-5 py-3 flex items-center gap-3">
+                      <div key={item.activityId} className="px-4 sm:px-5 py-3 flex items-center gap-3">
                         <img
                           src={`/api/audiobook-art/${item.audiobookId}`}
                           alt=""
@@ -481,8 +493,10 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                         </div>
                         <div className="text-right shrink-0">
                           <div className="text-xs text-slate-400">{relativeTime(item.updatedAt)}</div>
-                          <div className={`text-[10px] mt-1 ${item.finished ? 'text-emerald-400' : 'text-slate-600'}`}>
-                            {item.finished ? 'Completed' : `${duration(item.positionMs)} / ${duration(item.chapterDurationMs)}`}
+                          <div className={`text-[10px] mt-1 ${item.completed ? 'text-emerald-400' : 'text-slate-600'}`}>
+                            {item.completed
+                              ? 'Completed'
+                              : `${duration(item.positionMs)} · listened ${duration(item.listenedMs)}`}
                           </div>
                         </div>
                       </div>
@@ -508,14 +522,14 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                       </button>
                     </div>
                   )}
-                  {listeningTab === 'podcasts' && detail.podcastHistory.length < detail.user.podcastEpisodeCount && (
+                  {listeningTab === 'podcasts' && detail.podcastHistory.length < detail.podcastHistoryTotal && (
                     <div className="px-4 py-3 border-t border-slate-800 text-center text-xs text-slate-500">
-                      Showing the latest {detail.podcastHistory.length.toLocaleString()} episodes
+                      Showing the latest {detail.podcastHistory.length.toLocaleString()} activity records
                     </div>
                   )}
-                  {listeningTab === 'audiobooks' && detail.audiobookHistory.length < detail.user.audiobookCount && (
+                  {listeningTab === 'audiobooks' && detail.audiobookHistory.length < detail.audiobookHistoryTotal && (
                     <div className="px-4 py-3 border-t border-slate-800 text-center text-xs text-slate-500">
-                      Showing the latest {detail.audiobookHistory.length.toLocaleString()} books
+                      Showing the latest {detail.audiobookHistory.length.toLocaleString()} activity records
                     </div>
                   )}
                 </div>
@@ -546,6 +560,15 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                                   : 'Failed attempt'}
                             </div>
                             <div className="text-[10px] text-slate-500 mt-1">{dateTime(signIn.ts)}</div>
+                            {successful && signIn.clientType && (
+                              <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                                {[
+                                  clientLabel(signIn.clientType),
+                                  signIn.appVersion,
+                                  signIn.deviceName,
+                                ].filter(Boolean).join(' · ')}
+                              </div>
+                            )}
                             {signIn.ip && <div className="text-[10px] font-mono text-slate-600 truncate mt-0.5">{signIn.ip}</div>}
                           </div>
                         </div>
@@ -553,6 +576,33 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                     })}
                     {detail.signIns.length === 0 && (
                       <div className="py-10 text-center text-sm text-slate-500">No sign-ins recorded</div>
+                    )}
+                  </div>
+
+                  <div className="px-4 py-3 border-y border-slate-800 flex items-center justify-between">
+                    <h4 className="text-sm font-medium text-slate-200">Devices</h4>
+                    <span className="text-xs text-slate-500">{detail.clients.length}</span>
+                  </div>
+                  <div className="divide-y divide-slate-800">
+                    {detail.clients.map((client) => (
+                      <div key={client.clientId} className="px-4 py-3 flex items-start gap-2">
+                        <span className="w-2 h-2 rounded-full mt-1.5 shrink-0 bg-cyan-400" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs text-slate-300">{clientLabel(client.clientType)}</div>
+                          <div className="text-[10px] text-slate-500 mt-1 truncate">
+                            {[client.appVersion, client.deviceName, client.platform].filter(Boolean).join(' · ') || 'No device details'}
+                          </div>
+                          <div className="text-[10px] text-slate-600 mt-1">
+                            Last active {relativeTime(client.lastSeenAt)}
+                          </div>
+                          {client.lastSeenIp && (
+                            <div className="text-[10px] font-mono text-slate-600 truncate mt-0.5">{client.lastSeenIp}</div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {detail.clients.length === 0 && (
+                      <div className="py-8 text-center text-sm text-slate-500">No devices recorded</div>
                     )}
                   </div>
                 </div>

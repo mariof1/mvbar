@@ -13,6 +13,11 @@ import { resolveInside } from './pathSafety.js';
 import { db } from './db.js';
 import { XMLParser } from 'fast-xml-parser';
 import crypto from 'crypto';
+import {
+  boundedPosition,
+  continuousListeningDelta,
+  recordMediaActivity,
+} from './mediaActivity.js';
 
 const PODCAST_DIR = process.env.PODCAST_DIR ?? '/podcasts';
 const PODCAST_ART_DIR = process.env.PODCAST_ART_DIR ?? '/data/cache/podcast-art';
@@ -484,16 +489,40 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     const episodeId = Number((req.params as { episodeId: string }).episodeId);
     if (!Number.isFinite(episodeId)) return reply.code(400).send({ ok: false });
     
-    const { positionMs, played } = req.body as { positionMs?: number; played?: boolean };
+    const { positionMs, played } = (req.body ?? {}) as { positionMs?: unknown; played?: unknown };
+    if (positionMs === undefined && played === undefined) {
+      return reply.code(400).send({ ok: false, error: 'positionMs or played is required' });
+    }
+    if (played !== undefined && typeof played !== 'boolean') {
+      return reply.code(400).send({ ok: false, error: 'played must be a boolean' });
+    }
     
     // Verify episode exists and user is subscribed
-    const checkR = await db().query(
-      `SELECT 1 FROM podcast_episodes e
+    const checkR = await db().query<{
+      podcast_id: number;
+      duration_ms: number | null;
+      previous_position_ms: number | null;
+      previous_played: boolean | null;
+    }>(
+      `SELECT
+         e.podcast_id,
+         e.duration_ms,
+         uep.position_ms as previous_position_ms,
+         uep.played as previous_played
+       FROM podcast_episodes e
        JOIN user_podcast_subscriptions ups ON ups.podcast_id = e.podcast_id AND ups.user_id = $1
+       LEFT JOIN user_episode_progress uep ON uep.episode_id = e.id AND uep.user_id = $1
        WHERE e.id = $2`,
       [req.user.userId, episodeId]
     );
     if (checkR.rows.length === 0) return reply.code(404).send({ ok: false });
+    const episode = checkR.rows[0];
+    const normalizedPosition = positionMs === undefined
+      ? null
+      : boundedPosition(positionMs, episode.duration_ms);
+    if (positionMs !== undefined && normalizedPosition == null) {
+      return reply.code(400).send({ ok: false, error: 'positionMs must be a non-negative finite number' });
+    }
     
     await db().query(
       `INSERT INTO user_episode_progress (user_id, episode_id, position_ms, played, updated_at)
@@ -502,8 +531,23 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
          position_ms = COALESCE($3, user_episode_progress.position_ms),
          played = COALESCE($4, user_episode_progress.played),
          updated_at = now()`,
-      [req.user.userId, episodeId, positionMs ?? null, played ?? null]
+      [req.user.userId, episodeId, normalizedPosition, played ?? null]
     );
+
+    const activityPosition = normalizedPosition
+      ?? (played === true && episode.duration_ms ? episode.duration_ms : episode.previous_position_ms ?? 0);
+    const listenedMs = normalizedPosition == null
+      ? 0
+      : continuousListeningDelta(episode.previous_position_ms, normalizedPosition);
+    await recordMediaActivity({
+      req,
+      mediaType: 'podcast',
+      itemId: episodeId,
+      parentId: episode.podcast_id,
+      positionMs: activityPosition,
+      listenedMs,
+      completed: played === true && episode.previous_played !== true,
+    });
     
     return { ok: true };
   });
@@ -516,7 +560,30 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     
     const episodeId = Number((req.params as { episodeId: string }).episodeId);
-    const { played } = req.body as { played: boolean };
+    const { played } = (req.body ?? {}) as { played?: unknown };
+    if (typeof played !== 'boolean') {
+      return reply.code(400).send({ ok: false, error: 'played must be a boolean' });
+    }
+
+    const episodeR = await db().query<{
+      podcast_id: number;
+      duration_ms: number | null;
+      position_ms: number | null;
+      previous_played: boolean | null;
+    }>(
+      `SELECT
+         e.podcast_id,
+         e.duration_ms,
+         uep.position_ms,
+         uep.played as previous_played
+       FROM podcast_episodes e
+       JOIN user_podcast_subscriptions ups ON ups.podcast_id = e.podcast_id AND ups.user_id = $1
+       LEFT JOIN user_episode_progress uep ON uep.episode_id = e.id AND uep.user_id = $1
+       WHERE e.id = $2`,
+      [req.user.userId, episodeId]
+    );
+    const episode = episodeR.rows[0];
+    if (!episode) return reply.code(404).send({ ok: false });
     
     await db().query(
       `INSERT INTO user_episode_progress (user_id, episode_id, played, updated_at)
@@ -524,6 +591,18 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
        ON CONFLICT (user_id, episode_id) DO UPDATE SET played = $3, updated_at = now()`,
       [req.user.userId, episodeId, played]
     );
+
+    if (played && episode.previous_played !== true) {
+      await recordMediaActivity({
+        req,
+        mediaType: 'podcast',
+        itemId: episodeId,
+        parentId: episode.podcast_id,
+        positionMs: episode.duration_ms ?? episode.position_ms ?? 0,
+        listenedMs: 0,
+        completed: true,
+      });
+    }
     
     return { ok: true };
   });
@@ -587,7 +666,7 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       await db().query('UPDATE podcast_episodes SET audio_url = $1 WHERE id = $2', [audioUrl, episodeId]);
       req.log.info({ episodeId }, 'Repaired malformed podcast episode audio URL');
     }
-    return reply.redirect(302, audioUrl);
+    return reply.redirect(audioUrl, 302);
   });
   
   // ========================================================================
@@ -826,7 +905,7 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       if (row.image_path) {
         try {
           safeJoinPodcastArt(row.image_path); // validate path
-          return reply.redirect(302, `/api/podcast-art/${row.image_path}`);
+          return reply.redirect(`/api/podcast-art/${row.image_path}`, 302);
         } catch {
           // Fall through to redirect
         }
@@ -834,7 +913,7 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     
     // Fallback: redirect to original URL if available
     if (row.image_url) {
-      return reply.redirect(302, row.image_url);
+      return reply.redirect(row.image_url, 302);
     }
     
     return reply.code(404).send({ ok: false });
@@ -868,14 +947,14 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     if (imagePath) {
       try {
         safeJoinPodcastArt(imagePath); // validate path
-        return reply.redirect(302, `/api/podcast-art/${imagePath}`);
+        return reply.redirect(`/api/podcast-art/${imagePath}`, 302);
       } catch {
         // Fall through to redirect
       }
     }
     
     if (imageUrl) {
-      return reply.redirect(302, imageUrl);
+      return reply.redirect(imageUrl, 302);
     }
     
     return reply.code(404).send({ ok: false });

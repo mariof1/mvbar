@@ -6,6 +6,17 @@ export async function apiFetch(path: string, init: RequestInit = {}, token?: str
   const headers = new Headers(init.headers);
   if (!headers.has('content-type') && init.body) headers.set('content-type', 'application/json');
   if (token && token !== 'cookie') headers.set('authorization', `Bearer ${token}`);
+  headers.set('x-mvbar-client', 'web');
+  headers.set('x-mvbar-version', '0.1.0');
+  if (typeof window !== 'undefined') {
+    let clientId = window.localStorage.getItem('mvbar_client_id');
+    if (!clientId) {
+      clientId = globalThis.crypto?.randomUUID?.() ?? `web_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      window.localStorage.setItem('mvbar_client_id', clientId);
+    }
+    headers.set('x-mvbar-client-id', clientId);
+    headers.set('x-mvbar-platform', window.navigator.platform || 'browser');
+  }
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers, cache: 'no-store', credentials: 'same-origin' });
   const text = await res.text();
   let data: any = null;
@@ -55,7 +66,7 @@ export async function adminLibraryWritable(token: string) {
     ok: boolean;
     anyWritable: boolean;
     writableMounts: string[];
-    libraries: Array<{ id: number; mount_path: string; writable: boolean }>;
+    libraries: Array<{ id: number; mount_path: string; media_type: 'music' | 'audiobook'; writable: boolean }>;
   };
 }
 
@@ -81,7 +92,14 @@ export async function adminUpdateTrackMetadata(
 export async function listLibraries(token: string) {
   const r = (await apiFetch('/admin/libraries', { method: 'GET' }, token)) as {
     ok: boolean;
-    libraries: Array<{ id: number | string; mount_path: string; mounted?: boolean; writable?: boolean; read_only?: boolean }>;
+    libraries: Array<{
+      id: number | string;
+      mount_path: string;
+      media_type: 'music' | 'audiobook';
+      mounted?: boolean;
+      writable?: boolean;
+      read_only?: boolean;
+    }>;
   };
   return { ok: r.ok, libraries: r.libraries.map((l) => ({ ...l, id: Number(l.id) })) };
 }
@@ -107,6 +125,7 @@ export type AdminUserAuditSummary = {
   lastActiveIp: string | null;
   lastLoginAt: string | null;
   lastLoginIp: string | null;
+  lastLoginSource: string | null;
   loginCount: number;
   lastPlayedAt: string | null;
   lastPodcastAt: string | null;
@@ -154,33 +173,55 @@ export type AdminUserAuditDetail = {
   }>;
   historyTotal: number;
   podcastHistory: Array<{
+    activityId: number;
     episodeId: number;
     podcastId: number;
     episodeTitle: string;
     podcastTitle: string;
     durationMs: number | null;
     positionMs: number;
-    played: boolean;
+    listenedMs: number;
+    completed: boolean;
+    clientType: string | null;
     updatedAt: string;
   }>;
+  podcastHistoryTotal: number;
   audiobookHistory: Array<{
+    activityId: number;
     audiobookId: number;
     bookTitle: string;
     author: string | null;
     bookDurationMs: number;
-    chapterId: number;
-    chapterTitle: string;
+    chapterId: number | null;
+    chapterTitle: string | null;
     chapterDurationMs: number | null;
     positionMs: number;
-    finished: boolean;
+    listenedMs: number;
+    completed: boolean;
+    clientType: string | null;
     updatedAt: string;
   }>;
+  audiobookHistoryTotal: number;
   signIns: Array<{
     ts: string;
     event: 'login_ok' | 'login_failed' | 'login_locked';
     ip: string | null;
     method: 'password' | 'google' | null;
     backfilledFrom: string | null;
+    clientType: string | null;
+    appVersion: string | null;
+    deviceName: string | null;
+    platform: string | null;
+  }>;
+  clients: Array<{
+    clientId: string;
+    clientType: string;
+    appVersion: string | null;
+    deviceName: string | null;
+    platform: string | null;
+    firstSeenAt: string;
+    lastSeenAt: string;
+    lastSeenIp: string | null;
   }>;
   dailyActivity: Array<{ date: string; count: number }>;
   limit: number;

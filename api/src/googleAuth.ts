@@ -11,6 +11,7 @@ import { config } from './config.js';
 import { notifyAdmins } from './telegram.js';
 import { broadcastToAdmins } from './websocket.js';
 import * as users from './userRepo.js';
+import { clientInfoFromRequest } from './clientInfo.js';
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
@@ -258,14 +259,17 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
           sv: user.session_version,
           amr: 'google',
         }, undefined, issuedAt);
+        const clientInfo = clientInfoFromRequest(request);
         await Promise.all([
           users.ensureSessionLogin({
             email: user.email,
             method: 'google',
             sessionIat: issuedAt,
             ip: request.ip,
+            client: clientInfo,
           }),
           users.markUserActive(user.id, request.ip),
+          users.touchClientActivity(user.id, request.ip, clientInfo),
         ]);
 
         // Set cookie and redirect
@@ -669,14 +673,17 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
           sv: user.session_version,
           amr: 'google',
         }, undefined, issuedAt);
+        const clientInfo = clientInfoFromRequest(request);
         await Promise.all([
           users.ensureSessionLogin({
             email: user.email,
             method: 'google',
             sessionIat: issuedAt,
             ip: request.ip,
+            client: clientInfo,
           }),
           users.markUserActive(user.id, request.ip),
+          users.touchClientActivity(user.id, request.ip, clientInfo),
         ]);
 
         return {

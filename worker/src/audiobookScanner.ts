@@ -7,7 +7,7 @@ import { writeArt } from './art.js';
 
 const AUDIO_EXTS = new Set(['.mp3', '.m4a', '.m4b', '.flac', '.aac', '.ogg', '.opus', '.wav']);
 const COVER_NAMES = ['cover.jpg', 'cover.png', 'folder.jpg', 'folder.png'];
-const ART_DIR = '/data/cache/audiobook-art';
+const ART_DIR = process.env.AUDIOBOOK_ART_DIR ?? '/data/cache/audiobook-art';
 
 // ── Helpers ─────────────────────────────────────────────────
 
@@ -52,6 +52,7 @@ function groupKey(author: string, title: string): string {
 
 interface ScannedFile {
   absolutePath: string;
+  rootDir: string;
   parentDir: string;
   filename: string;
   // Metadata (null if tag reading failed)
@@ -71,6 +72,7 @@ interface ScannedFile {
 
 interface AudiobookGroup {
   key: string;           // stable grouping key
+  libraryRoot: string;
   title: string;         // audiobook title
   author: string | null;
   narrator: string | null;
@@ -82,10 +84,10 @@ interface AudiobookGroup {
 
 async function collectAllAudioFiles(rootDirs: string[]): Promise<ScannedFile[]> {
   const files: ScannedFile[] = [];
-  const stack = [...rootDirs];
+  const stack = rootDirs.map((rootDir) => ({ dir: rootDir, rootDir }));
 
   while (stack.length > 0) {
-    const dir = stack.pop()!;
+    const { dir, rootDir } = stack.pop()!;
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -96,7 +98,7 @@ async function collectAllAudioFiles(rootDirs: string[]): Promise<ScannedFile[]> 
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        stack.push(fullPath);
+        stack.push({ dir: fullPath, rootDir });
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
         if (!AUDIO_EXTS.has(ext)) continue;
@@ -118,6 +120,7 @@ async function collectAllAudioFiles(rootDirs: string[]): Promise<ScannedFile[]> 
 
         files.push({
           absolutePath: fullPath,
+          rootDir,
           parentDir: dir,
           filename: entry.name,
           album: tags?.album ?? null,
@@ -143,7 +146,7 @@ async function collectAllAudioFiles(rootDirs: string[]): Promise<ScannedFile[]> 
 // ── Step 2: Smart grouping ──────────────────────────────────
 
 function groupFilesIntoAudiobooks(files: ScannedFile[]): AudiobookGroup[] {
-  const groups = new Map<string, ScannedFile[]>();
+  const groups = new Map<string, { key: string; libraryRoot: string; files: ScannedFile[] }>();
 
   for (const file of files) {
     let key: string;
@@ -157,13 +160,17 @@ function groupFilesIntoAudiobooks(files: ScannedFile[]): AudiobookGroup[] {
       key = `dir::${file.parentDir}`;
     }
 
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(file);
+    const scopedKey = `${file.rootDir}\u0000${key}`;
+    if (!groups.has(scopedKey)) {
+      groups.set(scopedKey, { key, libraryRoot: file.rootDir, files: [] });
+    }
+    groups.get(scopedKey)!.files.push(file);
   }
 
   const result: AudiobookGroup[] = [];
 
-  for (const [key, groupFiles] of groups) {
+  for (const group of groups.values()) {
+    const { key, libraryRoot, files: groupFiles } = group;
     // Determine audiobook metadata from the group using majority vote
     const title = mostCommon(groupFiles.map(f => f.album).filter(Boolean) as string[])
       || path.basename(groupFiles[0].parentDir);
@@ -201,7 +208,15 @@ function groupFilesIntoAudiobooks(files: ScannedFile[]): AudiobookGroup[] {
       return naturalSort(a.filename, b.filename);
     });
 
-    result.push({ key: stableKey, title, author, narrator, language, files: groupFiles });
+    result.push({
+      key: stableKey,
+      libraryRoot,
+      title,
+      author,
+      narrator,
+      language,
+      files: groupFiles,
+    });
   }
 
   return result;
@@ -285,7 +300,11 @@ async function detectGroupCover(group: AudiobookGroup): Promise<string | null> {
 
 // ── Step 4: Upsert audiobook + chapters ─────────────────────
 
-async function upsertAudiobook(group: AudiobookGroup, coverPath: string | null): Promise<{
+async function upsertAudiobook(
+  group: AudiobookGroup,
+  libraryId: number,
+  coverPath: string | null
+): Promise<{
   chapterCount: number;
   totalDurationMs: number;
 }> {
@@ -300,9 +319,10 @@ async function upsertAudiobook(group: AudiobookGroup, coverPath: string | null):
 
   // Upsert audiobook (key is the stable grouping key)
   const { rows } = await db().query<{ id: number }>(
-    `INSERT INTO audiobooks (path, title, author, narrator, language, cover_path, duration_ms)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO audiobooks (library_id, path, title, author, narrator, language, cover_path, duration_ms)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (path) DO UPDATE SET
+       library_id = EXCLUDED.library_id,
        title = CASE WHEN audiobooks.metadata_locked THEN audiobooks.title ELSE EXCLUDED.title END,
        author = CASE WHEN audiobooks.metadata_locked THEN audiobooks.author ELSE EXCLUDED.author END,
        narrator = CASE WHEN audiobooks.metadata_locked THEN audiobooks.narrator ELSE EXCLUDED.narrator END,
@@ -310,7 +330,16 @@ async function upsertAudiobook(group: AudiobookGroup, coverPath: string | null):
        cover_path = EXCLUDED.cover_path, duration_ms = EXCLUDED.duration_ms,
        updated_at = now()
      RETURNING id`,
-    [group.key, group.title, group.author, group.narrator, group.language, coverPath, totalDurationMs],
+    [
+      libraryId,
+      group.key,
+      group.title,
+      group.author,
+      group.narrator,
+      group.language,
+      coverPath,
+      totalDurationMs,
+    ],
   );
   const audiobookId = rows[0].id;
 
@@ -347,13 +376,39 @@ export async function scanAudiobooks(audiobookDirs: string[]): Promise<void> {
   const startedAt = Date.now();
   logger.info('audiobook-scan', `Starting smart audiobook scan across ${audiobookDirs.length} director${audiobookDirs.length === 1 ? 'y' : 'ies'}`);
 
+  const availableDirs: string[] = [];
+  for (const dir of audiobookDirs) {
+    try {
+      const dirStat = await stat(dir);
+      if (dirStat.isDirectory()) availableDirs.push(dir);
+    } catch {
+      logger.error('audiobook-scan', `Audiobook directory is unavailable; preserving indexed books`, { dir });
+    }
+  }
+  if (availableDirs.length === 0) {
+    logger.error('audiobook-scan', 'No configured audiobook directories are currently available; scan skipped');
+    return;
+  }
+
+  const libraryIds = new Map<string, number>();
+  for (const dir of availableDirs) {
+    const library = await db().query<{ id: number | string }>(
+      `SELECT id FROM libraries WHERE mount_path = $1 AND media_type = 'audiobook'`,
+      [dir]
+    );
+    if (library.rows[0]) libraryIds.set(dir, Number(library.rows[0].id));
+  }
+
   // Step 1: Collect all audio files
-  const allFiles = await collectAllAudioFiles(audiobookDirs);
+  const allFiles = await collectAllAudioFiles(availableDirs);
   logger.info('audiobook-scan', `Found ${allFiles.length} audio files`);
 
   if (allFiles.length === 0) {
-    await db().query(`DELETE FROM audiobooks`);
-    logger.info('audiobook-scan', 'No audio files found — cleared all audiobooks');
+    await db().query(
+      `DELETE FROM audiobooks WHERE library_id = ANY($1::bigint[])`,
+      [Array.from(libraryIds.values())]
+    );
+    logger.info('audiobook-scan', 'No audio files found in available directories; cleared their audiobooks');
     return;
   }
 
@@ -367,10 +422,12 @@ export async function scanAudiobooks(audiobookDirs: string[]): Promise<void> {
   const validKeys = new Set<string>();
 
   for (const group of groups) {
+    validKeys.add(group.key);
     try {
+      const libraryId = libraryIds.get(group.libraryRoot);
+      if (!libraryId) throw new Error(`No audiobook library registered for ${group.libraryRoot}`);
       const coverPath = await detectGroupCover(group);
-      const result = await upsertAudiobook(group, coverPath);
-      validKeys.add(group.key);
+      const result = await upsertAudiobook(group, libraryId, coverPath);
       totalChapters += result.chapterCount;
       totalDurationMs += result.totalDurationMs;
     } catch (e) {
@@ -383,11 +440,16 @@ export async function scanAudiobooks(audiobookDirs: string[]): Promise<void> {
   // Remove stale audiobooks no longer matched
   if (validKeys.size > 0) {
     await db().query(
-      `DELETE FROM audiobooks WHERE path != ALL($1::text[])`,
-      [Array.from(validKeys)],
+      `DELETE FROM audiobooks
+       WHERE library_id = ANY($1::bigint[])
+         AND path != ALL($2::text[])`,
+      [Array.from(libraryIds.values()), Array.from(validKeys)],
     );
   } else {
-    await db().query(`DELETE FROM audiobooks`);
+    await db().query(
+      `DELETE FROM audiobooks WHERE library_id = ANY($1::bigint[])`,
+      [Array.from(libraryIds.values())]
+    );
   }
 
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
