@@ -268,7 +268,7 @@ $launcherPath = Join-Path $generatedRoot "MVBar-Launcher.exe"
 $frameworkRoot = Split-Path -Parent $cscPath
 $compilerArguments = @(
     "/nologo",
-    "/target:exe",
+    "/target:winexe",
     "/platform:x64",
     "/optimize+",
     "/langversion:5",
@@ -278,6 +278,7 @@ $compilerArguments = @(
     "/reference:$(Join-Path $frameworkRoot 'System.Core.dll')",
     "/reference:$(Join-Path $frameworkRoot 'System.IO.Compression.dll')",
     "/reference:$(Join-Path $frameworkRoot 'System.IO.Compression.FileSystem.dll')",
+    "/reference:$(Join-Path $frameworkRoot 'System.Drawing.dll')",
     "/reference:$(Join-Path $frameworkRoot 'System.Windows.Forms.dll')",
     $generatedSource
 )

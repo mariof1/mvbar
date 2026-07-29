@@ -28,6 +28,12 @@ Double-click the generated EXE. On first run it:
    `%LOCALAPPDATA%\MVBar\credentials.txt`.
 4. Opens MVBar in the default browser.
 
+The launcher shows startup progress without opening a PowerShell window. Once
+MVBar is ready, the same window provides selectable administrator credentials
+and copy buttons. Closing the window keeps MVBar running in the Windows
+notification area; use the tray menu to reopen MVBar, view credentials or logs,
+or stop the local server.
+
 Application data survives upgrades under `%LOCALAPPDATA%\MVBar\data`. Settings
 are stored in `%LOCALAPPDATA%\MVBar\config.env`.
 

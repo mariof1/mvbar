@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
@@ -26,8 +27,11 @@ internal static class Program
     private static readonly Dictionary<string, Process> Services =
         new Dictionary<string, Process>(StringComparer.OrdinalIgnoreCase);
     private static readonly List<ServiceLog> Logs = new List<ServiceLog>();
+    private static readonly object ShutdownSync = new object();
+    private static readonly object LauncherLogSync = new object();
     private static IntPtr jobHandle = IntPtr.Zero;
     private static bool shuttingDown;
+    private static LauncherForm launcherForm;
     private static string homeRoot;
     private static string appRoot;
     private static string dataRoot;
@@ -38,9 +42,6 @@ internal static class Program
     [STAThread]
     private static int Main()
     {
-        Console.Title = "MVBar Standalone";
-        Console.OutputEncoding = Encoding.UTF8;
-
         bool ownsMutex;
         using (var mutex = new Mutex(true, @"Local\MVBarStandalone", out ownsMutex))
         {
@@ -52,21 +53,26 @@ internal static class Program
 
             try
             {
-                Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs eventArgs)
-                {
-                    eventArgs.Cancel = true;
-                    Shutdown();
-                };
                 AppDomain.CurrentDomain.ProcessExit += delegate { Shutdown(); };
+                if (Environment.GetEnvironmentVariable("MVBAR_HEADLESS") == "1")
+                {
+                    Run();
+                    return 0;
+                }
 
-                Run();
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                using (var form = new LauncherForm())
+                {
+                    launcherForm = form;
+                    Application.Run(form);
+                    launcherForm = null;
+                }
                 return 0;
             }
             catch (Exception error)
             {
-                Console.Error.WriteLine();
-                Console.Error.WriteLine("MVBar could not start:");
-                Console.Error.WriteLine(error.Message);
+                LogLauncher("FATAL", error.ToString());
                 TryShowMessage("MVBar could not start.\r\n\r\n" + error.Message +
                     "\r\n\r\nSee the logs under:\r\n" + logRoot, "MVBar");
                 Shutdown();
@@ -90,11 +96,14 @@ internal static class Program
                 "MVBar");
         }
         homeRoot = Path.GetFullPath(homeRoot);
+        logRoot = Path.Combine(homeRoot, "logs");
+        Directory.CreateDirectory(logRoot);
+        ReportStatus("Preparing MVBar", "Checking the bundled application files...", 3);
         appRoot = EnsurePayloadExtracted();
         dataRoot = Path.Combine(homeRoot, "data");
-        logRoot = Path.Combine(homeRoot, "logs");
         pgDataRoot = Path.Combine(dataRoot, "postgres");
 
+        ReportStatus("Loading settings", "Preparing your local music library...", 18);
         CreateDataDirectories();
         var config = LoadOrCreateConfig();
         ConfigureEnvironment(config);
@@ -136,21 +145,23 @@ internal static class Program
             "PATH",
             ffmpegBin + ";" + pgBin + ";" + Environment.GetEnvironmentVariable("PATH"));
 
-        Console.WriteLine("MVBar Standalone " + BuildId);
-        Console.WriteLine("Data: " + dataRoot);
-        Console.WriteLine("Logs: " + logRoot);
-        Console.WriteLine();
+        LogLauncher("INFO", "MVBar Standalone " + BuildId);
+        LogLauncher("INFO", "Data: " + dataRoot);
+        LogLauncher("INFO", "Logs: " + logRoot);
 
+        ReportStatus("Starting database", "Preparing PostgreSQL...", 25);
         InitializePostgres(initDbPath);
         StartService("postgres", postgresPath,
             Args("-D", pgDataRoot, "-p", pgPort.ToString(), "-h", "127.0.0.1"),
             homeRoot, null);
         WaitForTcp("127.0.0.1", pgPort, 60);
         WaitForPostgres(psqlPath, pgPort, 90);
+        ReportStatus("Starting database", "Applying MVBar database settings...", 36);
         PrepareDatabase(psqlPath, createUserPath, createDbPath, pgPort, config);
 
         var common = BuildCommonEnvironment(config, pgPort, redisPort, meiliPort);
 
+        ReportStatus("Starting local services", "Starting the playback cache...", 44);
         string garnetData = Path.Combine(dataRoot, "garnet");
         StartService("garnet", garnetPath,
             Args(
@@ -164,6 +175,7 @@ internal static class Program
             homeRoot, common);
         WaitForTcp("127.0.0.1", redisPort, 60);
 
+        ReportStatus("Starting local services", "Starting music search...", 53);
         var meiliEnvironment = CopyEnvironment(common);
         meiliEnvironment["MEILI_HTTP_ADDR"] = "127.0.0.1:" + meiliPort;
         meiliEnvironment["MEILI_DB_PATH"] = Path.Combine(dataRoot, "meili");
@@ -172,6 +184,7 @@ internal static class Program
         StartService("meilisearch", meiliPath, "", homeRoot, meiliEnvironment);
         WaitForHttp("http://127.0.0.1:" + meiliPort + "/health", 120);
 
+        ReportStatus("Starting MVBar", "Starting the application service...", 63);
         var apiEnvironment = CopyEnvironment(common);
         apiEnvironment["PORT"] = apiPort.ToString();
         apiEnvironment["HOST"] = "127.0.0.1";
@@ -179,11 +192,13 @@ internal static class Program
             AppPath("app", "api"), apiEnvironment);
         WaitForHttp("http://127.0.0.1:" + apiPort + "/health", 180);
 
+        ReportStatus("Starting MVBar", "Starting the library scanner...", 72);
         StartService("worker", nodePath, Args("dist/index.js"),
             AppPath("app", "worker"), common);
         Thread.Sleep(1500);
         EnsureRunning("worker");
 
+        ReportStatus("Starting MVBar", "Starting the web interface...", 81);
         var webEnvironment = CopyEnvironment(common);
         webEnvironment["PORT"] = webPort.ToString();
         webEnvironment["HOSTNAME"] = "127.0.0.1";
@@ -192,6 +207,7 @@ internal static class Program
             AppPath("app", "web"), webEnvironment);
         WaitForHttp("http://127.0.0.1:" + webPort + "/", 180);
 
+        ReportStatus("Almost ready", "Opening the local MVBar gateway...", 91);
         var proxyEnvironment = CopyEnvironment(common);
         proxyEnvironment["MVBAR_PROXY_HOST"] = listenHost;
         proxyEnvironment["MVBAR_PROXY_PORT"] = publicPort.ToString();
@@ -203,29 +219,139 @@ internal static class Program
 
         string url = "http://127.0.0.1:" + publicPort + "/";
         File.WriteAllText(Path.Combine(homeRoot, "runtime.url"), url, Encoding.UTF8);
-        Console.WriteLine();
-        Console.WriteLine("MVBar is ready: " + url);
-        Console.WriteLine("Administrator: " + Get(config, "ADMIN_EMAIL", "admin@local"));
-        Console.WriteLine("Credentials: " + Path.Combine(homeRoot, "credentials.txt"));
-        Console.WriteLine("Press Ctrl+C or close this window to stop MVBar.");
-
-        if (Get(config, "_FIRST_RUN", "0") == "1" &&
-            Environment.GetEnvironmentVariable("MVBAR_HEADLESS") != "1")
-        {
-            TryShowMessage(
-                "MVBar is ready.\r\n\r\nAdministrator: " +
-                Get(config, "ADMIN_EMAIL", "admin@local") +
-                "\r\nPassword: " + Get(config, "ADMIN_PASSWORD", "") +
-                "\r\n\r\nThese details are also saved in:\r\n" +
-                Path.Combine(homeRoot, "credentials.txt"),
-                "MVBar first run");
-        }
+        string administrator = Get(config, "ADMIN_EMAIL", "admin@local");
+        string password = Get(config, "ADMIN_PASSWORD", "");
+        string credentialsPath = Path.Combine(homeRoot, "credentials.txt");
+        LogLauncher("INFO", "MVBar is ready: " + url);
+        LogLauncher("INFO", "Administrator: " + administrator);
+        ReportReady(
+            url,
+            administrator,
+            password,
+            credentialsPath,
+            Get(config, "_FIRST_RUN", "0") == "1");
 
         if (Environment.GetEnvironmentVariable("MVBAR_HEADLESS") != "1")
         {
             OpenUrl(url);
         }
         MonitorServices();
+    }
+
+    private static void StartInteractive()
+    {
+        try
+        {
+            Run();
+        }
+        catch (Exception error)
+        {
+            LogLauncher("FATAL", error.ToString());
+            Shutdown();
+            UpdateLauncher(delegate(LauncherForm form)
+            {
+                form.ShowFailure(
+                    error.Message,
+                    String.IsNullOrWhiteSpace(logRoot)
+                        ? null
+                        : Path.Combine(logRoot, "launcher.log"));
+            });
+        }
+    }
+
+    private static void ExitFromUi()
+    {
+        UpdateLauncher(delegate(LauncherForm form)
+        {
+            form.ShowStopping();
+        });
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            Shutdown();
+            UpdateLauncher(delegate(LauncherForm form)
+            {
+                form.CompleteExit();
+            });
+        });
+    }
+
+    private static void ReportStatus(string title, string detail, int progress)
+    {
+        LogLauncher("INFO", title + ": " + detail);
+        UpdateLauncher(delegate(LauncherForm form)
+        {
+            form.SetStatus(title, detail, progress);
+        });
+    }
+
+    private static void ReportExtractionProgress(int completed, int total)
+    {
+        if (total <= 0)
+        {
+            return;
+        }
+        int percent = Math.Max(3, Math.Min(17, 3 + (completed * 14 / total)));
+        UpdateLauncher(delegate(LauncherForm form)
+        {
+            form.SetStatus(
+                "Preparing MVBar",
+                "Extracting local application files (" + completed + " of " + total + ")...",
+                percent);
+        });
+    }
+
+    private static void ReportReady(
+        string url,
+        string administrator,
+        string password,
+        string credentialsPath,
+        bool firstRun)
+    {
+        UpdateLauncher(delegate(LauncherForm form)
+        {
+            form.ShowReady(url, administrator, password, credentialsPath, firstRun);
+        });
+    }
+
+    private static void UpdateLauncher(Action<LauncherForm> action)
+    {
+        LauncherForm form = launcherForm;
+        if (form != null)
+        {
+            form.Post(action);
+        }
+    }
+
+    private static void LogLauncher(string level, string message)
+    {
+        try
+        {
+            string root = logRoot;
+            if (String.IsNullOrWhiteSpace(root))
+            {
+                string configuredHome = Environment.GetEnvironmentVariable("MVBAR_HOME");
+                if (String.IsNullOrWhiteSpace(configuredHome))
+                {
+                    configuredHome = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "MVBar");
+                }
+                root = Path.Combine(configuredHome, "logs");
+            }
+            Directory.CreateDirectory(root);
+            lock (LauncherLogSync)
+            {
+                File.AppendAllText(
+                    Path.Combine(root, "launcher.log"),
+                    DateTime.Now.ToString("o") + " [" + level + "] " + message +
+                        Environment.NewLine,
+                    new UTF8Encoding(false));
+            }
+        }
+        catch
+        {
+            // Logging must never prevent the launcher from starting or stopping.
+        }
     }
 
     private static Dictionary<string, string> LoadOrCreateConfig()
@@ -421,7 +547,7 @@ internal static class Program
             return;
         }
 
-        Console.WriteLine("Initializing PostgreSQL...");
+        ReportStatus("Starting database", "Creating the local database for first use...", 22);
         ToolResult result = RunTool(
             initDbPath,
             Args(
@@ -510,7 +636,7 @@ internal static class Program
         string workingDirectory,
         Dictionary<string, string> environment)
     {
-        Console.WriteLine("Starting " + name + "...");
+        LogLauncher("INFO", "Starting service: " + name);
         var startInfo = new ProcessStartInfo();
         startInfo.FileName = filePath;
         startInfo.Arguments = arguments;
@@ -589,11 +715,15 @@ internal static class Program
 
     private static void Shutdown()
     {
-        if (shuttingDown)
+        lock (ShutdownSync)
         {
-            return;
+            if (shuttingDown)
+            {
+                return;
+            }
+            shuttingDown = true;
         }
-        shuttingDown = true;
+        LogLauncher("INFO", "Stopping MVBar services.");
 
         string[] order =
         {
@@ -636,6 +766,7 @@ internal static class Program
         {
             log.Dispose();
         }
+        LogLauncher("INFO", "MVBar services stopped.");
     }
 
     private static void TryStopProcess(Process process)
@@ -871,7 +1002,7 @@ internal static class Program
             Guid.NewGuid().ToString("N");
         Directory.CreateDirectory(temporaryRoot);
 
-        Console.WriteLine("Preparing MVBar for first use...");
+        ReportStatus("Preparing MVBar", "Extracting the bundled application files...", 3);
         string executablePath = Assembly.GetExecutingAssembly().Location;
         using (var executable = new FileStream(
             executablePath, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -990,6 +1121,8 @@ internal static class Program
             root += Path.DirectorySeparatorChar;
         }
 
+        int total = archive.Entries.Count;
+        int completed = 0;
         foreach (ZipArchiveEntry entry in archive.Entries)
         {
             string relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
@@ -1001,6 +1134,11 @@ internal static class Program
             if (String.IsNullOrEmpty(entry.Name))
             {
                 Directory.CreateDirectory(target);
+                completed++;
+                if (completed == total || completed % 50 == 0)
+                {
+                    ReportExtractionProgress(completed, total);
+                }
                 continue;
             }
             string parent = Path.GetDirectoryName(target);
@@ -1014,6 +1152,11 @@ internal static class Program
                 input.CopyTo(output);
             }
             File.SetLastWriteTime(target, entry.LastWriteTime.LocalDateTime);
+            completed++;
+            if (completed == total || completed % 50 == 0)
+            {
+                ReportExtractionProgress(completed, total);
+            }
         }
     }
 
@@ -1073,7 +1216,7 @@ internal static class Program
         }
         catch
         {
-            Console.WriteLine("Open this address in a browser: " + url);
+            LogLauncher("WARN", "Could not open the default browser for " + url);
         }
     }
 
@@ -1259,6 +1402,495 @@ internal static class Program
             process.Kill();
             throw new InvalidOperationException(
                 "Could not supervise " + process.ProcessName + ".");
+        }
+    }
+
+    private sealed class LauncherForm : Form
+    {
+        private readonly Label statusLabel;
+        private readonly Label detailLabel;
+        private readonly ProgressBar progressBar;
+        private readonly GroupBox credentialsGroup;
+        private readonly TextBox emailBox;
+        private readonly TextBox passwordBox;
+        private readonly Label credentialLocationLabel;
+        private readonly Button revealButton;
+        private readonly Button openButton;
+        private readonly Button backgroundButton;
+        private readonly Button exitButton;
+        private readonly NotifyIcon trayIcon;
+        private readonly ToolStripMenuItem trayOpenItem;
+        private readonly ToolStripMenuItem trayCredentialsItem;
+        private readonly Icon applicationIcon;
+        private string readyUrl;
+        private string readyCredentialsPath;
+        private bool startupStarted;
+        private bool allowClose;
+        private bool startupFailed;
+        private bool backgroundTipShown;
+
+        internal LauncherForm()
+        {
+            Text = "MVBar Standalone";
+            StartPosition = FormStartPosition.CenterScreen;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = true;
+            ShowInTaskbar = true;
+            AutoScaleMode = AutoScaleMode.Dpi;
+            ClientSize = new Size(620, 270);
+            MinimumSize = new Size(636, 309);
+            BackColor = Color.FromArgb(247, 248, 250);
+
+            applicationIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            if (applicationIcon != null)
+            {
+                Icon = applicationIcon;
+            }
+
+            var header = new Panel();
+            header.Dock = DockStyle.Top;
+            header.Height = 82;
+            header.BackColor = Color.FromArgb(18, 24, 38);
+            Controls.Add(header);
+
+            if (applicationIcon != null)
+            {
+                var logo = new PictureBox();
+                logo.Location = new Point(24, 17);
+                logo.Size = new Size(48, 48);
+                logo.SizeMode = PictureBoxSizeMode.Zoom;
+                logo.Image = applicationIcon.ToBitmap();
+                header.Controls.Add(logo);
+            }
+
+            var title = new Label();
+            title.AutoSize = true;
+            title.Location = new Point(86, 18);
+            title.Font = new Font("Segoe UI", 18F, FontStyle.Bold);
+            title.ForeColor = Color.White;
+            title.Text = "MVBar";
+            header.Controls.Add(title);
+
+            var subtitle = new Label();
+            subtitle.AutoSize = true;
+            subtitle.Location = new Point(88, 51);
+            subtitle.Font = new Font("Segoe UI", 9F);
+            subtitle.ForeColor = Color.FromArgb(183, 193, 211);
+            subtitle.Text = "Your private music server";
+            header.Controls.Add(subtitle);
+
+            var content = new Panel();
+            content.Dock = DockStyle.Fill;
+            content.BackColor = BackColor;
+            Controls.Add(content);
+            content.BringToFront();
+
+            statusLabel = new Label();
+            statusLabel.Location = new Point(24, 18);
+            statusLabel.Size = new Size(552, 30);
+            statusLabel.Font = new Font("Segoe UI", 14F, FontStyle.Bold);
+            statusLabel.ForeColor = Color.FromArgb(22, 29, 45);
+            statusLabel.Text = "Starting MVBar";
+            content.Controls.Add(statusLabel);
+
+            detailLabel = new Label();
+            detailLabel.Location = new Point(24, 52);
+            detailLabel.Size = new Size(552, 42);
+            detailLabel.Font = new Font("Segoe UI", 9.5F);
+            detailLabel.ForeColor = Color.FromArgb(83, 94, 115);
+            detailLabel.Text = "Preparing the local application...";
+            content.Controls.Add(detailLabel);
+
+            progressBar = new ProgressBar();
+            progressBar.Location = new Point(24, 99);
+            progressBar.Size = new Size(552, 12);
+            progressBar.Minimum = 0;
+            progressBar.Maximum = 100;
+            progressBar.Style = ProgressBarStyle.Continuous;
+            progressBar.Value = 1;
+            content.Controls.Add(progressBar);
+
+            credentialsGroup = new GroupBox();
+            credentialsGroup.Location = new Point(24, 128);
+            credentialsGroup.Size = new Size(552, 190);
+            credentialsGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            credentialsGroup.ForeColor = Color.FromArgb(37, 47, 66);
+            credentialsGroup.Text = "Administrator sign-in";
+            credentialsGroup.Visible = false;
+            content.Controls.Add(credentialsGroup);
+
+            AddFieldLabel(credentialsGroup, "Email", 17, 29);
+            emailBox = CreateReadOnlyField(17, 48, 412);
+            credentialsGroup.Controls.Add(emailBox);
+            credentialsGroup.Controls.Add(CreateButton(
+                "Copy",
+                439,
+                46,
+                94,
+                delegate { CopyValue(emailBox.Text, "Email copied."); }));
+
+            AddFieldLabel(credentialsGroup, "Password", 17, 83);
+            passwordBox = CreateReadOnlyField(17, 102, 307);
+            passwordBox.UseSystemPasswordChar = true;
+            credentialsGroup.Controls.Add(passwordBox);
+
+            revealButton = CreateButton(
+                "Show",
+                334,
+                100,
+                95,
+                delegate
+                {
+                    passwordBox.UseSystemPasswordChar = !passwordBox.UseSystemPasswordChar;
+                    revealButton.Text = passwordBox.UseSystemPasswordChar ? "Show" : "Hide";
+                });
+            credentialsGroup.Controls.Add(revealButton);
+            credentialsGroup.Controls.Add(CreateButton(
+                "Copy",
+                439,
+                100,
+                94,
+                delegate { CopyValue(passwordBox.Text, "Password copied."); }));
+
+            credentialsGroup.Controls.Add(CreateButton(
+                "Copy sign-in",
+                17,
+                144,
+                116,
+                delegate
+                {
+                    CopyValue(
+                        "Email: " + emailBox.Text + Environment.NewLine +
+                            "Password: " + passwordBox.Text,
+                        "Sign-in details copied.");
+                }));
+            credentialsGroup.Controls.Add(CreateButton(
+                "Open saved file",
+                142,
+                144,
+                128,
+                delegate { OpenPath(readyCredentialsPath); }));
+
+            credentialLocationLabel = new Label();
+            credentialLocationLabel.Location = new Point(282, 149);
+            credentialLocationLabel.Size = new Size(250, 32);
+            credentialLocationLabel.Font = new Font("Segoe UI", 8F);
+            credentialLocationLabel.ForeColor = Color.FromArgb(103, 113, 132);
+            credentialLocationLabel.TextAlign = ContentAlignment.TopRight;
+            credentialsGroup.Controls.Add(credentialLocationLabel);
+
+            var footer = new Panel();
+            footer.Dock = DockStyle.Bottom;
+            footer.Height = 72;
+            footer.BackColor = Color.White;
+            footer.Paint += delegate(object sender, PaintEventArgs eventArgs)
+            {
+                eventArgs.Graphics.DrawLine(
+                    Pens.Gainsboro,
+                    0,
+                    0,
+                    footer.ClientSize.Width,
+                    0);
+            };
+            Controls.Add(footer);
+            footer.BringToFront();
+
+            openButton = CreateButton(
+                "Open MVBar",
+                24,
+                18,
+                132,
+                delegate { OpenUrl(readyUrl); });
+            openButton.Enabled = false;
+            footer.Controls.Add(openButton);
+
+            backgroundButton = CreateButton(
+                "Run in background",
+                168,
+                18,
+                154,
+                delegate { HideToTray(); });
+            footer.Controls.Add(backgroundButton);
+
+            exitButton = CreateButton(
+                "Exit MVBar",
+                472,
+                18,
+                104,
+                delegate { ExitFromUi(); });
+            footer.Controls.Add(exitButton);
+
+            var trayMenu = new ContextMenuStrip();
+            trayOpenItem = new ToolStripMenuItem("Open MVBar");
+            trayOpenItem.Enabled = false;
+            trayOpenItem.Click += delegate { OpenUrl(readyUrl); };
+            trayMenu.Items.Add(trayOpenItem);
+            trayMenu.Items.Add(new ToolStripMenuItem(
+                "Show status",
+                null,
+                delegate { ShowWindow(); }));
+            trayCredentialsItem = new ToolStripMenuItem("Administrator sign-in");
+            trayCredentialsItem.Enabled = false;
+            trayCredentialsItem.Click += delegate
+            {
+                ShowWindow();
+                passwordBox.Focus();
+            };
+            trayMenu.Items.Add(trayCredentialsItem);
+            trayMenu.Items.Add(new ToolStripMenuItem(
+                "Open logs",
+                null,
+                delegate { OpenPath(logRoot); }));
+            trayMenu.Items.Add(new ToolStripSeparator());
+            trayMenu.Items.Add(new ToolStripMenuItem(
+                "Exit MVBar",
+                null,
+                delegate { ExitFromUi(); }));
+
+            trayIcon = new NotifyIcon();
+            trayIcon.Text = "MVBar";
+            trayIcon.Icon = applicationIcon;
+            trayIcon.ContextMenuStrip = trayMenu;
+            trayIcon.Visible = true;
+            trayIcon.DoubleClick += delegate { ShowWindow(); };
+        }
+
+        protected override void OnShown(EventArgs eventArgs)
+        {
+            base.OnShown(eventArgs);
+            if (!startupStarted)
+            {
+                startupStarted = true;
+                ThreadPool.QueueUserWorkItem(delegate { StartInteractive(); });
+            }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs eventArgs)
+        {
+            if (!allowClose && !startupFailed)
+            {
+                eventArgs.Cancel = true;
+                HideToTray();
+                return;
+            }
+            base.OnFormClosing(eventArgs);
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs eventArgs)
+        {
+            trayIcon.Visible = false;
+            trayIcon.Dispose();
+            if (applicationIcon != null)
+            {
+                applicationIcon.Dispose();
+            }
+            base.OnFormClosed(eventArgs);
+        }
+
+        internal void Post(Action<LauncherForm> action)
+        {
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+            try
+            {
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new MethodInvoker(delegate { action(this); }));
+                }
+                else
+                {
+                    action(this);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // The form is already closing.
+            }
+        }
+
+        internal void SetStatus(string title, string detail, int progress)
+        {
+            statusLabel.Text = title;
+            detailLabel.Text = detail;
+            progressBar.Style = ProgressBarStyle.Continuous;
+            progressBar.Value = Math.Max(
+                progressBar.Minimum,
+                Math.Min(progressBar.Maximum, progress));
+        }
+
+        internal void ShowReady(
+            string url,
+            string administrator,
+            string password,
+            string credentialsPath,
+            bool firstRun)
+        {
+            readyUrl = url;
+            readyCredentialsPath = credentialsPath;
+            emailBox.Text = administrator;
+            passwordBox.Text = password;
+            credentialLocationLabel.Text = credentialsPath;
+            credentialsGroup.Visible = true;
+            ClientSize = new Size(620, 485);
+            MinimumSize = new Size(636, 524);
+            SetStatus(
+                "MVBar is ready",
+                "The server is running locally. Closing this window keeps it running in the notification area.",
+                100);
+            openButton.Enabled = true;
+            trayOpenItem.Enabled = true;
+            trayCredentialsItem.Enabled = true;
+            trayIcon.Text = "MVBar is running";
+
+            if (firstRun)
+            {
+                ShowWindow();
+                TopMost = true;
+                var releaseForeground = new System.Windows.Forms.Timer();
+                releaseForeground.Interval = 1800;
+                releaseForeground.Tick += delegate
+                {
+                    releaseForeground.Stop();
+                    TopMost = false;
+                    releaseForeground.Dispose();
+                };
+                releaseForeground.Start();
+            }
+        }
+
+        internal void ShowFailure(string message, string launcherLogPath)
+        {
+            startupFailed = true;
+            ShowWindow();
+            statusLabel.Text = "MVBar could not start";
+            detailLabel.Text = message +
+                (String.IsNullOrWhiteSpace(launcherLogPath)
+                    ? ""
+                    : Environment.NewLine + "Details: " + launcherLogPath);
+            detailLabel.ForeColor = Color.FromArgb(168, 42, 42);
+            progressBar.Style = ProgressBarStyle.Continuous;
+            progressBar.Value = 0;
+            backgroundButton.Enabled = false;
+            openButton.Enabled = false;
+            exitButton.Text = "Close";
+            trayIcon.Text = "MVBar needs attention";
+        }
+
+        internal void ShowStopping()
+        {
+            ShowWindow();
+            statusLabel.Text = "Stopping MVBar";
+            detailLabel.Text = "Closing the local services and saving their data...";
+            progressBar.Style = ProgressBarStyle.Marquee;
+            openButton.Enabled = false;
+            backgroundButton.Enabled = false;
+            exitButton.Enabled = false;
+        }
+
+        internal void CompleteExit()
+        {
+            allowClose = true;
+            Close();
+        }
+
+        private void ShowWindow()
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            ShowInTaskbar = true;
+            Activate();
+            BringToFront();
+        }
+
+        private void HideToTray()
+        {
+            Hide();
+            ShowInTaskbar = false;
+            if (!backgroundTipShown)
+            {
+                backgroundTipShown = true;
+                trayIcon.ShowBalloonTip(
+                    3000,
+                    "MVBar is still running",
+                    "Use the MVBar icon in the notification area to reopen or exit.",
+                    ToolTipIcon.Info);
+            }
+        }
+
+        private void CopyValue(string value, string confirmation)
+        {
+            if (String.IsNullOrEmpty(value))
+            {
+                return;
+            }
+            try
+            {
+                Clipboard.SetText(value);
+                detailLabel.Text = confirmation;
+            }
+            catch (ExternalException)
+            {
+                detailLabel.Text = "Windows could not access the clipboard. Please try again.";
+            }
+        }
+
+        private static TextBox CreateReadOnlyField(int x, int y, int width)
+        {
+            var field = new TextBox();
+            field.Location = new Point(x, y);
+            field.Size = new Size(width, 28);
+            field.Font = new Font("Segoe UI", 10F);
+            field.ReadOnly = true;
+            field.BackColor = Color.White;
+            field.BorderStyle = BorderStyle.FixedSingle;
+            return field;
+        }
+
+        private static void AddFieldLabel(Control parent, string text, int x, int y)
+        {
+            var label = new Label();
+            label.AutoSize = true;
+            label.Location = new Point(x, y);
+            label.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
+            label.ForeColor = Color.FromArgb(83, 94, 115);
+            label.Text = text;
+            parent.Controls.Add(label);
+        }
+
+        private static Button CreateButton(
+            string text,
+            int x,
+            int y,
+            int width,
+            Action action)
+        {
+            var button = new Button();
+            button.Location = new Point(x, y);
+            button.Size = new Size(width, 30);
+            button.Font = new Font("Segoe UI", 9F);
+            button.Text = text;
+            button.UseVisualStyleBackColor = true;
+            button.Click += delegate { action(); };
+            return button;
+        }
+
+        private static void OpenPath(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            }
+            catch
+            {
+                TryShowMessage("Windows could not open:\r\n" + path, "MVBar");
+            }
         }
     }
 
