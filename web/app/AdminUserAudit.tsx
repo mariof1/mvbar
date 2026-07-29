@@ -56,10 +56,7 @@ function longDuration(value: number) {
 }
 
 function mostRecentActivity(user: AdminUserAuditSummary) {
-  const times = [user.lastLoginAt, user.lastPlayedAt]
-    .filter((value): value is string => Boolean(value))
-    .map((value) => new Date(value).getTime());
-  return times.length > 0 ? new Date(Math.max(...times)).toISOString() : null;
+  return user.lastActiveAt;
 }
 
 function Avatar({ user, size = 'md' }: { user: AdminUserAuditSummary; size?: 'sm' | 'md' | 'lg' }) {
@@ -331,9 +328,10 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                   <div className="text-xs text-slate-500 mt-1">Joined {dateTime(detail.user.createdAt)}</div>
                 </div>
                 <div className="sm:text-right">
-                  <div className="text-xs uppercase text-slate-500">Last login</div>
-                  <div className="text-sm text-slate-200 mt-1">{dateTime(detail.user.lastLoginAt)}</div>
-                  {detail.user.lastLoginIp && <div className="text-xs font-mono text-slate-500 mt-1">{detail.user.lastLoginIp}</div>}
+                  <div className="text-xs uppercase text-slate-500">Last active</div>
+                  <div className="text-sm text-slate-200 mt-1">{dateTime(detail.user.lastActiveAt)}</div>
+                  {detail.user.lastActiveIp && <div className="text-xs font-mono text-slate-500 mt-1">{detail.user.lastActiveIp}</div>}
+                  <div className="text-xs text-slate-500 mt-2">Signed in {dateTime(detail.user.lastLoginAt)}</div>
                 </div>
               </div>
 

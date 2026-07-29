@@ -31,6 +31,13 @@ export async function getUserById(id: string) {
   return r.rows[0] ?? null;
 }
 
+export async function markUserActive(userId: string, ip: string) {
+  await db().query(
+    'update users set last_seen_at=now(), last_seen_ip=$2 where id=$1',
+    [userId, ip]
+  );
+}
+
 export async function createUser(params: { id: string; email: string; passwordHash: string; role: Role }) {
   await db().query(
     'insert into users(id, email, password_hash, role) values ($1,$2,$3,$4)',

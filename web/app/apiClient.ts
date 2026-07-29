@@ -102,6 +102,8 @@ export type AdminUserAuditSummary = {
   approvalStatus: string;
   avatarPath: string | null;
   createdAt: string;
+  lastActiveAt: string | null;
+  lastActiveIp: string | null;
   lastLoginAt: string | null;
   lastLoginIp: string | null;
   loginCount: number;

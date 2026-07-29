@@ -24,6 +24,8 @@ declare module 'fastify' {
 
 import crypto from 'node:crypto';
 
+const ACTIVE_WRITE_INTERVAL_MS = 5 * 60_000;
+
 function signToken(userId: string, role: Role, sessionVersion: number) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const payload = Buffer.from(
@@ -47,6 +49,21 @@ function verifyToken(token: string) {
 
 export const authPlugin: FastifyPluginAsync = fp(async (app) => {
   await app.register(cookie);
+  const lastActiveWrites = new Map<string, number>();
+
+  async function markActive(userId: string, ip: string, force = false) {
+    const now = Date.now();
+    const previous = lastActiveWrites.get(userId) ?? 0;
+    if (!force && now - previous < ACTIVE_WRITE_INTERVAL_MS) return;
+
+    lastActiveWrites.set(userId, now);
+    try {
+      await users.markUserActive(userId, ip);
+    } catch (error) {
+      lastActiveWrites.delete(userId);
+      app.log.warn({ err: error, userId }, 'failed to update user activity');
+    }
+  }
 
   function isSecureCookie(req: any) {
     if (config.cookieSecure === 'true') return true;
@@ -99,6 +116,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     if (user.session_version !== verified.sessionVersion) return;
 
     req.user = verified;
+    await markActive(verified.userId, req.ip);
   });
 
   // routes
@@ -148,6 +166,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     store.failedLoginsByKey.delete(key);
     const token = signToken(user.id, user.role, user.session_version);
     await audit('login_ok', { email, ip });
+    await markActive(user.id, ip, true);
     notifyAdmins('user_login', `User logged in:\n• Email: ${email}\n• IP: ${ip}`);
 
     // Save password for Subsonic token auth

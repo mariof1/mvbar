@@ -10,6 +10,8 @@ type AuditSummaryRow = {
   approval_status: string;
   avatar_path: string | null;
   created_at: Date | string;
+  last_active_at: Date | string | null;
+  last_active_ip: string | null;
   last_login_at: Date | string | null;
   last_login_ip: string | null;
   login_count: number | string;
@@ -42,6 +44,8 @@ function normalizeSummary(row: AuditSummaryRow) {
     approvalStatus: row.approval_status,
     avatarPath: row.avatar_path,
     createdAt: row.created_at,
+    lastActiveAt: row.last_active_at,
+    lastActiveIp: row.last_active_ip,
     lastLoginAt: row.last_login_at,
     lastLoginIp: row.last_login_ip,
     loginCount: Number(row.login_count),
@@ -95,6 +99,8 @@ async function listSummaries(userId: string | null = null) {
       u.approval_status,
       u.avatar_path,
       u.created_at,
+      greatest(u.last_seen_at, login_stats.last_login_at, play_stats.last_played_at) as last_active_at,
+      coalesce(u.last_seen_ip, login_stats.last_login_ip) as last_active_ip,
       login_stats.last_login_at,
       login_stats.last_login_ip,
       coalesce(login_stats.login_count, 0) as login_count,
@@ -110,7 +116,7 @@ async function listSummaries(userId: string | null = null) {
     left join favorite_stats on favorite_stats.user_id = u.id
     left join playlist_stats on playlist_stats.user_id = u.id
     where ($1::text is null or u.id = $1)
-    order by greatest(login_stats.last_login_at, play_stats.last_played_at) desc nulls last, u.created_at asc
+    order by last_active_at desc nulls last, u.created_at asc
     `,
     [userId]
   );
@@ -128,11 +134,8 @@ export const userAuditPlugin: FastifyPluginAsync = fp(async (app) => {
       totals: {
         users: users.length,
         active7d: users.filter((user) => {
-          const mostRecent = [user.lastLoginAt, user.lastPlayedAt]
-            .filter((value): value is Date | string => Boolean(value))
-            .map((value) => new Date(value).getTime())
-            .sort((a, b) => b - a)[0];
-          return Number.isFinite(mostRecent) && mostRecent >= Date.now() - 7 * 24 * 60 * 60 * 1000;
+          const lastActive = user.lastActiveAt ? new Date(user.lastActiveAt).getTime() : Number.NaN;
+          return Number.isFinite(lastActive) && lastActive >= Date.now() - 7 * 24 * 60 * 60 * 1000;
         }).length,
         plays7d: users.reduce((sum, user) => sum + user.plays7d, 0),
         estimatedListeningMs: users.reduce((sum, user) => sum + user.estimatedListeningMs, 0),
