@@ -21,8 +21,9 @@ import {
 import { useAuth } from './store';
 import { showConfirm } from './ConfirmModal';
 import { useScanProgress, useLibraryUpdates, useAdminPending } from './useWebSocket';
+import { AdminUserAudit } from './AdminUserAudit';
 
-type Tab = 'library' | 'users' | 'settings' | 'device-logs' | 'notifications';
+type Tab = 'library' | 'users' | 'user-audit' | 'settings' | 'device-logs' | 'notifications';
 
 export function Admin() {
   const token = useAuth((s) => s.token);
@@ -54,6 +55,11 @@ export function Admin() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 11a4 4 0 100-8 4 4 0 000 8z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M22 21v-2a4 4 0 00-3-3.87" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 3.13a4 4 0 010 7.75" />
+            </svg>
+          )},
+          { id: 'user-audit' as Tab, label: 'User Audit', icon: (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 19V9m5 10V5m5 14v-7m5 7V3" />
             </svg>
           )},
           { id: 'settings' as Tab, label: 'Settings', icon: (
@@ -91,6 +97,7 @@ export function Admin() {
       {/* Tab Content */}
       {activeTab === 'library' && <LibraryTab token={token} clear={clear} />}
       {activeTab === 'users' && <UsersTab token={token} clear={clear} currentUserId={user?.id} />}
+      {activeTab === 'user-audit' && <AdminUserAudit token={token} clear={clear} />}
       {activeTab === 'settings' && <SettingsTab token={token} />}
       {activeTab === 'device-logs' && <DeviceLogsTab token={token} />}
       {activeTab === 'notifications' && <NotificationsTab token={token} />}

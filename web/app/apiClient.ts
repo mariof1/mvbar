@@ -95,6 +95,66 @@ export async function listAdminUsers(token: string) {
   return (await apiFetch('/admin/users', { method: 'GET' }, token)) as { ok: boolean; users: Array<{ id: string; email: string; role: string }> };
 }
 
+export type AdminUserAuditSummary = {
+  id: string;
+  email: string;
+  role: 'admin' | 'user';
+  approvalStatus: string;
+  avatarPath: string | null;
+  createdAt: string;
+  lastLoginAt: string | null;
+  lastLoginIp: string | null;
+  loginCount: number;
+  lastPlayedAt: string | null;
+  totalPlays: number;
+  plays7d: number;
+  estimatedListeningMs: number;
+  favoriteCount: number;
+  playlistCount: number;
+};
+
+export type AdminUserAuditOverview = {
+  ok: boolean;
+  users: AdminUserAuditSummary[];
+  totals: {
+    users: number;
+    active7d: number;
+    plays7d: number;
+    estimatedListeningMs: number;
+  };
+};
+
+export type AdminUserAuditDetail = {
+  ok: boolean;
+  user: AdminUserAuditSummary;
+  history: Array<{
+    historyId: number;
+    trackId: number;
+    title: string | null;
+    artist: string | null;
+    album: string | null;
+    durationMs: number | null;
+    playedAt: string;
+  }>;
+  historyTotal: number;
+  signIns: Array<{ ts: string; event: 'login_ok' | 'login_failed' | 'login_locked'; ip: string | null }>;
+  dailyPlays: Array<{ date: string; count: number }>;
+  limit: number;
+  offset: number;
+};
+
+export async function getAdminUserAudit(token: string) {
+  return (await apiFetch('/admin/user-audit', { method: 'GET' }, token)) as AdminUserAuditOverview;
+}
+
+export async function getAdminUserAuditDetail(token: string, userId: string, limit = 25, offset = 0) {
+  return (await apiFetch(
+    `/admin/users/${encodeURIComponent(userId)}/audit?limit=${limit}&offset=${offset}`,
+    { method: 'GET' },
+    token
+  )) as AdminUserAuditDetail;
+}
+
 export async function adminCreateUser(token: string, params: { email: string; password: string; role: 'admin' | 'user' }) {
   return (await apiFetch('/admin/users', { method: 'POST', body: JSON.stringify(params) }, token)) as {
     ok: boolean;
