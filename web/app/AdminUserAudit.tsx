@@ -12,6 +12,7 @@ import {
 type ActivityFilter = 'all' | 'active' | 'no-plays';
 type UserSort = 'recent' | 'listening' | 'name';
 type ActivityView = 'music' | 'podcasts' | 'audiobooks' | 'sign-ins' | 'devices';
+type MobilePane = 'users' | 'detail';
 
 const emptyOverview: AdminUserAuditOverview = {
   ok: true,
@@ -57,10 +58,6 @@ function longDuration(value: number) {
   return `${minutes}m`;
 }
 
-function countLabel(value: number, singular: string, plural = `${singular}s`) {
-  return `${value.toLocaleString()} ${value === 1 ? singular : plural}`;
-}
-
 function clientLabel(value: string | null) {
   if (!value) return 'Unknown client';
   if (value === 'android') return 'Android';
@@ -79,29 +76,36 @@ function eventTime(value: string | null) {
   return value ? new Date(value).getTime() : 0;
 }
 
-function Avatar({ user, size = 'md' }: { user: AdminUserAuditSummary; size?: 'sm' | 'md' | 'lg' }) {
-  const dimensions = size === 'lg' ? 'w-14 h-14 text-xl' : size === 'sm' ? 'w-9 h-9 text-sm' : 'w-11 h-11';
-  if (user.avatarPath) {
-    return (
-      <img
-        src={`/api/avatars/${encodeURIComponent(user.avatarPath)}`}
-        alt=""
-        className={`${dimensions} rounded-full object-cover shrink-0`}
-      />
-    );
-  }
+function Avatar({
+  user,
+  size = 'md',
+}: {
+  user: AdminUserAuditSummary;
+  size?: 'sm' | 'md' | 'lg';
+}) {
+  const dimensions = size === 'lg' ? 'w-12 h-12 text-lg' : size === 'sm' ? 'w-9 h-9 text-sm' : 'w-10 h-10';
+  const colors = user.role === 'admin'
+    ? 'bg-amber-500/15 text-amber-300'
+    : 'bg-cyan-500/10 text-cyan-300';
+
   return (
-    <div
-      className={`${dimensions} rounded-full shrink-0 flex items-center justify-center font-semibold ${
-        user.role === 'admin' ? 'bg-amber-500/20 text-amber-300' : 'bg-cyan-500/15 text-cyan-300'
-      }`}
-    >
+    <div className={`${dimensions} ${colors} relative rounded-full shrink-0 flex items-center justify-center font-semibold overflow-hidden`}>
       {user.email.slice(0, 1).toUpperCase()}
+      {user.avatarPath && (
+        <img
+          src={`/api/avatars/${encodeURIComponent(user.avatarPath)}`}
+          alt=""
+          className="absolute inset-0 w-full h-full object-cover"
+          onError={(event) => {
+            event.currentTarget.style.display = 'none';
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function SummaryStat({
+function Metric({
   label,
   value,
   detail,
@@ -111,18 +115,60 @@ function SummaryStat({
   detail?: string;
 }) {
   return (
-    <div className="min-w-0 px-4 py-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="text-xl font-semibold text-white mt-1 truncate">{value}</div>
-      {detail && <div className="text-[11px] text-slate-500 mt-0.5 truncate">{detail}</div>}
+    <div className="min-w-0">
+      <div className="text-[11px] text-slate-500">{label}</div>
+      <div className="text-lg font-semibold text-white mt-0.5 truncate">{value}</div>
+      {detail && <div className="text-[10px] text-slate-600 mt-0.5 truncate">{detail}</div>}
     </div>
   );
 }
 
 function EmptyActivity({ children }: { children: string }) {
   return (
-    <div className="h-36 flex items-center justify-center text-sm text-slate-500">
+    <div className="h-52 flex items-center justify-center text-sm text-slate-500">
       {children}
+    </div>
+  );
+}
+
+function MediaActivityRow({
+  artworkUrl,
+  title,
+  subtitle,
+  occurredAt,
+  detail,
+  completed = false,
+}: {
+  artworkUrl: string;
+  title: string;
+  subtitle: string;
+  occurredAt: string;
+  detail: string;
+  completed?: boolean;
+}) {
+  return (
+    <div className="px-4 py-3 flex items-center gap-3">
+      <div className="relative w-10 h-10 rounded bg-slate-800 text-slate-500 shrink-0 overflow-hidden flex items-center justify-center text-sm font-semibold">
+        {title.slice(0, 1).toUpperCase()}
+        <img
+          src={artworkUrl}
+          alt=""
+          className="absolute inset-0 w-full h-full object-cover"
+          onError={(event) => {
+            event.currentTarget.style.display = 'none';
+          }}
+        />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium text-slate-100 truncate">{title}</div>
+        <div className="text-xs text-slate-500 truncate mt-0.5">{subtitle}</div>
+      </div>
+      <div className="text-right shrink-0 max-w-40" title={dateTime(occurredAt)}>
+        <div className="text-xs text-slate-300">{relativeTime(occurredAt)}</div>
+        <div className={`text-[10px] truncate mt-1 ${completed ? 'text-emerald-400' : 'text-slate-600'}`}>
+          {detail}
+        </div>
+      </div>
     </div>
   );
 }
@@ -135,6 +181,9 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
   const [userSort, setUserSort] = useState<UserSort>('recent');
   const [activityView, setActivityView] = useState<ActivityView>('music');
+  const [mobilePane, setMobilePane] = useState<MobilePane>('users');
+  const [showTrend, setShowTrend] = useState(false);
+  const [showAccountDetails, setShowAccountDetails] = useState(false);
   const [showAllAuditRows, setShowAllAuditRows] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
@@ -193,6 +242,8 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
 
   useEffect(() => {
     setShowAllAuditRows(false);
+    setShowTrend(false);
+    setShowAccountDetails(false);
   }, [activityView, selectedUserId]);
 
   const filteredUsers = useMemo(() => {
@@ -241,10 +292,15 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
     }
   }
 
+  function selectUser(userId: string) {
+    setSelectedUserId(userId);
+    setMobilePane('detail');
+  }
+
   const activityTabs = detail ? [
     { id: 'music' as ActivityView, label: 'Music', count: detail.historyTotal },
     { id: 'podcasts' as ActivityView, label: 'Podcasts', count: detail.podcastHistoryTotal },
-    { id: 'audiobooks' as ActivityView, label: 'Audiobooks', count: detail.audiobookHistoryTotal },
+    { id: 'audiobooks' as ActivityView, label: 'Books', count: detail.audiobookHistoryTotal },
     { id: 'sign-ins' as ActivityView, label: 'Sign-ins', count: detail.user.loginCount },
     { id: 'devices' as ActivityView, label: 'Devices', count: detail.clients.length },
   ] : [];
@@ -257,7 +313,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
     : [];
 
   return (
-    <div className="space-y-5" data-testid="admin-user-audit">
+    <div className="space-y-4" data-testid="admin-user-audit">
       {error && (
         <div className="px-4 py-3 bg-red-500/10 border border-red-500/25 rounded-lg text-sm text-red-300">
           {error}
@@ -265,459 +321,435 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
       )}
 
       <header className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold text-white">User activity</h2>
-          <p className="text-sm text-slate-400 mt-1">
-            Account access, listening, and device history
+        <div className="min-w-0">
+          <h2 className="text-xl font-semibold text-white">User audit</h2>
+          <p className="text-sm text-slate-500 mt-1">
+            {overview.totals.users.toLocaleString()} accounts
+            <span className="mx-2 text-slate-700">/</span>
+            {overview.totals.active7d.toLocaleString()} active this week
+            <span className="mx-2 text-slate-700">/</span>
+            {longDuration(overview.totals.estimatedListeningMs)} listening
           </p>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {lastRefreshedAt && (
-            <span className="hidden sm:block text-xs text-slate-500">
+            <span className="hidden md:block text-xs text-slate-600">
               Updated {relativeTime(lastRefreshedAt.toISOString())}
             </span>
           )}
           <button
             onClick={() => void loadOverview()}
             disabled={loading}
-            className="w-10 h-10 inline-flex items-center justify-center rounded-lg border border-slate-700/60 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+            className="w-9 h-9 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-50"
             title="Refresh user audit"
             aria-label="Refresh user audit"
           >
-            <svg className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M5.6 15A7 7 0 0018 17m.4-8A7 7 0 006 7" />
             </svg>
           </button>
         </div>
       </header>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 divide-slate-800 border-y border-slate-800">
-        <SummaryStat label="Accounts" value={overview.totals.users.toLocaleString()} />
-        <SummaryStat
-          label="Active in 7 days"
-          value={overview.totals.active7d.toLocaleString()}
-          detail={`${overview.totals.users ? Math.round((overview.totals.active7d / overview.totals.users) * 100) : 0}% of accounts`}
-        />
-        <SummaryStat label="7-day activity" value={overview.totals.activity7d.toLocaleString()} detail="Listening events" />
-        <SummaryStat
-          label="Estimated listening"
-          value={longDuration(overview.totals.estimatedListeningMs)}
-          detail="Music, podcasts, and books"
-        />
-      </div>
-
-      <section className="border border-slate-700/50 rounded-lg overflow-hidden bg-slate-950/20">
-        <div className="p-3 border-b border-slate-800 flex flex-col lg:flex-row lg:items-center gap-3">
-          <label className="relative block flex-1 min-w-0">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35M19 11a8 8 0 11-16 0 8 8 0 0116 0z" />
-            </svg>
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search accounts"
-              className="w-full h-10 pl-9 pr-3 bg-slate-950/60 border border-slate-700/60 rounded-lg text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-500"
-            />
-          </label>
-
-          <div className="grid grid-cols-3 p-1 bg-slate-950/60 rounded-lg lg:w-[300px]" role="group" aria-label="Activity filter">
-            {([
-              ['all', 'All'],
-              ['active', 'Active'],
-              ['no-plays', 'No listening'],
-            ] as Array<[ActivityFilter, string]>).map(([value, label]) => (
-              <button
-                key={value}
-                onClick={() => setActivityFilter(value)}
-                className={`h-8 px-2 rounded-md text-xs font-medium ${
-                  activityFilter === value ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <label className="flex items-center gap-2 lg:w-[190px]">
-            <span className="text-xs text-slate-500 shrink-0">Sort</span>
-            <select
-              value={userSort}
-              onChange={(event) => setUserSort(event.target.value as UserSort)}
-              className="h-10 min-w-0 flex-1 px-3 bg-slate-950/60 border border-slate-700/60 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
-            >
-              <option value="recent">Recent activity</option>
-              <option value="listening">Listening time</option>
-              <option value="name">Account name</option>
-            </select>
-          </label>
-
-          <span className="text-xs text-slate-500 lg:w-16 lg:text-right">
-            {filteredUsers.length} of {overview.users.length}
-          </span>
-        </div>
-
-        <div className="hidden md:grid md:grid-cols-[minmax(230px,1.5fr)_minmax(120px,0.75fr)_minmax(120px,0.75fr)_90px_110px] gap-3 px-4 py-2 border-b border-slate-800 text-[11px] uppercase text-slate-500">
-          <span>Account</span>
-          <span>Last active</span>
-          <span>Last listened</span>
-          <span className="text-right">7 days</span>
-          <span className="text-right">Listening</span>
-        </div>
-
-        <div className="max-h-[330px] overflow-y-auto divide-y divide-slate-800">
-          {loading ? (
-            <div className="h-36 flex items-center justify-center">
-              <div className="w-7 h-7 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-            </div>
-          ) : filteredUsers.length === 0 ? (
-            <EmptyActivity>No matching accounts</EmptyActivity>
-          ) : filteredUsers.map((user) => {
-            const selected = user.id === selectedUserId;
-            return (
-              <button
-                key={user.id}
-                data-testid={`audit-user-${user.id}`}
-                onClick={() => setSelectedUserId(user.id)}
-                aria-pressed={selected}
-                className={`relative w-full px-4 py-3 text-left grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(230px,1.5fr)_minmax(120px,0.75fr)_minmax(120px,0.75fr)_90px_110px] gap-3 items-center ${
-                  selected ? 'bg-cyan-500/10' : 'hover:bg-slate-800/40'
-                }`}
-              >
-                {selected && <span className="absolute inset-y-0 left-0 w-0.5 bg-cyan-400" />}
-                <div className="flex items-center gap-3 min-w-0">
-                  <Avatar user={user} size="sm" />
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{user.email}</div>
-                    <div className="flex items-center gap-1.5 mt-1 min-w-0">
-                      <span className={`text-[10px] ${user.role === 'admin' ? 'text-amber-300' : 'text-slate-500'}`}>
-                        {user.role}
-                      </span>
-                      <span className="text-slate-700">/</span>
-                      <span className="text-[10px] text-slate-500 truncate">{authLabel(user.authProvider)}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="md:hidden text-right">
-                  <div className="text-xs text-slate-300">{relativeTime(user.lastActiveAt)}</div>
-                  <div className="text-[10px] text-slate-500 mt-1">{user.activity7d} events</div>
-                </div>
-
-                <div className="hidden md:block min-w-0">
-                  <div className="text-xs text-slate-300 truncate">{relativeTime(user.lastActiveAt)}</div>
-                  <div className="text-[10px] text-slate-600 truncate mt-0.5">{dateTime(user.lastActiveAt)}</div>
-                </div>
-                <div className="hidden md:block min-w-0">
-                  <div className="text-xs text-slate-300 truncate">{relativeTime(user.lastListenedAt)}</div>
-                  <div className="text-[10px] text-slate-600 truncate mt-0.5">
-                    {countLabel(user.totalPlays + user.podcastEpisodeCount + user.audiobookCount, 'item')}
-                  </div>
-                </div>
-                <div className="hidden md:block text-right">
-                  <div className="text-sm font-medium text-slate-200">{user.activity7d.toLocaleString()}</div>
-                  <div className="text-[10px] text-slate-600">events</div>
-                </div>
-                <div className="hidden md:block text-right">
-                  <div className="text-sm font-medium text-slate-200">{longDuration(user.estimatedListeningMs)}</div>
-                  <div className="text-[10px] text-slate-600">estimated</div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {!selectedUser ? (
-        <section className="h-56 border-y border-slate-800 flex items-center justify-center text-sm text-slate-500">
-          Select an account to inspect its activity
-        </section>
-      ) : detailLoading && !detail ? (
-        <section className="h-56 border-y border-slate-800 flex items-center justify-center">
-          <div className="w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-        </section>
-      ) : detail ? (
-        <section className="space-y-5" data-testid="audit-user-detail">
-          <div className="flex flex-col lg:flex-row lg:items-center gap-4 py-1">
-            <div className="flex items-center gap-4 min-w-0 flex-1">
-              <Avatar user={detail.user} size="lg" />
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-lg font-semibold text-white break-all">{detail.user.email}</h3>
-                  <span className={`px-2 py-0.5 rounded text-xs ${
-                    detail.user.role === 'admin' ? 'bg-amber-500/15 text-amber-300' : 'bg-slate-800 text-slate-300'
-                  }`}>
-                    {detail.user.role}
-                  </span>
-                  <span className="px-2 py-0.5 rounded text-xs bg-cyan-500/10 text-cyan-300">
-                    {authLabel(detail.user.authProvider)}
-                  </span>
-                </div>
-                <div className="text-xs text-slate-500 mt-1">
-                  Joined {dateTime(detail.user.createdAt)}
-                </div>
+      <section className="border border-slate-800 rounded-lg overflow-hidden bg-slate-950/20">
+        <div className="grid lg:grid-cols-[290px_minmax(0,1fr)] min-h-[650px]">
+          <aside className={`${mobilePane === 'detail' ? 'hidden lg:flex' : 'flex'} min-w-0 flex-col lg:border-r border-slate-800`}>
+            <div className="p-3 space-y-2 border-b border-slate-800">
+              <label className="relative block">
+                <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35M19 11a8 8 0 11-16 0 8 8 0 0116 0z" />
+                </svg>
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Find an account"
+                  className="w-full h-9 pl-9 pr-3 bg-slate-950/60 border border-slate-800 rounded-lg text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-cyan-500"
+                />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={activityFilter}
+                  onChange={(event) => setActivityFilter(event.target.value as ActivityFilter)}
+                  aria-label="Filter accounts"
+                  className="h-8 min-w-0 px-2 bg-slate-950/60 border border-slate-800 rounded-md text-xs text-slate-400 focus:outline-none focus:border-cyan-500"
+                >
+                  <option value="all">All accounts</option>
+                  <option value="active">Active this week</option>
+                  <option value="no-plays">No listening</option>
+                </select>
+                <select
+                  value={userSort}
+                  onChange={(event) => setUserSort(event.target.value as UserSort)}
+                  aria-label="Sort accounts"
+                  className="h-8 min-w-0 px-2 bg-slate-950/60 border border-slate-800 rounded-md text-xs text-slate-400 focus:outline-none focus:border-cyan-500"
+                >
+                  <option value="recent">Most recent</option>
+                  <option value="listening">Most listening</option>
+                  <option value="name">Account name</option>
+                </select>
               </div>
             </div>
 
-            <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3 lg:text-right shrink-0">
-              <div>
-                <div className="text-[11px] uppercase text-slate-500">Last active</div>
-                <div className="text-sm text-slate-200 mt-1">{relativeTime(detail.user.lastActiveAt)}</div>
-                <div className="text-[10px] text-slate-600 mt-0.5">{dateTime(detail.user.lastActiveAt)}</div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase text-slate-500">Last sign-in</div>
-                <div className="text-sm text-slate-200 mt-1">{relativeTime(detail.user.lastLoginAt)}</div>
-                <div className="text-[10px] font-mono text-slate-600 mt-0.5">
-                  {detail.user.lastLoginIp || detail.user.lastActiveIp || 'No IP recorded'}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 divide-x divide-y xl:divide-y-0 divide-slate-800 border-y border-slate-800">
-            <SummaryStat label="Music" value={detail.user.totalPlays.toLocaleString()} detail="plays" />
-            <SummaryStat
-              label="Podcasts"
-              value={detail.user.podcastEpisodeCount.toLocaleString()}
-              detail={`${detail.user.podcastCompletedCount} completed`}
-            />
-            <SummaryStat
-              label="Audiobooks"
-              value={detail.user.audiobookCount.toLocaleString()}
-              detail={`${detail.user.audiobookCompletedCount} completed`}
-            />
-            <SummaryStat label="Listening" value={longDuration(detail.user.estimatedListeningMs)} detail="estimated" />
-            <SummaryStat label="Loved" value={detail.user.favoriteCount.toLocaleString()} detail="tracks" />
-            <SummaryStat label="Playlists" value={detail.user.playlistCount.toLocaleString()} detail="saved lists" />
-          </div>
-
-          <section className="border border-slate-700/50 rounded-lg overflow-hidden bg-slate-950/20">
-            <div className="px-4 sm:px-5 py-4 border-b border-slate-800">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h4 className="text-sm font-medium text-slate-200">Activity trend</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Listening events over the last 14 days</p>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-medium text-white">{detail.user.activity7d.toLocaleString()}</div>
-                  <div className="text-[10px] text-slate-500">last 7 days</div>
-                </div>
-              </div>
-
-              <div className="h-24 flex items-end gap-1.5 mt-4">
-                {detail.dailyActivity.map((day) => (
-                  <div
-                    key={day.date}
-                    className="h-full flex-1 min-w-0 flex flex-col items-center justify-end gap-1"
-                    title={`${day.date}: ${day.count} activities`}
-                  >
-                    <div
-                      className={`w-full max-w-10 rounded-t-sm ${day.count > 0 ? 'bg-cyan-400/80' : 'bg-slate-800'}`}
-                      style={{ height: `${Math.max(day.count > 0 ? 8 : 3, (day.count / maxDailyActivity) * 68)}px` }}
-                    />
-                    <span className="text-[9px] text-slate-600">
-                      {new Intl.DateTimeFormat(undefined, { weekday: 'narrow' }).format(new Date(`${day.date}T12:00:00`))}
-                    </span>
-                  </div>
-                ))}
-              </div>
+            <div className="px-4 py-2 text-[10px] uppercase text-slate-600 border-b border-slate-800">
+              {filteredUsers.length} {filteredUsers.length === 1 ? 'account' : 'accounts'}
             </div>
 
-            <div className="p-2 sm:p-3 border-b border-slate-800">
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-1 p-1 bg-slate-950/60 rounded-lg" role="tablist" aria-label="User activity type">
-                {activityTabs.map((tab) => (
+            <div className="flex-1 lg:max-h-[690px] overflow-y-auto divide-y divide-slate-800/70">
+              {loading ? (
+                <div className="h-40 flex items-center justify-center">
+                  <div className="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : filteredUsers.length === 0 ? (
+                <EmptyActivity>No matching accounts</EmptyActivity>
+              ) : filteredUsers.map((user) => {
+                const selected = user.id === selectedUserId;
+                return (
                   <button
-                    key={tab.id}
-                    role="tab"
-                    aria-selected={activityView === tab.id}
-                    onClick={() => setActivityView(tab.id)}
-                    className={`min-w-0 h-10 px-2 rounded-md text-xs font-medium truncate ${
-                      activityView === tab.id ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                    key={user.id}
+                    data-testid={`audit-user-${user.id}`}
+                    onClick={() => selectUser(user.id)}
+                    aria-pressed={selected}
+                    className={`relative w-full px-3 py-3 text-left flex items-center gap-3 ${
+                      selected ? 'bg-slate-800/80' : 'hover:bg-slate-900/70'
                     }`}
                   >
-                    {tab.label}
-                    <span className="ml-1 text-[10px] opacity-65">{tab.count.toLocaleString()}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="divide-y divide-slate-800" data-testid={`audit-activity-${activityView}`}>
-              {activityView === 'music' && detail.history.map((item) => (
-                <div key={item.historyId} className="px-4 sm:px-5 py-3 flex items-center gap-3">
-                  <img
-                    src={`/api/library/tracks/${item.trackId}/art`}
-                    alt=""
-                    className="w-11 h-11 rounded object-cover bg-slate-800 shrink-0"
-                    onError={(event) => {
-                      event.currentTarget.style.visibility = 'hidden';
-                    }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{item.title || 'Unknown track'}</div>
-                    <div className="text-xs text-slate-500 truncate mt-0.5">
-                      {[item.artist, item.album].filter(Boolean).join(' · ') || 'Unknown artist'}
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-xs text-slate-300">{relativeTime(item.playedAt)}</div>
-                    <div className="text-[10px] text-slate-600 mt-1">{dateTime(item.playedAt)} · {duration(item.durationMs)}</div>
-                  </div>
-                </div>
-              ))}
-
-              {activityView === 'podcasts' && detail.podcastHistory.map((item) => (
-                <div key={item.activityId} className="px-4 sm:px-5 py-3 flex items-center gap-3">
-                  <img
-                    src={`/api/podcasts/episodes/${item.episodeId}/art`}
-                    alt=""
-                    className="w-11 h-11 rounded object-cover bg-slate-800 shrink-0"
-                    onError={(event) => {
-                      event.currentTarget.style.visibility = 'hidden';
-                    }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{item.episodeTitle}</div>
-                    <div className="text-xs text-slate-500 truncate mt-0.5">{item.podcastTitle}</div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-xs text-slate-300">{relativeTime(item.updatedAt)}</div>
-                    <div className={`text-[10px] mt-1 ${item.completed ? 'text-emerald-400' : 'text-slate-600'}`}>
-                      {item.completed ? 'Completed' : `${duration(item.positionMs)} · listened ${duration(item.listenedMs)}`}
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {activityView === 'audiobooks' && detail.audiobookHistory.map((item) => (
-                <div key={item.activityId} className="px-4 sm:px-5 py-3 flex items-center gap-3">
-                  <img
-                    src={`/api/audiobook-art/${item.audiobookId}`}
-                    alt=""
-                    className="w-11 h-11 rounded object-cover bg-slate-800 shrink-0"
-                    onError={(event) => {
-                      event.currentTarget.style.visibility = 'hidden';
-                    }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{item.bookTitle}</div>
-                    <div className="text-xs text-slate-500 truncate mt-0.5">
-                      {[item.author, item.chapterTitle].filter(Boolean).join(' · ') || 'Unknown author'}
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-xs text-slate-300">{relativeTime(item.updatedAt)}</div>
-                    <div className={`text-[10px] mt-1 ${item.completed ? 'text-emerald-400' : 'text-slate-600'}`}>
-                      {item.completed ? 'Completed' : `${duration(item.positionMs)} · listened ${duration(item.listenedMs)}`}
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {activityView === 'sign-ins' && visibleSignIns.map((signIn, index) => {
-                const successful = signIn.event === 'login_ok';
-                const label = successful
-                  ? signIn.method === 'google'
-                    ? signIn.backfilledFrom === 'account_creation' ? 'First Google sign-in' : 'Signed in with Google'
-                    : signIn.method === 'password' ? 'Signed in with password' : 'Signed in'
-                  : signIn.event === 'login_locked' ? 'Locked attempt' : 'Failed attempt';
-                return (
-                  <div key={`${signIn.ts}-${index}`} className="px-4 sm:px-5 py-3 grid sm:grid-cols-[minmax(180px,0.8fr)_minmax(0,1.4fr)_minmax(120px,0.6fr)] gap-2 sm:gap-4 items-center">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${successful ? 'bg-emerald-400' : 'bg-red-400'}`} />
-                      <div className="text-sm text-slate-200 truncate">{label}</div>
-                    </div>
-                    <div className="text-xs text-slate-500 truncate">
-                      {[
-                        clientLabel(signIn.clientType),
-                        signIn.appVersion,
-                        signIn.deviceName,
-                      ].filter(Boolean).join(' · ') || 'No client details'}
-                    </div>
-                    <div className="sm:text-right">
-                      <div className="text-xs text-slate-300">{relativeTime(signIn.ts)}</div>
-                      <div className="text-[10px] text-slate-600 mt-0.5">
-                        {signIn.ip || 'No IP'} · {dateTime(signIn.ts)}
+                    {selected && <span className="absolute inset-y-2 left-0 w-0.5 rounded bg-cyan-400" />}
+                    <Avatar user={user} size="sm" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-slate-100 truncate">{user.email}</div>
+                      <div className="text-[11px] text-slate-500 truncate mt-1">
+                        Active {relativeTime(user.lastActiveAt)}
                       </div>
                     </div>
-                  </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-xs text-slate-300">{longDuration(user.estimatedListeningMs)}</div>
+                      <div className="text-[10px] text-slate-600 mt-1">{user.activity7d} this week</div>
+                    </div>
+                  </button>
                 );
               })}
+            </div>
+          </aside>
 
-              {activityView === 'devices' && visibleClients.map((client) => (
-                <div key={client.clientId} className="px-4 sm:px-5 py-3 grid sm:grid-cols-[minmax(160px,0.7fr)_minmax(0,1.4fr)_minmax(120px,0.6fr)] gap-2 sm:gap-4 items-center">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="w-2 h-2 rounded-full shrink-0 bg-cyan-400" />
-                    <div>
-                      <div className="text-sm text-slate-200">{clientLabel(client.clientType)}</div>
-                      <div className="text-[10px] text-slate-600 mt-0.5">{client.clientId}</div>
+          <main className={`${mobilePane === 'users' ? 'hidden lg:block' : 'block'} min-w-0`}>
+            {!selectedUser ? (
+              <div className="h-full min-h-[520px] flex items-center justify-center text-sm text-slate-500">
+                Select an account to inspect its activity
+              </div>
+            ) : detailLoading && !detail ? (
+              <div className="h-full min-h-[520px] flex items-center justify-center">
+                <div className="w-7 h-7 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : detail ? (
+              <div data-testid="audit-user-detail">
+                <div className="px-4 sm:px-5 py-4 border-b border-slate-800">
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setMobilePane('users')}
+                      className="lg:hidden w-9 h-9 -ml-2 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                      title="Back to accounts"
+                      aria-label="Back to accounts"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m15 18-6-6 6-6" />
+                      </svg>
+                    </button>
+                    <Avatar user={detail.user} size="lg" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <h3 className="text-base font-semibold text-white truncate">{detail.user.email}</h3>
+                        {detail.user.role === 'admin' && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/15 text-amber-300 shrink-0">
+                            Admin
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-500 truncate mt-1">
+                        {authLabel(detail.user.authProvider)}
+                        <span className="mx-1.5 text-slate-700">/</span>
+                        Active {relativeTime(detail.user.lastActiveAt)}
+                      </div>
                     </div>
+                    <button
+                      onClick={() => setShowAccountDetails((current) => !current)}
+                      aria-expanded={showAccountDetails}
+                      className={`h-9 px-3 rounded-lg text-xs font-medium ${
+                        showAccountDetails
+                          ? 'bg-slate-700 text-white'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                      }`}
+                    >
+                      Details
+                    </button>
                   </div>
-                  <div className="text-xs text-slate-500 truncate">
-                    {[client.appVersion, client.deviceName, client.platform].filter(Boolean).join(' · ') || 'No device details'}
-                  </div>
-                  <div className="sm:text-right">
-                    <div className="text-xs text-slate-300">Active {relativeTime(client.lastSeenAt)}</div>
-                    <div className="text-[10px] font-mono text-slate-600 mt-0.5">{client.lastSeenIp || 'No IP'}</div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-5 gap-y-4 mt-5">
+                    <Metric label="Listening" value={longDuration(detail.user.estimatedListeningMs)} detail="estimated" />
+                    <Metric label="Music" value={detail.user.totalPlays.toLocaleString()} detail="plays" />
+                    <Metric label="Podcasts" value={detail.user.podcastEpisodeCount.toLocaleString()} detail={`${detail.user.podcastCompletedCount} completed`} />
+                    <Metric label="Audiobooks" value={detail.user.audiobookCount.toLocaleString()} detail={`${detail.user.audiobookCompletedCount} completed`} />
                   </div>
                 </div>
-              ))}
 
-              {activityView === 'music' && detail.history.length === 0 && <EmptyActivity>No music history</EmptyActivity>}
-              {activityView === 'podcasts' && detail.podcastHistory.length === 0 && <EmptyActivity>No podcast activity</EmptyActivity>}
-              {activityView === 'audiobooks' && detail.audiobookHistory.length === 0 && <EmptyActivity>No audiobook activity</EmptyActivity>}
-              {activityView === 'sign-ins' && detail.signIns.length === 0 && <EmptyActivity>No sign-ins recorded</EmptyActivity>}
-              {activityView === 'devices' && detail.clients.length === 0 && <EmptyActivity>No devices recorded</EmptyActivity>}
-            </div>
+                {showAccountDetails && (
+                  <div
+                    className="px-4 sm:px-5 py-4 bg-slate-950/40 border-b border-slate-800 grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-4"
+                    data-testid="audit-account-details"
+                  >
+                    <div>
+                      <div className="text-[10px] uppercase text-slate-600">Last sign-in</div>
+                      <div className="text-xs text-slate-300 mt-1">{dateTime(detail.user.lastLoginAt)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase text-slate-600">Last IP</div>
+                      <div className="text-xs font-mono text-slate-300 mt-1 truncate">
+                        {detail.user.lastLoginIp || detail.user.lastActiveIp || 'Not recorded'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase text-slate-600">Joined</div>
+                      <div className="text-xs text-slate-300 mt-1">{dateTime(detail.user.createdAt)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase text-slate-600">Access history</div>
+                      <div className="text-xs text-slate-300 mt-1">
+                        {detail.user.loginCount.toLocaleString()} sign-ins / {detail.clients.length.toLocaleString()} devices
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase text-slate-600">Saved music</div>
+                      <div className="text-xs text-slate-300 mt-1">
+                        {detail.user.favoriteCount.toLocaleString()} loved / {detail.user.playlistCount.toLocaleString()} playlists
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase text-slate-600">Approval</div>
+                      <div className="text-xs text-slate-300 mt-1 capitalize">{detail.user.approvalStatus}</div>
+                    </div>
+                  </div>
+                )}
 
-            {activityView === 'music' && detail.history.length < detail.historyTotal && (
-              <div className="p-3 border-t border-slate-800">
-                <button
-                  onClick={() => void loadMoreHistory()}
-                  disabled={moreLoading}
-                  className="w-full h-9 rounded-lg text-sm font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 disabled:opacity-50"
-                >
-                  {moreLoading ? 'Loading' : `Load more (${detail.history.length} of ${detail.historyTotal})`}
-                </button>
+                <div className="px-3 sm:px-4 pt-3 border-b border-slate-800 flex items-end gap-2">
+                  <label className="sm:hidden flex-1 min-w-0 mb-1">
+                    <span className="sr-only">Activity type</span>
+                    <select
+                      value={activityView}
+                      onChange={(event) => setActivityView(event.target.value as ActivityView)}
+                      aria-label="Activity type"
+                      className="w-full h-9 px-3 bg-slate-950/60 border border-slate-800 rounded-lg text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
+                    >
+                      {activityTabs.map((tab) => (
+                        <option key={tab.id} value={tab.id}>
+                          {tab.label} ({tab.count.toLocaleString()})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="hidden sm:block flex-1 min-w-0 overflow-x-auto">
+                    <div className="flex min-w-max" role="tablist" aria-label="User activity type">
+                      {activityTabs.map((tab) => (
+                        <button
+                          key={tab.id}
+                          role="tab"
+                          aria-selected={activityView === tab.id}
+                          onClick={() => setActivityView(tab.id)}
+                          className={`h-10 px-3 border-b-2 text-xs font-medium ${
+                            activityView === tab.id
+                              ? 'border-cyan-400 text-white'
+                              : 'border-transparent text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          {tab.label}
+                          <span className="ml-1.5 text-[10px] opacity-60">{tab.count.toLocaleString()}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowTrend((current) => !current)}
+                    aria-expanded={showTrend}
+                    className={`h-9 mb-1 px-2.5 inline-flex items-center gap-2 rounded-lg text-xs font-medium shrink-0 ${
+                      showTrend
+                        ? 'bg-slate-700 text-white'
+                        : 'text-slate-500 hover:text-white hover:bg-slate-800'
+                    }`}
+                    title="Show 14-day activity trend"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 19V9m5 10V5m5 14v-7m5 7V8" />
+                    </svg>
+                    <span className="hidden sm:inline">14 days</span>
+                  </button>
+                </div>
+
+                {showTrend && (
+                  <div className="px-4 sm:px-5 py-4 border-b border-slate-800 bg-slate-950/30" data-testid="audit-activity-trend">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-medium text-slate-300">Listening activity</div>
+                        <div className="text-[10px] text-slate-600 mt-0.5">Last 14 days</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm font-semibold text-white">{detail.user.activity7d.toLocaleString()}</div>
+                        <div className="text-[10px] text-slate-600">events this week</div>
+                      </div>
+                    </div>
+                    <div className="h-16 flex items-end gap-1.5 mt-3">
+                      {detail.dailyActivity.map((day) => (
+                        <div
+                          key={day.date}
+                          className="h-full flex-1 min-w-0 flex flex-col items-center justify-end gap-1"
+                          title={`${day.date}: ${day.count} activities`}
+                        >
+                          <div
+                            className={`w-full max-w-8 rounded-t-sm ${day.count > 0 ? 'bg-cyan-400/75' : 'bg-slate-800'}`}
+                            style={{ height: `${Math.max(day.count > 0 ? 7 : 2, (day.count / maxDailyActivity) * 45)}px` }}
+                          />
+                          <span className="text-[8px] text-slate-700">
+                            {new Intl.DateTimeFormat(undefined, { weekday: 'narrow' }).format(new Date(`${day.date}T12:00:00`))}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="lg:max-h-[490px] overflow-y-auto divide-y divide-slate-800/70" data-testid={`audit-activity-${activityView}`}>
+                  {activityView === 'music' && detail.history.map((item) => (
+                    <MediaActivityRow
+                      key={item.historyId}
+                      artworkUrl={`/api/library/tracks/${item.trackId}/art`}
+                      title={item.title || 'Unknown track'}
+                      subtitle={[item.artist, item.album].filter(Boolean).join(' / ') || 'Unknown artist'}
+                      occurredAt={item.playedAt}
+                      detail={duration(item.durationMs)}
+                    />
+                  ))}
+
+                  {activityView === 'podcasts' && detail.podcastHistory.map((item) => (
+                    <MediaActivityRow
+                      key={item.activityId}
+                      artworkUrl={`/api/podcasts/episodes/${item.episodeId}/art`}
+                      title={item.episodeTitle}
+                      subtitle={item.podcastTitle}
+                      occurredAt={item.updatedAt}
+                      completed={item.completed}
+                      detail={item.completed ? 'Completed' : `${duration(item.positionMs)} played`}
+                    />
+                  ))}
+
+                  {activityView === 'audiobooks' && detail.audiobookHistory.map((item) => (
+                    <MediaActivityRow
+                      key={item.activityId}
+                      artworkUrl={`/api/audiobook-art/${item.audiobookId}`}
+                      title={item.bookTitle}
+                      subtitle={[item.author, item.chapterTitle].filter(Boolean).join(' / ') || 'Unknown author'}
+                      occurredAt={item.updatedAt}
+                      completed={item.completed}
+                      detail={item.completed ? 'Completed' : `${duration(item.positionMs)} played`}
+                    />
+                  ))}
+
+                  {activityView === 'sign-ins' && visibleSignIns.map((signIn, index) => {
+                    const successful = signIn.event === 'login_ok';
+                    const label = successful
+                      ? signIn.method === 'google'
+                        ? signIn.backfilledFrom === 'account_creation' ? 'First Google sign-in' : 'Google sign-in'
+                        : signIn.method === 'password' ? 'Password sign-in' : 'Signed in'
+                      : signIn.event === 'login_locked' ? 'Locked attempt' : 'Failed attempt';
+                    const device = [clientLabel(signIn.clientType), signIn.appVersion, signIn.deviceName]
+                      .filter(Boolean)
+                      .join(' / ') || 'No client details';
+                    return (
+                      <div key={`${signIn.ts}-${index}`} className="px-4 py-3 flex items-center gap-3">
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${successful ? 'bg-emerald-400' : 'bg-red-400'}`} />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm text-slate-200">{label}</div>
+                          <div className="text-xs text-slate-500 truncate mt-0.5">{device}</div>
+                        </div>
+                        <div className="text-right shrink-0" title={dateTime(signIn.ts)}>
+                          <div className="text-xs text-slate-300">{relativeTime(signIn.ts)}</div>
+                          <div className="text-[10px] font-mono text-slate-600 mt-1">{signIn.ip || 'No IP'}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {activityView === 'devices' && visibleClients.map((client) => (
+                    <div key={client.clientId} className="px-4 py-3 flex items-center gap-3">
+                      <div className="w-9 h-9 rounded bg-slate-800/80 flex items-center justify-center text-xs font-semibold text-cyan-300 shrink-0">
+                        {clientLabel(client.clientType).slice(0, 1)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm text-slate-200">{clientLabel(client.clientType)}</div>
+                        <div className="text-xs text-slate-500 truncate mt-0.5">
+                          {[client.deviceName, client.appVersion, client.platform].filter(Boolean).join(' / ') || 'No device details'}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0" title={dateTime(client.lastSeenAt)}>
+                        <div className="text-xs text-slate-300">{relativeTime(client.lastSeenAt)}</div>
+                        <div className="text-[10px] font-mono text-slate-600 mt-1">{client.lastSeenIp || 'No IP'}</div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {activityView === 'music' && detail.history.length === 0 && <EmptyActivity>No music history</EmptyActivity>}
+                  {activityView === 'podcasts' && detail.podcastHistory.length === 0 && <EmptyActivity>No podcast activity</EmptyActivity>}
+                  {activityView === 'audiobooks' && detail.audiobookHistory.length === 0 && <EmptyActivity>No audiobook activity</EmptyActivity>}
+                  {activityView === 'sign-ins' && detail.signIns.length === 0 && <EmptyActivity>No sign-ins recorded</EmptyActivity>}
+                  {activityView === 'devices' && detail.clients.length === 0 && <EmptyActivity>No devices recorded</EmptyActivity>}
+                </div>
+
+                {activityView === 'music' && detail.history.length < detail.historyTotal && (
+                  <div className="p-3 border-t border-slate-800">
+                    <button
+                      onClick={() => void loadMoreHistory()}
+                      disabled={moreLoading}
+                      className="w-full h-9 rounded-lg text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {moreLoading ? 'Loading' : `Load more (${detail.history.length} of ${detail.historyTotal})`}
+                    </button>
+                  </div>
+                )}
+
+                {activityView === 'podcasts' && detail.podcastHistory.length < detail.podcastHistoryTotal && (
+                  <div className="px-4 py-3 border-t border-slate-800 text-center text-xs text-slate-600">
+                    Latest {detail.podcastHistory.length.toLocaleString()} of {detail.podcastHistoryTotal.toLocaleString()} records
+                  </div>
+                )}
+
+                {activityView === 'audiobooks' && detail.audiobookHistory.length < detail.audiobookHistoryTotal && (
+                  <div className="px-4 py-3 border-t border-slate-800 text-center text-xs text-slate-600">
+                    Latest {detail.audiobookHistory.length.toLocaleString()} of {detail.audiobookHistoryTotal.toLocaleString()} records
+                  </div>
+                )}
+
+                {activityView === 'sign-ins' && detail.signIns.length > 8 && (
+                  <div className="p-3 border-t border-slate-800">
+                    <button
+                      onClick={() => setShowAllAuditRows((current) => !current)}
+                      className="w-full h-9 rounded-lg text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800"
+                    >
+                      {showAllAuditRows ? 'Show recent sign-ins' : `Show all ${detail.signIns.length} sign-ins`}
+                    </button>
+                  </div>
+                )}
+
+                {activityView === 'devices' && detail.clients.length > 8 && (
+                  <div className="p-3 border-t border-slate-800">
+                    <button
+                      onClick={() => setShowAllAuditRows((current) => !current)}
+                      className="w-full h-9 rounded-lg text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800"
+                    >
+                      {showAllAuditRows ? 'Show recent devices' : `Show all ${detail.clients.length} devices`}
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-
-            {activityView === 'podcasts' && detail.podcastHistory.length < detail.podcastHistoryTotal && (
-              <div className="px-4 py-3 border-t border-slate-800 text-center text-xs text-slate-500">
-                Showing the latest {detail.podcastHistory.length.toLocaleString()} of {detail.podcastHistoryTotal.toLocaleString()} records
-              </div>
-            )}
-
-            {activityView === 'audiobooks' && detail.audiobookHistory.length < detail.audiobookHistoryTotal && (
-              <div className="px-4 py-3 border-t border-slate-800 text-center text-xs text-slate-500">
-                Showing the latest {detail.audiobookHistory.length.toLocaleString()} of {detail.audiobookHistoryTotal.toLocaleString()} records
-              </div>
-            )}
-
-            {activityView === 'sign-ins' && detail.signIns.length > 8 && (
-              <div className="p-3 border-t border-slate-800">
-                <button
-                  onClick={() => setShowAllAuditRows((current) => !current)}
-                  className="w-full h-9 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800"
-                >
-                  {showAllAuditRows ? 'Show recent sign-ins' : `Show all ${detail.signIns.length} sign-ins`}
-                </button>
-              </div>
-            )}
-
-            {activityView === 'devices' && detail.clients.length > 8 && (
-              <div className="p-3 border-t border-slate-800">
-                <button
-                  onClick={() => setShowAllAuditRows((current) => !current)}
-                  className="w-full h-9 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800"
-                >
-                  {showAllAuditRows ? 'Show recent devices' : `Show all ${detail.clients.length} devices`}
-                </button>
-              </div>
-            )}
-          </section>
-        </section>
-      ) : null}
+            ) : null}
+          </main>
+        </div>
+      </section>
     </div>
   );
 }
