@@ -97,23 +97,163 @@ function Stage-NodeProject([string]$ProjectName) {
     Copy-TreeContents (Join-Path $sourceRoot "dist") (Join-Path $destinationRoot "dist")
 }
 
-function New-PngIcon([string]$PngPath, [string]$IconPath) {
-    $png = [IO.File]::ReadAllBytes($PngPath)
+function New-RoundedRectanglePath(
+    [single]$Width,
+    [single]$Height,
+    [single]$Radius
+) {
+    $path = [Drawing.Drawing2D.GraphicsPath]::new()
+    $diameter = $Radius * 2
+    $path.AddArc(0, 0, $diameter, $diameter, 180, 90)
+    $path.AddArc($Width - $diameter, 0, $diameter, $diameter, 270, 90)
+    $path.AddArc(
+        $Width - $diameter,
+        $Height - $diameter,
+        $diameter,
+        $diameter,
+        0,
+        90)
+    $path.AddArc(0, $Height - $diameter, $diameter, $diameter, 90, 90)
+    $path.CloseFigure()
+    return $path
+}
+
+function New-MvbarIcon([string]$IconPath) {
+    Add-Type -AssemblyName System.Drawing
+
+    # These primitives mirror web/public/icon.svg, rendered at every Windows
+    # shell size so title-bar and notification-area icons stay crisp.
+    $sizes = [int[]]@(16, 20, 24, 32, 40, 48, 64, 128, 256)
+    $frames = [Collections.Generic.List[object]]::new()
+
+    foreach ($size in $sizes) {
+        $supersample = 4
+        $renderSize = $size * $supersample
+        $scale = [single]($renderSize / 128.0)
+        $source = [Drawing.Bitmap]::new(
+            $renderSize,
+            $renderSize,
+            [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $output = [Drawing.Bitmap]::new(
+            $size,
+            $size,
+            [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+
+        try {
+            $graphics = [Drawing.Graphics]::FromImage($source)
+            try {
+                $graphics.Clear([Drawing.Color]::Transparent)
+                $graphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::AntiAlias
+                $graphics.PixelOffsetMode = [Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+                $backgroundPath = New-RoundedRectanglePath `
+                    ([single]$renderSize) `
+                    ([single]$renderSize) `
+                    ([single](24 * $scale))
+                try {
+                    $backgroundBrush = [Drawing.SolidBrush]::new(
+                        [Drawing.Color]::FromArgb(255, 15, 23, 42))
+                    try {
+                        $graphics.FillPath($backgroundBrush, $backgroundPath)
+                    } finally {
+                        $backgroundBrush.Dispose()
+                    }
+                } finally {
+                    $backgroundPath.Dispose()
+                }
+
+                $gradientBounds = [Drawing.RectangleF]::new(
+                    0,
+                    0,
+                    $renderSize,
+                    $renderSize)
+                $gradient = [Drawing.Drawing2D.LinearGradientBrush]::new(
+                    $gradientBounds,
+                    [Drawing.Color]::FromArgb(255, 77, 217, 255),
+                    [Drawing.Color]::FromArgb(255, 0, 163, 204),
+                    45.0)
+                try {
+                    $pen = [Drawing.Pen]::new($gradient, [single](8 * $scale))
+                    try {
+                        $pen.LineJoin = [Drawing.Drawing2D.LineJoin]::Round
+                        $points = [Drawing.PointF[]]@(
+                            [Drawing.PointF]::new(32 * $scale, 25 * $scale),
+                            [Drawing.PointF]::new(105 * $scale, 64 * $scale),
+                            [Drawing.PointF]::new(32 * $scale, 103 * $scale)
+                        )
+                        $graphics.DrawPolygon($pen, $points)
+                    } finally {
+                        $pen.Dispose()
+                    }
+                } finally {
+                    $gradient.Dispose()
+                }
+            } finally {
+                $graphics.Dispose()
+            }
+
+            $outputGraphics = [Drawing.Graphics]::FromImage($output)
+            try {
+                $outputGraphics.Clear([Drawing.Color]::Transparent)
+                $outputGraphics.CompositingMode =
+                    [Drawing.Drawing2D.CompositingMode]::SourceCopy
+                $outputGraphics.CompositingQuality =
+                    [Drawing.Drawing2D.CompositingQuality]::HighQuality
+                $outputGraphics.InterpolationMode =
+                    [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $outputGraphics.PixelOffsetMode =
+                    [Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                $outputGraphics.DrawImage(
+                    $source,
+                    [Drawing.Rectangle]::new(0, 0, $size, $size),
+                    0,
+                    0,
+                    $renderSize,
+                    $renderSize,
+                    [Drawing.GraphicsUnit]::Pixel)
+            } finally {
+                $outputGraphics.Dispose()
+            }
+
+            $memory = [IO.MemoryStream]::new()
+            try {
+                $output.Save($memory, [Drawing.Imaging.ImageFormat]::Png)
+                $frames.Add([pscustomobject]@{
+                    Size = $size
+                    Bytes = $memory.ToArray()
+                })
+            } finally {
+                $memory.Dispose()
+            }
+        } finally {
+            $output.Dispose()
+            $source.Dispose()
+        }
+    }
+
     $stream = [IO.File]::Open($IconPath, [IO.FileMode]::Create, [IO.FileAccess]::Write)
     try {
         $writer = [IO.BinaryWriter]::new($stream)
         $writer.Write([uint16]0)
         $writer.Write([uint16]1)
-        $writer.Write([uint16]1)
-        $writer.Write([byte]0)
-        $writer.Write([byte]0)
-        $writer.Write([byte]0)
-        $writer.Write([byte]0)
-        $writer.Write([uint16]1)
-        $writer.Write([uint16]32)
-        $writer.Write([uint32]$png.Length)
-        $writer.Write([uint32]22)
-        $writer.Write($png)
+        $writer.Write([uint16]$frames.Count)
+
+        $dataOffset = 6 + (16 * $frames.Count)
+        foreach ($frame in $frames) {
+            $dimension = if ($frame.Size -eq 256) { 0 } else { $frame.Size }
+            $writer.Write([byte]$dimension)
+            $writer.Write([byte]$dimension)
+            $writer.Write([byte]0)
+            $writer.Write([byte]0)
+            $writer.Write([uint16]1)
+            $writer.Write([uint16]32)
+            $writer.Write([uint32]$frame.Bytes.Length)
+            $writer.Write([uint32]$dataOffset)
+            $dataOffset += $frame.Bytes.Length
+        }
+        foreach ($frame in $frames) {
+            $writer.Write([byte[]]$frame.Bytes)
+        }
         $writer.Flush()
     } finally {
         $stream.Dispose()
@@ -262,7 +402,7 @@ $sourceText = $sourceText.Replace("__MVBAR_BUILD_ID__", $buildId)
 [IO.File]::WriteAllText($generatedSource, $sourceText, [Text.UTF8Encoding]::new($false))
 
 $iconPath = Join-Path $generatedRoot "mvbar.ico"
-New-PngIcon (Join-Path $repoRoot "mvbar-logo.png") $iconPath
+New-MvbarIcon $iconPath
 
 $launcherPath = Join-Path $generatedRoot "MVBar-Launcher.exe"
 $frameworkRoot = Split-Path -Parent $cscPath
