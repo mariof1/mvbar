@@ -13,6 +13,7 @@ type ActivityFilter = 'all' | 'active' | 'no-plays';
 type UserSort = 'recent' | 'listening' | 'name';
 type ActivityView = 'music' | 'podcasts' | 'audiobooks' | 'sign-ins' | 'devices';
 type MobilePane = 'users' | 'detail';
+type MetricTone = 'cyan' | 'rose' | 'emerald' | 'amber';
 
 const emptyOverview: AdminUserAuditOverview = {
   ok: true,
@@ -72,8 +73,21 @@ function authLabel(value: AdminUserAuditSummary['authProvider']) {
   return 'Password';
 }
 
+function activityTabClass(view: ActivityView, active: boolean) {
+  if (!active) return 'border-transparent text-slate-400 hover:text-white hover:bg-slate-800/60';
+  if (view === 'music') return 'border-rose-400 text-rose-100 bg-rose-500/10';
+  if (view === 'podcasts') return 'border-emerald-400 text-emerald-100 bg-emerald-500/10';
+  if (view === 'audiobooks') return 'border-amber-400 text-amber-100 bg-amber-500/10';
+  if (view === 'sign-ins') return 'border-cyan-400 text-cyan-100 bg-cyan-500/10';
+  return 'border-violet-400 text-violet-100 bg-violet-500/10';
+}
+
 function eventTime(value: string | null) {
   return value ? new Date(value).getTime() : 0;
+}
+
+function isRecentlyActive(value: string | null) {
+  return eventTime(value) >= Date.now() - 15 * 60 * 1000;
 }
 
 function Avatar({
@@ -83,7 +97,7 @@ function Avatar({
   user: AdminUserAuditSummary;
   size?: 'sm' | 'md' | 'lg';
 }) {
-  const dimensions = size === 'lg' ? 'w-12 h-12 text-lg' : size === 'sm' ? 'w-9 h-9 text-sm' : 'w-10 h-10';
+  const dimensions = size === 'lg' ? 'w-14 h-14 text-xl' : size === 'sm' ? 'w-11 h-11 text-base' : 'w-12 h-12 text-lg';
   const colors = user.role === 'admin'
     ? 'bg-amber-500/15 text-amber-300'
     : 'bg-cyan-500/10 text-cyan-300';
@@ -109,23 +123,90 @@ function Metric({
   label,
   value,
   detail,
+  tone,
 }: {
   label: string;
   value: string;
   detail?: string;
+  tone: MetricTone;
+}) {
+  const tones: Record<MetricTone, { panel: string; icon: string; value: string }> = {
+    cyan: {
+      panel: 'border-cyan-500/25 bg-cyan-500/10',
+      icon: 'bg-cyan-400/15 text-cyan-300',
+      value: 'text-cyan-100',
+    },
+    rose: {
+      panel: 'border-rose-500/25 bg-rose-500/10',
+      icon: 'bg-rose-400/15 text-rose-300',
+      value: 'text-rose-100',
+    },
+    emerald: {
+      panel: 'border-emerald-500/25 bg-emerald-500/10',
+      icon: 'bg-emerald-400/15 text-emerald-300',
+      value: 'text-emerald-100',
+    },
+    amber: {
+      panel: 'border-amber-500/25 bg-amber-500/10',
+      icon: 'bg-amber-400/15 text-amber-300',
+      value: 'text-amber-100',
+    },
+  };
+  const style = tones[tone];
+
+  return (
+    <div className={`min-w-0 p-4 rounded-lg border ${style.panel}`}>
+      <div className="flex items-center gap-2">
+        <span className={`w-8 h-8 rounded-md flex items-center justify-center ${style.icon}`}>
+          {tone === 'cyan' && (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          )}
+          {tone === 'rose' && (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 18V5l10-2v13M9 9l10-2M6 20c1.66 0 3-1.12 3-2.5S7.66 15 6 15s-3 1.12-3 2.5S4.34 20 6 20zm10-2c1.66 0 3-1.12 3-2.5S17.66 13 16 13s-3 1.12-3 2.5 1.34 2.5 3 2.5z" />
+            </svg>
+          )}
+          {tone === 'emerald' && (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 17V7a4 4 0 018 0v10M5 13v2a3 3 0 003 3m11-5v2a3 3 0 01-3 3M5 13H3v-3h2m14 3h2v-3h-2" />
+            </svg>
+          )}
+          {tone === 'amber' && (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5.5A2.5 2.5 0 016.5 3H11v16H6.5A2.5 2.5 0 004 21V5.5zm16 0A2.5 2.5 0 0017.5 3H13v16h4.5A2.5 2.5 0 0120 21V5.5z" />
+            </svg>
+          )}
+        </span>
+        <div className="text-sm font-medium text-slate-300">{label}</div>
+      </div>
+      <div className={`text-2xl font-semibold mt-3 truncate ${style.value}`}>{value}</div>
+      {detail && <div className="text-xs text-slate-400 mt-1 truncate">{detail}</div>}
+    </div>
+  );
+}
+
+function OverviewStat({
+  label,
+  value,
+  valueClass,
+}: {
+  label: string;
+  value: string;
+  valueClass: string;
 }) {
   return (
-    <div className="min-w-0">
-      <div className="text-[11px] text-slate-500">{label}</div>
-      <div className="text-lg font-semibold text-white mt-0.5 truncate">{value}</div>
-      {detail && <div className="text-[10px] text-slate-600 mt-0.5 truncate">{detail}</div>}
+    <div className="min-w-0 px-4 py-3">
+      <div className="text-xs font-medium text-slate-400">{label}</div>
+      <div className={`text-xl font-semibold mt-1 truncate ${valueClass}`}>{value}</div>
     </div>
   );
 }
 
 function EmptyActivity({ children }: { children: string }) {
   return (
-    <div className="h-52 flex items-center justify-center text-sm text-slate-500">
+    <div className="h-52 flex items-center justify-center text-base text-slate-400">
       {children}
     </div>
   );
@@ -147,8 +228,8 @@ function MediaActivityRow({
   completed?: boolean;
 }) {
   return (
-    <div className="px-4 py-3 flex items-center gap-3">
-      <div className="relative w-10 h-10 rounded bg-slate-800 text-slate-500 shrink-0 overflow-hidden flex items-center justify-center text-sm font-semibold">
+    <div className="px-5 py-4 flex items-center gap-4">
+      <div className="relative w-12 h-12 rounded-md bg-slate-800 text-slate-400 shrink-0 overflow-hidden flex items-center justify-center text-base font-semibold">
         {title.slice(0, 1).toUpperCase()}
         <img
           src={artworkUrl}
@@ -160,12 +241,12 @@ function MediaActivityRow({
         />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-slate-100 truncate">{title}</div>
-        <div className="text-xs text-slate-500 truncate mt-0.5">{subtitle}</div>
+        <div className="text-base font-semibold text-slate-100 truncate">{title}</div>
+        <div className="text-sm text-slate-400 truncate mt-1">{subtitle}</div>
       </div>
       <div className="text-right shrink-0 max-w-40" title={dateTime(occurredAt)}>
-        <div className="text-xs text-slate-300">{relativeTime(occurredAt)}</div>
-        <div className={`text-[10px] truncate mt-1 ${completed ? 'text-emerald-400' : 'text-slate-600'}`}>
+        <div className="text-sm font-medium text-slate-200">{relativeTime(occurredAt)}</div>
+        <div className={`text-xs truncate mt-1 ${completed ? 'text-emerald-300' : 'text-slate-500'}`}>
           {detail}
         </div>
       </div>
@@ -183,6 +264,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
   const [activityView, setActivityView] = useState<ActivityView>('music');
   const [mobilePane, setMobilePane] = useState<MobilePane>('users');
   const [showTrend, setShowTrend] = useState(false);
+  const [trendDays, setTrendDays] = useState<7 | 14>(14);
   const [showAccountDetails, setShowAccountDetails] = useState(false);
   const [showAllAuditRows, setShowAllAuditRows] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
@@ -273,7 +355,8 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
   }, [activityFilter, overview.users, query, userSort]);
 
   const selectedUser = overview.users.find((user) => user.id === selectedUserId) ?? null;
-  const maxDailyActivity = Math.max(1, ...(detail?.dailyActivity.map((day) => day.count) ?? [0]));
+  const displayedDailyActivity = detail?.dailyActivity.slice(-trendDays) ?? [];
+  const maxDailyActivity = Math.max(1, ...(displayedDailyActivity.map((day) => day.count) ?? [0]));
 
   async function loadMoreHistory() {
     if (!detail || moreLoading || detail.history.length >= detail.historyTotal) return;
@@ -320,50 +403,51 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
         </div>
       )}
 
-      <header className="flex items-start justify-between gap-4">
+      <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
         <div className="min-w-0">
-          <h2 className="text-xl font-semibold text-white">User audit</h2>
-          <p className="text-sm text-slate-500 mt-1">
-            {overview.totals.users.toLocaleString()} accounts
-            <span className="mx-2 text-slate-700">/</span>
-            {overview.totals.active7d.toLocaleString()} active this week
-            <span className="mx-2 text-slate-700">/</span>
-            {longDuration(overview.totals.estimatedListeningMs)} listening
+          <h2 className="text-2xl font-semibold text-white">User audit</h2>
+          <p className="text-base text-slate-400 mt-1.5">
+            Review listening, account access, and connected devices
           </p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-3 w-full lg:w-auto">
+          <div className="grid grid-cols-3 flex-1 lg:flex-none lg:w-[430px] divide-x divide-slate-700/70 border border-slate-700/70 rounded-lg bg-slate-900/55">
+            <OverviewStat label="Accounts" value={overview.totals.users.toLocaleString()} valueClass="text-cyan-200" />
+            <OverviewStat label="Active this week" value={overview.totals.active7d.toLocaleString()} valueClass="text-emerald-200" />
+            <OverviewStat label="Total listening" value={longDuration(overview.totals.estimatedListeningMs)} valueClass="text-amber-200" />
+          </div>
           {lastRefreshedAt && (
-            <span className="hidden md:block text-xs text-slate-600">
+            <span className="hidden xl:block text-sm text-slate-500 shrink-0">
               Updated {relativeTime(lastRefreshedAt.toISOString())}
             </span>
           )}
           <button
             onClick={() => void loadOverview()}
             disabled={loading}
-            className="w-9 h-9 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-50"
+            className="w-11 h-11 inline-flex items-center justify-center rounded-lg border border-slate-700/70 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-50 shrink-0"
             title="Refresh user audit"
             aria-label="Refresh user audit"
           >
-            <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M5.6 15A7 7 0 0018 17m.4-8A7 7 0 006 7" />
             </svg>
           </button>
         </div>
       </header>
 
-      <section className="border border-slate-800 rounded-lg overflow-hidden bg-slate-950/20">
-        <div className="grid lg:grid-cols-[290px_minmax(0,1fr)] min-h-[650px]">
+      <section className="border border-slate-700/70 rounded-lg overflow-hidden bg-slate-950/25">
+        <div className="grid lg:grid-cols-[330px_minmax(0,1fr)] min-h-[720px]">
           <aside className={`${mobilePane === 'detail' ? 'hidden lg:flex' : 'flex'} min-w-0 flex-col lg:border-r border-slate-800`}>
-            <div className="p-3 space-y-2 border-b border-slate-800">
+            <div className="p-4 space-y-3 border-b border-slate-800 bg-slate-900/30">
               <label className="relative block">
-                <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35M19 11a8 8 0 11-16 0 8 8 0 0116 0z" />
                 </svg>
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="Find an account"
-                  className="w-full h-9 pl-9 pr-3 bg-slate-950/60 border border-slate-800 rounded-lg text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-cyan-500"
+                  className="w-full h-11 pl-11 pr-3 bg-slate-950/70 border border-slate-700 rounded-lg text-base text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/10"
                 />
               </label>
               <div className="grid grid-cols-2 gap-2">
@@ -371,7 +455,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                   value={activityFilter}
                   onChange={(event) => setActivityFilter(event.target.value as ActivityFilter)}
                   aria-label="Filter accounts"
-                  className="h-8 min-w-0 px-2 bg-slate-950/60 border border-slate-800 rounded-md text-xs text-slate-400 focus:outline-none focus:border-cyan-500"
+                  className="h-10 min-w-0 px-3 bg-slate-950/70 border border-slate-700 rounded-lg text-sm text-slate-300 focus:outline-none focus:border-cyan-400"
                 >
                   <option value="all">All accounts</option>
                   <option value="active">Active this week</option>
@@ -381,7 +465,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                   value={userSort}
                   onChange={(event) => setUserSort(event.target.value as UserSort)}
                   aria-label="Sort accounts"
-                  className="h-8 min-w-0 px-2 bg-slate-950/60 border border-slate-800 rounded-md text-xs text-slate-400 focus:outline-none focus:border-cyan-500"
+                  className="h-10 min-w-0 px-3 bg-slate-950/70 border border-slate-700 rounded-lg text-sm text-slate-300 focus:outline-none focus:border-cyan-400"
                 >
                   <option value="recent">Most recent</option>
                   <option value="listening">Most listening</option>
@@ -390,11 +474,11 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
               </div>
             </div>
 
-            <div className="px-4 py-2 text-[10px] uppercase text-slate-600 border-b border-slate-800">
+            <div className="px-4 py-3 text-xs font-medium uppercase text-slate-500 border-b border-slate-800">
               {filteredUsers.length} {filteredUsers.length === 1 ? 'account' : 'accounts'}
             </div>
 
-            <div className="flex-1 lg:max-h-[690px] overflow-y-auto divide-y divide-slate-800/70">
+            <div className="flex-1 lg:max-h-[720px] overflow-y-auto divide-y divide-slate-800/70">
               {loading ? (
                 <div className="h-40 flex items-center justify-center">
                   <div className="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
@@ -409,21 +493,24 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                     data-testid={`audit-user-${user.id}`}
                     onClick={() => selectUser(user.id)}
                     aria-pressed={selected}
-                    className={`relative w-full px-3 py-3 text-left flex items-center gap-3 ${
-                      selected ? 'bg-slate-800/80' : 'hover:bg-slate-900/70'
+                    className={`relative w-full px-4 py-4 text-left flex items-center gap-3.5 ${
+                      selected ? 'bg-cyan-500/10' : 'hover:bg-slate-900/80'
                     }`}
                   >
-                    {selected && <span className="absolute inset-y-2 left-0 w-0.5 rounded bg-cyan-400" />}
+                    {selected && <span className="absolute inset-y-3 left-0 w-1 rounded-r bg-cyan-400" />}
                     <Avatar user={user} size="sm" />
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-slate-100 truncate">{user.email}</div>
-                      <div className="text-[11px] text-slate-500 truncate mt-1">
-                        Active {relativeTime(user.lastActiveAt)}
+                      <div className="text-[15px] font-semibold text-slate-100 truncate">{user.email}</div>
+                      <div className="flex items-center gap-2 text-[13px] text-slate-400 truncate mt-1.5">
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${
+                          isRecentlyActive(user.lastActiveAt) ? 'bg-emerald-400' : 'bg-slate-600'
+                        }`} />
+                        <span className="truncate">Active {relativeTime(user.lastActiveAt)}</span>
                       </div>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="text-xs text-slate-300">{longDuration(user.estimatedListeningMs)}</div>
-                      <div className="text-[10px] text-slate-600 mt-1">{user.activity7d} this week</div>
+                      <div className="text-sm font-semibold text-cyan-200">{longDuration(user.estimatedListeningMs)}</div>
+                      <div className="text-xs text-slate-500 mt-1.5">{user.activity7d} this week</div>
                     </div>
                   </button>
                 );
@@ -433,7 +520,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
 
           <main className={`${mobilePane === 'users' ? 'hidden lg:block' : 'block'} min-w-0`}>
             {!selectedUser ? (
-              <div className="h-full min-h-[520px] flex items-center justify-center text-sm text-slate-500">
+              <div className="h-full min-h-[560px] flex items-center justify-center text-base text-slate-400">
                 Select an account to inspect its activity
               </div>
             ) : detailLoading && !detail ? (
@@ -442,101 +529,111 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
               </div>
             ) : detail ? (
               <div data-testid="audit-user-detail">
-                <div className="px-4 sm:px-5 py-4 border-b border-slate-800">
-                  <div className="flex items-center gap-3">
+                <div className="px-5 sm:px-6 py-5 border-b border-slate-800">
+                  <div className="flex items-center gap-3 sm:gap-4">
                     <button
                       onClick={() => setMobilePane('users')}
-                      className="lg:hidden w-9 h-9 -ml-2 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                      className="lg:hidden w-11 h-11 -ml-2 inline-flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-slate-800"
                       title="Back to accounts"
                       aria-label="Back to accounts"
                     >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m15 18-6-6 6-6" />
                       </svg>
                     </button>
                     <Avatar user={detail.user} size="lg" />
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <h3 className="text-base font-semibold text-white truncate">{detail.user.email}</h3>
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <h3 className="text-lg sm:text-xl font-semibold leading-snug text-white break-all sm:truncate">
+                          {detail.user.email}
+                        </h3>
                         {detail.user.role === 'admin' && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/15 text-amber-300 shrink-0">
+                          <span className="px-2 py-1 rounded text-xs font-medium bg-amber-500/15 text-amber-200 shrink-0">
                             Admin
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-slate-500 truncate mt-1">
+                      <div className="flex items-center flex-wrap gap-x-2 gap-y-1 text-sm text-slate-400 mt-1.5">
                         {authLabel(detail.user.authProvider)}
                         <span className="mx-1.5 text-slate-700">/</span>
-                        Active {relativeTime(detail.user.lastActiveAt)}
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${
+                          isRecentlyActive(detail.user.lastActiveAt) ? 'bg-emerald-400' : 'bg-slate-600'
+                        }`} />
+                        <span>Active {relativeTime(detail.user.lastActiveAt)}</span>
                       </div>
                     </div>
                     <button
                       onClick={() => setShowAccountDetails((current) => !current)}
                       aria-expanded={showAccountDetails}
-                      className={`h-9 px-3 rounded-lg text-xs font-medium ${
+                      aria-label="Details"
+                      title="Account details"
+                      className={`w-11 sm:w-auto h-11 sm:px-4 rounded-lg text-sm font-medium inline-flex items-center justify-center shrink-0 ${
                         showAccountDetails
-                          ? 'bg-slate-700 text-white'
-                          : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                          ? 'bg-cyan-500/15 text-cyan-100 border border-cyan-500/30'
+                          : 'text-slate-300 border border-slate-700 hover:text-white hover:bg-slate-800'
                       }`}
                     >
-                      Details
+                      <svg className="sm:hidden w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 17v-6m0-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span className="hidden sm:inline">Details</span>
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-5 gap-y-4 mt-5">
-                    <Metric label="Listening" value={longDuration(detail.user.estimatedListeningMs)} detail="estimated" />
-                    <Metric label="Music" value={detail.user.totalPlays.toLocaleString()} detail="plays" />
-                    <Metric label="Podcasts" value={detail.user.podcastEpisodeCount.toLocaleString()} detail={`${detail.user.podcastCompletedCount} completed`} />
-                    <Metric label="Audiobooks" value={detail.user.audiobookCount.toLocaleString()} detail={`${detail.user.audiobookCompletedCount} completed`} />
+                  <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mt-6">
+                    <Metric tone="cyan" label="Listening" value={longDuration(detail.user.estimatedListeningMs)} detail="Estimated total" />
+                    <Metric tone="rose" label="Music" value={detail.user.totalPlays.toLocaleString()} detail="Tracks played" />
+                    <Metric tone="emerald" label="Podcasts" value={detail.user.podcastEpisodeCount.toLocaleString()} detail={`${detail.user.podcastCompletedCount} completed`} />
+                    <Metric tone="amber" label="Audiobooks" value={detail.user.audiobookCount.toLocaleString()} detail={`${detail.user.audiobookCompletedCount} completed`} />
                   </div>
                 </div>
 
                 {showAccountDetails && (
                   <div
-                    className="px-4 sm:px-5 py-4 bg-slate-950/40 border-b border-slate-800 grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-4"
+                    className="px-5 sm:px-6 py-5 bg-slate-900/45 border-b border-slate-800 grid grid-cols-2 md:grid-cols-3 gap-x-7 gap-y-5"
                     data-testid="audit-account-details"
                   >
                     <div>
-                      <div className="text-[10px] uppercase text-slate-600">Last sign-in</div>
-                      <div className="text-xs text-slate-300 mt-1">{dateTime(detail.user.lastLoginAt)}</div>
+                      <div className="text-xs font-medium uppercase text-slate-500">Last sign-in</div>
+                      <div className="text-sm text-slate-200 mt-1.5">{dateTime(detail.user.lastLoginAt)}</div>
                     </div>
                     <div>
-                      <div className="text-[10px] uppercase text-slate-600">Last IP</div>
-                      <div className="text-xs font-mono text-slate-300 mt-1 truncate">
+                      <div className="text-xs font-medium uppercase text-slate-500">Last IP</div>
+                      <div className="text-sm font-mono text-slate-200 mt-1.5 truncate">
                         {detail.user.lastLoginIp || detail.user.lastActiveIp || 'Not recorded'}
                       </div>
                     </div>
                     <div>
-                      <div className="text-[10px] uppercase text-slate-600">Joined</div>
-                      <div className="text-xs text-slate-300 mt-1">{dateTime(detail.user.createdAt)}</div>
+                      <div className="text-xs font-medium uppercase text-slate-500">Joined</div>
+                      <div className="text-sm text-slate-200 mt-1.5">{dateTime(detail.user.createdAt)}</div>
                     </div>
                     <div>
-                      <div className="text-[10px] uppercase text-slate-600">Access history</div>
-                      <div className="text-xs text-slate-300 mt-1">
+                      <div className="text-xs font-medium uppercase text-slate-500">Access history</div>
+                      <div className="text-sm text-slate-200 mt-1.5">
                         {detail.user.loginCount.toLocaleString()} sign-ins / {detail.clients.length.toLocaleString()} devices
                       </div>
                     </div>
                     <div>
-                      <div className="text-[10px] uppercase text-slate-600">Saved music</div>
-                      <div className="text-xs text-slate-300 mt-1">
+                      <div className="text-xs font-medium uppercase text-slate-500">Saved music</div>
+                      <div className="text-sm text-slate-200 mt-1.5">
                         {detail.user.favoriteCount.toLocaleString()} loved / {detail.user.playlistCount.toLocaleString()} playlists
                       </div>
                     </div>
                     <div>
-                      <div className="text-[10px] uppercase text-slate-600">Approval</div>
-                      <div className="text-xs text-slate-300 mt-1 capitalize">{detail.user.approvalStatus}</div>
+                      <div className="text-xs font-medium uppercase text-slate-500">Approval</div>
+                      <div className="text-sm text-emerald-300 mt-1.5 capitalize">{detail.user.approvalStatus}</div>
                     </div>
                   </div>
                 )}
 
-                <div className="px-3 sm:px-4 pt-3 border-b border-slate-800 flex items-end gap-2">
-                  <label className="sm:hidden flex-1 min-w-0 mb-1">
+                <div className="px-4 sm:px-5 pt-4 border-b border-slate-800 flex items-end gap-3 bg-slate-900/20">
+                  <label className="sm:hidden flex-1 min-w-0 mb-2">
                     <span className="sr-only">Activity type</span>
                     <select
                       value={activityView}
                       onChange={(event) => setActivityView(event.target.value as ActivityView)}
                       aria-label="Activity type"
-                      className="w-full h-9 px-3 bg-slate-950/60 border border-slate-800 rounded-lg text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
+                      className="w-full h-11 px-3 bg-slate-950/70 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-cyan-400"
                     >
                       {activityTabs.map((tab) => (
                         <option key={tab.id} value={tab.id}>
@@ -553,14 +650,13 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                           role="tab"
                           aria-selected={activityView === tab.id}
                           onClick={() => setActivityView(tab.id)}
-                          className={`h-10 px-3 border-b-2 text-xs font-medium ${
-                            activityView === tab.id
-                              ? 'border-cyan-400 text-white'
-                              : 'border-transparent text-slate-500 hover:text-slate-300'
-                          }`}
+                          className={`h-12 px-4 border-b-[3px] text-sm font-medium transition-colors ${activityTabClass(
+                            tab.id,
+                            activityView === tab.id,
+                          )}`}
                         >
                           {tab.label}
-                          <span className="ml-1.5 text-[10px] opacity-60">{tab.count.toLocaleString()}</span>
+                          <span className="ml-2 px-1.5 py-0.5 rounded bg-white/10 text-xs opacity-80">{tab.count.toLocaleString()}</span>
                         </button>
                       ))}
                     </div>
@@ -568,44 +664,59 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                   <button
                     onClick={() => setShowTrend((current) => !current)}
                     aria-expanded={showTrend}
-                    className={`h-9 mb-1 px-2.5 inline-flex items-center gap-2 rounded-lg text-xs font-medium shrink-0 ${
+                    className={`h-11 mb-1.5 px-3 inline-flex items-center gap-2 rounded-lg text-sm font-medium shrink-0 border ${
                       showTrend
-                        ? 'bg-slate-700 text-white'
-                        : 'text-slate-500 hover:text-white hover:bg-slate-800'
+                        ? 'bg-cyan-500/15 text-cyan-100 border-cyan-500/30'
+                        : 'text-slate-300 border-slate-700 hover:text-white hover:bg-slate-800'
                     }`}
                     title="Show 14-day activity trend"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 19V9m5 10V5m5 14v-7m5 7V8" />
                     </svg>
-                    <span className="hidden sm:inline">14 days</span>
+                    <span className="hidden sm:inline">Trend</span>
                   </button>
                 </div>
 
                 {showTrend && (
-                  <div className="px-4 sm:px-5 py-4 border-b border-slate-800 bg-slate-950/30" data-testid="audit-activity-trend">
+                  <div className="px-5 sm:px-6 py-5 border-b border-slate-800 bg-cyan-500/5" data-testid="audit-activity-trend">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <div className="text-xs font-medium text-slate-300">Listening activity</div>
-                        <div className="text-[10px] text-slate-600 mt-0.5">Last 14 days</div>
+                        <div className="text-base font-semibold text-slate-100">Listening activity</div>
+                        <div className="text-sm text-slate-400 mt-1">Daily events across all media</div>
                       </div>
-                      <div className="text-right">
-                        <div className="text-sm font-semibold text-white">{detail.user.activity7d.toLocaleString()}</div>
-                        <div className="text-[10px] text-slate-600">events this week</div>
+                      <div className="flex items-center gap-3">
+                        <div className="grid grid-cols-2 p-1 bg-slate-950/70 border border-slate-700 rounded-lg">
+                          {([7, 14] as const).map((days) => (
+                            <button
+                              key={days}
+                              onClick={() => setTrendDays(days)}
+                              className={`h-8 px-3 rounded-md text-xs font-medium ${
+                                trendDays === days ? 'bg-cyan-500/20 text-cyan-100' : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              {days} days
+                            </button>
+                          ))}
+                        </div>
+                        <div className="hidden sm:block text-right">
+                          <div className="text-xl font-semibold text-cyan-100">{detail.user.activity7d.toLocaleString()}</div>
+                          <div className="text-xs text-slate-400">events this week</div>
+                        </div>
                       </div>
                     </div>
-                    <div className="h-16 flex items-end gap-1.5 mt-3">
-                      {detail.dailyActivity.map((day) => (
+                    <div className="h-24 flex items-end gap-2 mt-5">
+                      {displayedDailyActivity.map((day) => (
                         <div
                           key={day.date}
                           className="h-full flex-1 min-w-0 flex flex-col items-center justify-end gap-1"
                           title={`${day.date}: ${day.count} activities`}
                         >
                           <div
-                            className={`w-full max-w-8 rounded-t-sm ${day.count > 0 ? 'bg-cyan-400/75' : 'bg-slate-800'}`}
-                            style={{ height: `${Math.max(day.count > 0 ? 7 : 2, (day.count / maxDailyActivity) * 45)}px` }}
+                            className={`w-full max-w-10 rounded-t ${day.count > 0 ? 'bg-cyan-400/80' : 'bg-slate-800'}`}
+                            style={{ height: `${Math.max(day.count > 0 ? 10 : 3, (day.count / maxDailyActivity) * 65)}px` }}
                           />
-                          <span className="text-[8px] text-slate-700">
+                          <span className="text-xs text-slate-500">
                             {new Intl.DateTimeFormat(undefined, { weekday: 'narrow' }).format(new Date(`${day.date}T12:00:00`))}
                           </span>
                         </div>
@@ -614,7 +725,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                   </div>
                 )}
 
-                <div className="lg:max-h-[490px] overflow-y-auto divide-y divide-slate-800/70" data-testid={`audit-activity-${activityView}`}>
+                <div className="lg:max-h-[540px] overflow-y-auto divide-y divide-slate-800/70" data-testid={`audit-activity-${activityView}`}>
                   {activityView === 'music' && detail.history.map((item) => (
                     <MediaActivityRow
                       key={item.historyId}
@@ -661,34 +772,34 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                       .filter(Boolean)
                       .join(' / ') || 'No client details';
                     return (
-                      <div key={`${signIn.ts}-${index}`} className="px-4 py-3 flex items-center gap-3">
-                        <span className={`w-2 h-2 rounded-full shrink-0 ${successful ? 'bg-emerald-400' : 'bg-red-400'}`} />
+                      <div key={`${signIn.ts}-${index}`} className="px-5 py-4 flex items-center gap-4">
+                        <span className={`w-3 h-3 rounded-full shrink-0 ${successful ? 'bg-emerald-400' : 'bg-red-400'}`} />
                         <div className="min-w-0 flex-1">
-                          <div className="text-sm text-slate-200">{label}</div>
-                          <div className="text-xs text-slate-500 truncate mt-0.5">{device}</div>
+                          <div className="text-base font-medium text-slate-100">{label}</div>
+                          <div className="text-sm text-slate-400 truncate mt-1">{device}</div>
                         </div>
                         <div className="text-right shrink-0" title={dateTime(signIn.ts)}>
-                          <div className="text-xs text-slate-300">{relativeTime(signIn.ts)}</div>
-                          <div className="text-[10px] font-mono text-slate-600 mt-1">{signIn.ip || 'No IP'}</div>
+                          <div className="text-sm font-medium text-slate-200">{relativeTime(signIn.ts)}</div>
+                          <div className="text-xs font-mono text-slate-500 mt-1">{signIn.ip || 'No IP'}</div>
                         </div>
                       </div>
                     );
                   })}
 
                   {activityView === 'devices' && visibleClients.map((client) => (
-                    <div key={client.clientId} className="px-4 py-3 flex items-center gap-3">
-                      <div className="w-9 h-9 rounded bg-slate-800/80 flex items-center justify-center text-xs font-semibold text-cyan-300 shrink-0">
+                    <div key={client.clientId} className="px-5 py-4 flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-md bg-violet-500/15 flex items-center justify-center text-base font-semibold text-violet-200 shrink-0">
                         {clientLabel(client.clientType).slice(0, 1)}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm text-slate-200">{clientLabel(client.clientType)}</div>
-                        <div className="text-xs text-slate-500 truncate mt-0.5">
+                        <div className="text-base font-medium text-slate-100">{clientLabel(client.clientType)}</div>
+                        <div className="text-sm text-slate-400 truncate mt-1">
                           {[client.deviceName, client.appVersion, client.platform].filter(Boolean).join(' / ') || 'No device details'}
                         </div>
                       </div>
                       <div className="text-right shrink-0" title={dateTime(client.lastSeenAt)}>
-                        <div className="text-xs text-slate-300">{relativeTime(client.lastSeenAt)}</div>
-                        <div className="text-[10px] font-mono text-slate-600 mt-1">{client.lastSeenIp || 'No IP'}</div>
+                        <div className="text-sm font-medium text-slate-200">{relativeTime(client.lastSeenAt)}</div>
+                        <div className="text-xs font-mono text-slate-500 mt-1">{client.lastSeenIp || 'No IP'}</div>
                       </div>
                     </div>
                   ))}
@@ -701,11 +812,11 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                 </div>
 
                 {activityView === 'music' && detail.history.length < detail.historyTotal && (
-                  <div className="p-3 border-t border-slate-800">
+                  <div className="p-4 border-t border-slate-800">
                     <button
                       onClick={() => void loadMoreHistory()}
                       disabled={moreLoading}
-                      className="w-full h-9 rounded-lg text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-50"
+                      className="w-full h-11 rounded-lg text-base font-medium text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-50"
                     >
                       {moreLoading ? 'Loading' : `Load more (${detail.history.length} of ${detail.historyTotal})`}
                     </button>
@@ -713,22 +824,22 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                 )}
 
                 {activityView === 'podcasts' && detail.podcastHistory.length < detail.podcastHistoryTotal && (
-                  <div className="px-4 py-3 border-t border-slate-800 text-center text-xs text-slate-600">
+                  <div className="px-5 py-4 border-t border-slate-800 text-center text-sm text-slate-400">
                     Latest {detail.podcastHistory.length.toLocaleString()} of {detail.podcastHistoryTotal.toLocaleString()} records
                   </div>
                 )}
 
                 {activityView === 'audiobooks' && detail.audiobookHistory.length < detail.audiobookHistoryTotal && (
-                  <div className="px-4 py-3 border-t border-slate-800 text-center text-xs text-slate-600">
+                  <div className="px-5 py-4 border-t border-slate-800 text-center text-sm text-slate-400">
                     Latest {detail.audiobookHistory.length.toLocaleString()} of {detail.audiobookHistoryTotal.toLocaleString()} records
                   </div>
                 )}
 
                 {activityView === 'sign-ins' && detail.signIns.length > 8 && (
-                  <div className="p-3 border-t border-slate-800">
+                  <div className="p-4 border-t border-slate-800">
                     <button
                       onClick={() => setShowAllAuditRows((current) => !current)}
-                      className="w-full h-9 rounded-lg text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800"
+                      className="w-full h-11 rounded-lg text-base font-medium text-slate-300 hover:text-white hover:bg-slate-800"
                     >
                       {showAllAuditRows ? 'Show recent sign-ins' : `Show all ${detail.signIns.length} sign-ins`}
                     </button>
@@ -736,10 +847,10 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                 )}
 
                 {activityView === 'devices' && detail.clients.length > 8 && (
-                  <div className="p-3 border-t border-slate-800">
+                  <div className="p-4 border-t border-slate-800">
                     <button
                       onClick={() => setShowAllAuditRows((current) => !current)}
-                      className="w-full h-9 rounded-lg text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800"
+                      className="w-full h-11 rounded-lg text-base font-medium text-slate-300 hover:text-white hover:bg-slate-800"
                     >
                       {showAllAuditRows ? 'Show recent devices' : `Show all ${detail.clients.length} devices`}
                     </button>
