@@ -31,6 +31,7 @@ internal static class Program
     private static readonly object LauncherLogSync = new object();
     private static IntPtr jobHandle = IntPtr.Zero;
     private static volatile bool shuttingDown;
+    private static bool restartRequested;
     private static LauncherForm launcherForm;
     private static string homeRoot;
     private static string appRoot;
@@ -42,6 +43,8 @@ internal static class Program
     [STAThread]
     private static int Main()
     {
+        int exitCode = 0;
+        bool restartAfterExit = false;
         bool ownsMutex;
         using (var mutex = new Mutex(true, @"Local\MVBarStandalone", out ownsMutex))
         {
@@ -57,18 +60,19 @@ internal static class Program
                 if (Environment.GetEnvironmentVariable("MVBAR_HEADLESS") == "1")
                 {
                     Run();
-                    return 0;
                 }
-
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                using (var form = new LauncherForm())
+                else
                 {
-                    launcherForm = form;
-                    Application.Run(form);
-                    launcherForm = null;
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    using (var form = new LauncherForm())
+                    {
+                        launcherForm = form;
+                        Application.Run(form);
+                        launcherForm = null;
+                    }
+                    restartAfterExit = restartRequested;
                 }
-                return 0;
             }
             catch (Exception error)
             {
@@ -76,9 +80,29 @@ internal static class Program
                 TryShowMessage("MVBar could not start.\r\n\r\n" + error.Message +
                     "\r\n\r\nSee the logs under:\r\n" + logRoot, "MVBar");
                 Shutdown();
-                return 1;
+                exitCode = 1;
             }
         }
+
+        if (restartAfterExit)
+        {
+            try
+            {
+                var startInfo = new ProcessStartInfo(Assembly.GetExecutingAssembly().Location);
+                startInfo.UseShellExecute = true;
+                Process.Start(startInfo);
+            }
+            catch (Exception error)
+            {
+                LogLauncher("ERROR", "Could not restart MVBar: " + error);
+                TryShowMessage(
+                    "MVBar settings were saved, but Windows could not restart the app.\r\n\r\n" +
+                        "Please open the standalone EXE again.",
+                    "MVBar");
+                exitCode = 1;
+            }
+        }
+        return exitCode;
     }
 
     private static void Run()
@@ -279,6 +303,23 @@ internal static class Program
         });
     }
 
+    private static void RestartFromUi()
+    {
+        restartRequested = true;
+        UpdateLauncher(delegate(LauncherForm form)
+        {
+            form.ShowRestarting();
+        });
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            Shutdown();
+            UpdateLauncher(delegate(LauncherForm form)
+            {
+                form.CompleteExit();
+            });
+        });
+    }
+
     private static void ReportStatus(string title, string detail, int progress)
     {
         LogLauncher("INFO", title + ": " + detail);
@@ -450,6 +491,95 @@ internal static class Program
             config[key] = value;
         }
         return config;
+    }
+
+    private static LauncherSettings LoadLauncherSettings()
+    {
+        string configPath = Path.Combine(homeRoot, "config.env");
+        if (!File.Exists(configPath))
+        {
+            throw new FileNotFoundException("The MVBar settings file was not found.", configPath);
+        }
+        Dictionary<string, string> config =
+            ParseConfig(File.ReadAllLines(configPath, Encoding.UTF8));
+        return new LauncherSettings(
+            Get(config, "LISTEN_HOST", "127.0.0.1"),
+            ParsePort(Get(config, "PORT", "8080"), 8080),
+            SplitMusicDirectories(Get(config, "MUSIC_DIRS", "")));
+    }
+
+    private static void SaveLauncherSettings(LauncherSettings settings)
+    {
+        if (settings == null)
+        {
+            throw new ArgumentNullException("settings");
+        }
+        if (!IsValidListenHost(settings.ListenHost))
+        {
+            throw new InvalidOperationException(
+                "Enter a valid IPv4 address for the network binding.");
+        }
+        if (settings.Port <= 0 || settings.Port > 65535)
+        {
+            throw new InvalidOperationException("Enter a port between 1 and 65535.");
+        }
+
+        var musicDirectories = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string rawPath in settings.MusicDirectories)
+        {
+            string path = rawPath == null ? "" : rawPath.Trim();
+            if (path.Length == 0 || !seen.Add(path))
+            {
+                continue;
+            }
+            if (path.IndexOf(',') >= 0)
+            {
+                throw new InvalidOperationException(
+                    "Music folder paths cannot contain a comma:\r\n" + path);
+            }
+            musicDirectories.Add(path);
+        }
+        if (musicDirectories.Count == 0)
+        {
+            throw new InvalidOperationException("Add at least one music library folder.");
+        }
+
+        string configPath = Path.Combine(homeRoot, "config.env");
+        Dictionary<string, string> config =
+            ParseConfig(File.ReadAllLines(configPath, Encoding.UTF8));
+        config["LISTEN_HOST"] = settings.ListenHost.Trim();
+        config["PORT"] = settings.Port.ToString();
+        config["MUSIC_DIRS"] = String.Join(",", musicDirectories.ToArray());
+        WriteConfig(configPath, config);
+        LogLauncher(
+            "INFO",
+            "Launcher settings updated: bind=" + config["LISTEN_HOST"] +
+                ", port=" + config["PORT"] +
+                ", musicDirectories=" + musicDirectories.Count);
+    }
+
+    private static List<string> SplitMusicDirectories(string value)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string item in (value ?? "").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string path = item.Trim();
+            if (path.Length > 0 && seen.Add(path))
+            {
+                result.Add(path);
+            }
+        }
+        return result;
+    }
+
+    private static bool IsValidListenHost(string value)
+    {
+        IPAddress address;
+        return !String.IsNullOrWhiteSpace(value) &&
+            IPAddress.TryParse(value.Trim(), out address) &&
+            address.AddressFamily == AddressFamily.InterNetwork;
     }
 
     private static void ConfigureEnvironment(Dictionary<string, string> config)
@@ -1417,6 +1547,23 @@ internal static class Program
         }
     }
 
+    private sealed class LauncherSettings
+    {
+        internal readonly string ListenHost;
+        internal readonly int Port;
+        internal readonly List<string> MusicDirectories;
+
+        internal LauncherSettings(
+            string listenHost,
+            int port,
+            IEnumerable<string> musicDirectories)
+        {
+            ListenHost = listenHost;
+            Port = port;
+            MusicDirectories = new List<string>(musicDirectories);
+        }
+    }
+
     private sealed class LauncherForm : Form
     {
         private readonly Label statusLabel;
@@ -1429,10 +1576,12 @@ internal static class Program
         private readonly Button revealButton;
         private readonly Button openButton;
         private readonly Button backgroundButton;
+        private readonly Button settingsButton;
         private readonly Button exitButton;
         private readonly NotifyIcon trayIcon;
         private readonly ToolStripMenuItem trayOpenItem;
         private readonly ToolStripMenuItem trayCredentialsItem;
+        private readonly ToolStripMenuItem traySettingsItem;
         private readonly Icon applicationIcon;
         private string readyUrl;
         private string readyCredentialsPath;
@@ -1612,18 +1761,27 @@ internal static class Program
                 "Open MVBar",
                 24,
                 18,
-                132,
+                124,
                 delegate { OpenUrl(readyUrl); });
             openButton.Enabled = false;
             footer.Controls.Add(openButton);
 
             backgroundButton = CreateButton(
                 "Run in background",
-                168,
+                160,
                 18,
-                154,
+                145,
                 delegate { HideToTray(); });
             footer.Controls.Add(backgroundButton);
+
+            settingsButton = CreateButton(
+                "Settings",
+                317,
+                18,
+                108,
+                delegate { OpenSettings(); });
+            settingsButton.Enabled = false;
+            footer.Controls.Add(settingsButton);
 
             exitButton = CreateButton(
                 "Exit MVBar",
@@ -1650,6 +1808,10 @@ internal static class Program
                 passwordBox.Focus();
             };
             trayMenu.Items.Add(trayCredentialsItem);
+            traySettingsItem = new ToolStripMenuItem("Settings...");
+            traySettingsItem.Enabled = false;
+            traySettingsItem.Click += delegate { OpenSettings(); };
+            trayMenu.Items.Add(traySettingsItem);
             trayMenu.Items.Add(new ToolStripMenuItem(
                 "Open logs",
                 null,
@@ -1755,6 +1917,8 @@ internal static class Program
             openButton.Enabled = true;
             trayOpenItem.Enabled = true;
             trayCredentialsItem.Enabled = true;
+            traySettingsItem.Enabled = true;
+            settingsButton.Enabled = true;
             trayIcon.Text = "MVBar is running";
 
             if (firstRun)
@@ -1786,6 +1950,7 @@ internal static class Program
             progressBar.Style = ProgressBarStyle.Continuous;
             progressBar.Value = 0;
             backgroundButton.Enabled = false;
+            settingsButton.Enabled = false;
             openButton.Enabled = false;
             exitButton.Text = "Close";
             trayIcon.Text = "MVBar needs attention";
@@ -1799,7 +1964,23 @@ internal static class Program
             progressBar.Style = ProgressBarStyle.Marquee;
             openButton.Enabled = false;
             backgroundButton.Enabled = false;
+            settingsButton.Enabled = false;
             exitButton.Enabled = false;
+        }
+
+        internal void ShowRestarting()
+        {
+            ShowWindow();
+            statusLabel.Text = "Restarting MVBar";
+            detailLabel.Text = "Applying launcher settings and restarting the local services...";
+            progressBar.Style = ProgressBarStyle.Marquee;
+            openButton.Enabled = false;
+            backgroundButton.Enabled = false;
+            settingsButton.Enabled = false;
+            exitButton.Enabled = false;
+            trayOpenItem.Enabled = false;
+            trayCredentialsItem.Enabled = false;
+            traySettingsItem.Enabled = false;
         }
 
         internal void CompleteExit()
@@ -1846,6 +2027,32 @@ internal static class Program
             catch (ExternalException)
             {
                 detailLabel.Text = "Windows could not access the clipboard. Please try again.";
+            }
+        }
+
+        private void OpenSettings()
+        {
+            try
+            {
+                TopMost = false;
+                LauncherSettings currentSettings = LoadLauncherSettings();
+                using (var dialog = new SettingsForm(currentSettings, applicationIcon))
+                {
+                    if (dialog.ShowDialog(this) == DialogResult.OK)
+                    {
+                        SaveLauncherSettings(dialog.Settings);
+                        RestartFromUi();
+                    }
+                }
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show(
+                    this,
+                    "MVBar could not save the launcher settings.\r\n\r\n" + error.Message,
+                    "MVBar settings",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
             }
         }
 
@@ -1903,6 +2110,372 @@ internal static class Program
             {
                 TryShowMessage("Windows could not open:\r\n" + path, "MVBar");
             }
+        }
+    }
+
+    private sealed class SettingsForm : Form
+    {
+        private readonly ComboBox bindingModeBox;
+        private readonly TextBox customAddressBox;
+        private readonly NumericUpDown portBox;
+        private readonly ListBox musicFoldersList;
+        private readonly TextBox addPathBox;
+
+        internal LauncherSettings Settings { get; private set; }
+
+        internal SettingsForm(LauncherSettings settings, Icon applicationIcon)
+        {
+            Text = "MVBar settings";
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            AutoScaleMode = AutoScaleMode.Dpi;
+            ClientSize = new Size(650, 610);
+            BackColor = Color.FromArgb(247, 248, 250);
+            if (applicationIcon != null)
+            {
+                Icon = applicationIcon;
+            }
+
+            var title = new Label();
+            title.AutoSize = true;
+            title.Location = new Point(24, 18);
+            title.Font = new Font("Segoe UI", 16F, FontStyle.Bold);
+            title.ForeColor = Color.FromArgb(22, 29, 45);
+            title.Text = "Launcher settings";
+            Controls.Add(title);
+
+            var introduction = new Label();
+            introduction.Location = new Point(26, 52);
+            introduction.Size = new Size(596, 36);
+            introduction.Font = new Font("Segoe UI", 9F);
+            introduction.ForeColor = Color.FromArgb(83, 94, 115);
+            introduction.Text =
+                "Choose where MVBar is available and which folders make up the music library.";
+            Controls.Add(introduction);
+
+            var networkGroup = new GroupBox();
+            networkGroup.Location = new Point(24, 88);
+            networkGroup.Size = new Size(602, 164);
+            networkGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            networkGroup.ForeColor = Color.FromArgb(37, 47, 66);
+            networkGroup.Text = "Network";
+            Controls.Add(networkGroup);
+
+            AddDialogLabel(networkGroup, "Network access", 18, 29);
+            bindingModeBox = new ComboBox();
+            bindingModeBox.Location = new Point(18, 49);
+            bindingModeBox.Size = new Size(365, 28);
+            bindingModeBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            bindingModeBox.Font = new Font("Segoe UI", 9.5F);
+            bindingModeBox.Items.Add("This computer only");
+            bindingModeBox.Items.Add("Local network and this computer");
+            bindingModeBox.Items.Add("Specific network address");
+            bindingModeBox.SelectedIndexChanged += delegate { UpdateBindingControls(); };
+            networkGroup.Controls.Add(bindingModeBox);
+
+            AddDialogLabel(networkGroup, "Port", 430, 29);
+            portBox = new NumericUpDown();
+            portBox.Location = new Point(430, 49);
+            portBox.Size = new Size(150, 28);
+            portBox.Font = new Font("Segoe UI", 9.5F);
+            portBox.Minimum = 1;
+            portBox.Maximum = 65535;
+            portBox.Value = settings.Port;
+            networkGroup.Controls.Add(portBox);
+
+            AddDialogLabel(networkGroup, "Specific address", 18, 88);
+            customAddressBox = new TextBox();
+            customAddressBox.Location = new Point(18, 108);
+            customAddressBox.Size = new Size(562, 28);
+            customAddressBox.Font = new Font("Segoe UI", 9.5F);
+            networkGroup.Controls.Add(customAddressBox);
+
+            var networkHint = new Label();
+            networkHint.Location = new Point(18, 137);
+            networkHint.Size = new Size(562, 19);
+            networkHint.Font = new Font("Segoe UI", 8F);
+            networkHint.ForeColor = Color.FromArgb(103, 113, 132);
+            networkHint.Text =
+                "Local network uses 0.0.0.0. Windows Firewall still controls which devices can connect.";
+            networkGroup.Controls.Add(networkHint);
+
+            if (String.Equals(settings.ListenHost, "127.0.0.1", StringComparison.OrdinalIgnoreCase))
+            {
+                bindingModeBox.SelectedIndex = 0;
+                customAddressBox.Text = "127.0.0.1";
+            }
+            else if (String.Equals(settings.ListenHost, "0.0.0.0", StringComparison.OrdinalIgnoreCase))
+            {
+                bindingModeBox.SelectedIndex = 1;
+                customAddressBox.Text = "0.0.0.0";
+            }
+            else
+            {
+                bindingModeBox.SelectedIndex = 2;
+                customAddressBox.Text = settings.ListenHost;
+            }
+            UpdateBindingControls();
+
+            var musicGroup = new GroupBox();
+            musicGroup.Location = new Point(24, 268);
+            musicGroup.Size = new Size(602, 270);
+            musicGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            musicGroup.ForeColor = Color.FromArgb(37, 47, 66);
+            musicGroup.Text = "Music library";
+            Controls.Add(musicGroup);
+
+            var musicHint = new Label();
+            musicHint.Location = new Point(18, 27);
+            musicHint.Size = new Size(562, 20);
+            musicHint.Font = new Font("Segoe UI", 8.5F);
+            musicHint.ForeColor = Color.FromArgb(83, 94, 115);
+            musicHint.Text = "MVBar scans every listed local or network folder.";
+            musicGroup.Controls.Add(musicHint);
+
+            musicFoldersList = new ListBox();
+            musicFoldersList.Location = new Point(18, 51);
+            musicFoldersList.Size = new Size(470, 124);
+            musicFoldersList.Font = new Font("Segoe UI", 9.5F);
+            musicFoldersList.HorizontalScrollbar = true;
+            foreach (string path in settings.MusicDirectories)
+            {
+                musicFoldersList.Items.Add(path);
+            }
+            musicGroup.Controls.Add(musicFoldersList);
+
+            musicGroup.Controls.Add(CreateDialogButton(
+                "Browse...",
+                500,
+                51,
+                82,
+                delegate { BrowseForMusicFolder(); }));
+            musicGroup.Controls.Add(CreateDialogButton(
+                "Remove",
+                500,
+                89,
+                82,
+                delegate
+                {
+                    int selectedIndex = musicFoldersList.SelectedIndex;
+                    if (selectedIndex >= 0)
+                    {
+                        musicFoldersList.Items.RemoveAt(selectedIndex);
+                    }
+                }));
+
+            AddDialogLabel(musicGroup, "Add a local or network path", 18, 186);
+            addPathBox = new TextBox();
+            addPathBox.Location = new Point(18, 207);
+            addPathBox.Size = new Size(470, 28);
+            addPathBox.Font = new Font("Segoe UI", 9.5F);
+            addPathBox.KeyDown += delegate(object sender, KeyEventArgs eventArgs)
+            {
+                if (eventArgs.KeyCode == Keys.Enter)
+                {
+                    eventArgs.SuppressKeyPress = true;
+                    AddEnteredMusicPath();
+                }
+            };
+            musicGroup.Controls.Add(addPathBox);
+            musicGroup.Controls.Add(CreateDialogButton(
+                "Add",
+                500,
+                205,
+                82,
+                delegate { AddEnteredMusicPath(); }));
+
+            var pathHint = new Label();
+            pathHint.Location = new Point(18, 239);
+            pathHint.Size = new Size(562, 18);
+            pathHint.Font = new Font("Segoe UI", 8F);
+            pathHint.ForeColor = Color.FromArgb(103, 113, 132);
+            pathHint.Text = @"Examples: C:\Music or \\nas\music";
+            musicGroup.Controls.Add(pathHint);
+
+            var saveButton = CreateDialogButton(
+                "Save and restart",
+                468,
+                558,
+                158,
+                delegate { SaveSettings(); });
+            Controls.Add(saveButton);
+
+            var cancelButton = CreateDialogButton(
+                "Cancel",
+                366,
+                558,
+                90,
+                delegate
+                {
+                    DialogResult = DialogResult.Cancel;
+                    Close();
+                });
+            Controls.Add(cancelButton);
+            AcceptButton = saveButton;
+            CancelButton = cancelButton;
+        }
+
+        private void UpdateBindingControls()
+        {
+            bool custom = bindingModeBox.SelectedIndex == 2;
+            customAddressBox.Enabled = custom;
+            customAddressBox.BackColor = custom
+                ? Color.White
+                : Color.FromArgb(235, 237, 241);
+        }
+
+        private void BrowseForMusicFolder()
+        {
+            using (var browser = new FolderBrowserDialog())
+            {
+                browser.Description = "Select a music library folder";
+                browser.ShowNewFolderButton = false;
+                if (musicFoldersList.SelectedItem != null)
+                {
+                    string selectedPath = musicFoldersList.SelectedItem.ToString();
+                    if (Directory.Exists(selectedPath))
+                    {
+                        browser.SelectedPath = selectedPath;
+                    }
+                }
+                if (browser.ShowDialog(this) == DialogResult.OK)
+                {
+                    AddMusicPath(browser.SelectedPath);
+                }
+            }
+        }
+
+        private void AddEnteredMusicPath()
+        {
+            string path = addPathBox.Text.Trim();
+            if (path.Length == 0)
+            {
+                return;
+            }
+            if (!Path.IsPathRooted(path))
+            {
+                MessageBox.Show(
+                    this,
+                    "Enter a complete local or network path.",
+                    "MVBar settings",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+            AddMusicPath(path);
+            addPathBox.Clear();
+        }
+
+        private void AddMusicPath(string path)
+        {
+            string normalized = path.Trim();
+            string root = Path.GetPathRoot(normalized);
+            if (!String.IsNullOrEmpty(root) && normalized.Length > root.Length)
+            {
+                normalized = normalized.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+            }
+            for (int index = 0; index < musicFoldersList.Items.Count; index++)
+            {
+                if (String.Equals(
+                    musicFoldersList.Items[index].ToString(),
+                    normalized,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    musicFoldersList.SelectedIndex = index;
+                    return;
+                }
+            }
+            musicFoldersList.Items.Add(normalized);
+            musicFoldersList.SelectedIndex = musicFoldersList.Items.Count - 1;
+        }
+
+        private void SaveSettings()
+        {
+            string listenHost;
+            if (bindingModeBox.SelectedIndex == 0)
+            {
+                listenHost = "127.0.0.1";
+            }
+            else if (bindingModeBox.SelectedIndex == 1)
+            {
+                listenHost = "0.0.0.0";
+            }
+            else
+            {
+                listenHost = customAddressBox.Text.Trim();
+            }
+
+            if (!IsValidListenHost(listenHost))
+            {
+                MessageBox.Show(
+                    this,
+                    "Enter a valid IPv4 address for the network binding.",
+                    "MVBar settings",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                customAddressBox.Focus();
+                return;
+            }
+
+            var musicDirectories = new List<string>();
+            for (int index = 0; index < musicFoldersList.Items.Count; index++)
+            {
+                musicDirectories.Add(musicFoldersList.Items[index].ToString());
+            }
+            if (musicDirectories.Count == 0)
+            {
+                MessageBox.Show(
+                    this,
+                    "Add at least one music library folder.",
+                    "MVBar settings",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            Settings = new LauncherSettings(
+                listenHost,
+                Decimal.ToInt32(portBox.Value),
+                musicDirectories);
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+
+        private static void AddDialogLabel(
+            Control parent,
+            string text,
+            int x,
+            int y)
+        {
+            var label = new Label();
+            label.AutoSize = true;
+            label.Location = new Point(x, y);
+            label.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular);
+            label.ForeColor = Color.FromArgb(83, 94, 115);
+            label.Text = text;
+            parent.Controls.Add(label);
+        }
+
+        private static Button CreateDialogButton(
+            string text,
+            int x,
+            int y,
+            int width,
+            Action action)
+        {
+            var button = new Button();
+            button.Location = new Point(x, y);
+            button.Size = new Size(width, 30);
+            button.Font = new Font("Segoe UI", 9F);
+            button.Text = text;
+            button.UseVisualStyleBackColor = true;
+            button.Click += delegate { action(); };
+            return button;
         }
     }
 

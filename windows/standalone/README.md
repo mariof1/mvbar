@@ -32,7 +32,14 @@ The launcher shows startup progress without opening a PowerShell window. Once
 MVBar is ready, the same window provides selectable administrator credentials
 and copy buttons. Closing the window keeps MVBar running in the Windows
 notification area; use the tray menu to reopen MVBar, view credentials or logs,
-or stop the local server.
+change launcher settings, or stop the local server.
+
+Use **Settings** in the launcher or notification-area menu to change:
+
+- network access and the listening port;
+- one or more local or UNC music library folders.
+
+**Save and restart** applies the changes with a clean automatic service restart.
 
 Application data survives upgrades under `%LOCALAPPDATA%\MVBar\data`. Settings
 are stored in `%LOCALAPPDATA%\MVBar\config.env`.
