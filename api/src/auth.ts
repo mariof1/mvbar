@@ -333,7 +333,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
 
     // Default access: all current libraries (admin can later restrict).
     try {
-      const r = await db().query<{ id: number }>('select id from libraries');
+      const r = await db().query<{ id: number }>('select id from libraries where enabled = true');
       for (const lib of r.rows) {
         await db().query('insert into user_libraries(user_id, library_id) values ($1,$2) on conflict do nothing', [id, lib.id]);
       }
@@ -393,7 +393,14 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     const u = await users.getUserById(id);
     if (!u) return reply.code(404).send({ ok: false });
 
-    const r = await db().query<{ library_id: number }>('select library_id from user_libraries where user_id=$1 order by library_id asc', [id]);
+    const r = await db().query<{ library_id: number }>(
+      `select user_library.library_id
+       from user_libraries as user_library
+       join libraries as library on library.id = user_library.library_id
+       where user_library.user_id = $1 and library.enabled = true
+       order by user_library.library_id asc`,
+      [id]
+    );
     return { ok: true, libraryIds: r.rows.map((x) => Number(x.library_id)) };
   });
 
@@ -412,7 +419,12 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
       await client.query('BEGIN');
       await client.query('delete from user_libraries where user_id=$1', [id]);
       for (const lid of libraryIds) {
-        await client.query('insert into user_libraries(user_id, library_id) values ($1,$2) on conflict do nothing', [id, lid]);
+        await client.query(
+          `insert into user_libraries(user_id, library_id)
+           select $1, id from libraries where id = $2 and enabled = true
+           on conflict do nothing`,
+          [id, lid]
+        );
       }
       await client.query('COMMIT');
     } catch (e) {

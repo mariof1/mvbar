@@ -317,7 +317,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
       db().query<{ count: number }>('select count(distinct artist)::int as count from active_tracks where artist is not null'),
       db().query<{ count: number }>('select count(distinct album)::int as count from active_tracks where album is not null'),
       db().query<{ total_bytes: string }>('select coalesce(sum(size_bytes), 0)::text as total_bytes from active_tracks'),
-      db().query<{ count: number }>('select count(*)::int as count from libraries'),
+      db().query<{ count: number }>('select count(*)::int as count from libraries where enabled = true'),
     ]);
 
     // Count unique genres from active_tracks table (split by semicolon)
@@ -464,7 +464,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/admin/library/writable', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
     const r = await db().query<{ id: number; mount_path: string; media_type: string }>(
-      'select id, mount_path, media_type from libraries order by media_type, mount_path asc'
+      'select id, mount_path, media_type from libraries where enabled = true order by media_type, mount_path asc'
     );
     if (LIBRARY_READ_ONLY) {
       const libraries = r.rows.map((library) => ({ ...library, writable: false }));
@@ -624,7 +624,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/admin/libraries', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
     const r = await db().query<{ id: number; mount_path: string; media_type: string }>(
-      'select id, mount_path, media_type from libraries order by media_type, mount_path asc'
+      'select id, mount_path, media_type from libraries where enabled = true order by media_type, mount_path asc'
     );
 
     const libraries = await Promise.all(

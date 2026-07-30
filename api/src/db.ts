@@ -243,6 +243,7 @@ export async function initDb() {
     );
   `);
   await pool.query("alter table libraries add column if not exists media_type text not null default 'music'");
+  await pool.query('alter table libraries add column if not exists enabled boolean not null default true');
   await pool.query(`
     DO $$ BEGIN
       ALTER TABLE libraries ADD CONSTRAINT libraries_media_type_check
@@ -443,7 +444,10 @@ export async function initDb() {
     .map((value) => value.trim())
     .find(Boolean) ?? '/music';
   await pool.query(
-    'insert into libraries(mount_path) values ($1) on conflict (mount_path) do nothing',
+    `insert into libraries(mount_path, media_type, enabled)
+     values ($1, 'music', true)
+     on conflict (mount_path) do update
+       set media_type = 'music', enabled = true`,
     [defaultLibraryMount]
   );
   await pool.query(
@@ -541,7 +545,13 @@ export async function initDb() {
            title_sort, artist_sort, album_sort, album_artist_sort,
            musicbrainz_track_id, musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id,
            embedded_lyrics, embedded_lyrics_synced
-    from tracks where deleted_at is null
+    from tracks
+    where tracks.deleted_at is null
+      and exists (
+        select 1
+        from libraries
+        where libraries.id = tracks.library_id and libraries.enabled = true
+      )
   `);
 
   // Last.fm cache for similar artists

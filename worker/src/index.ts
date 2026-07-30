@@ -1,10 +1,11 @@
 import 'dotenv/config';
 
 import Redis from 'ioredis';
-import { db, initDb } from './db.js';
+import { audit, db, initDb } from './db.js';
 import * as transcodeJobs from './transcodeRepo.js';
 import { transcodeTrackToHls } from './transcoder.js';
 import { runFastScan } from './fastScan.js';
+import { retireRemovedMusicLibraries } from './libraryReconciliation.js';
 import { runTempoBackfillBatch } from './tempoBackfill.js';
 import { startPodcastRefresh } from './podcastRefresh.js';
 import { scanAudiobooks } from './audiobookScanner.js';
@@ -42,9 +43,24 @@ for (const dir of musicDirs) {
   await db().query(
     `INSERT INTO libraries (mount_path, media_type, created_at)
      VALUES ($1, 'music', NOW())
-     ON CONFLICT (mount_path) DO UPDATE SET media_type = 'music'`,
+     ON CONFLICT (mount_path) DO UPDATE
+       SET media_type = 'music', enabled = TRUE`,
     [dir]
   );
+}
+
+const retiredMusicLibraries = await retireRemovedMusicLibraries(db(), musicDirs);
+for (const library of retiredMusicLibraries) {
+  logger.info(
+    'scan',
+    `Removed music library from the active catalog: ${library.mountPath} (${library.retiredTracks} active track${library.retiredTracks === 1 ? '' : 's'} retired)`
+  );
+  await audit('music_library_unconfigured', {
+    libraryId: library.id,
+    mountPath: library.mountPath,
+    retiredTracks: library.retiredTracks,
+    deactivated: library.deactivated,
+  });
 }
 
 for (const dir of audiobookDirs) {
@@ -64,7 +80,9 @@ for (const dir of audiobookDirs) {
     );
   } else {
     await db().query(
-      `UPDATE libraries SET media_type = 'audiobook' WHERE mount_path = $1`,
+      `UPDATE libraries
+       SET media_type = 'audiobook', enabled = TRUE
+       WHERE mount_path = $1`,
       [dir]
     );
   }

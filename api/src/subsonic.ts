@@ -371,12 +371,14 @@ function smartPlaylistAllowedLibraries(user: SubsonicUser, musicFolderId?: strin
 
 async function listAllowedLibraries(user: SubsonicUser) {
   if (user.allowedLibraries === null) {
-    const r = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries order by mount_path asc');
+    const r = await db().query<{ id: number; mount_path: string }>(
+      'select id, mount_path from libraries where enabled = true order by mount_path asc'
+    );
     return r.rows;
   }
   if (user.allowedLibraries.length === 0) return [];
   const r = await db().query<{ id: number; mount_path: string }>(
-    'select id, mount_path from libraries where id = any($1::bigint[]) order by mount_path asc',
+    'select id, mount_path from libraries where enabled = true and id = any($1::bigint[]) order by mount_path asc',
     [user.allowedLibraries]
   );
   return r.rows;
