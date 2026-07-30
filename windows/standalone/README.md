@@ -37,17 +37,17 @@ change launcher settings, or stop the local server.
 Use **Settings** in the launcher or notification-area menu to change:
 
 - network access and the listening port;
-- one or more local or UNC music library folders.
+- one or more local or UNC music library folders;
+- optional local or UNC audiobook library folders.
 
 **Save and restart** applies the changes with a clean automatic service restart.
 
 Application data survives upgrades under `%LOCALAPPDATA%\MVBar\data`. Settings
 are stored in `%LOCALAPPDATA%\MVBar\config.env`.
 
-The defaults use the current user's `Music` folder and
-`%USERPROFILE%\Audiobooks`. Edit `MUSIC_DIRS` and `AUDIOBOOK_DIRS` in
-`config.env` to use other local or UNC paths. Multiple paths are comma
-separated.
+The default music library uses the current user's `Music` folder. Audiobooks
+are optional and have no default folder. Multiple paths are comma separated
+in `config.env`.
 
 The service listens on `127.0.0.1` by default. Set `LISTEN_HOST=0.0.0.0` to
 make it available to other devices; Windows may then request firewall

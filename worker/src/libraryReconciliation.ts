@@ -14,6 +14,11 @@ export type RetiredMusicLibrary = {
   deactivated: boolean;
 };
 
+export type DeactivatedAudiobookLibrary = {
+  id: number;
+  mountPath: string;
+};
+
 const RETIRE_REMOVED_MUSIC_LIBRARIES_SQL = `
   WITH stale_libraries AS (
     SELECT id, mount_path
@@ -50,6 +55,15 @@ const RETIRE_REMOVED_MUSIC_LIBRARIES_SQL = `
   ORDER BY library.id
 `;
 
+const DEACTIVATE_REMOVED_AUDIOBOOK_LIBRARIES_SQL = `
+  UPDATE libraries
+  SET enabled = FALSE
+  WHERE media_type = 'audiobook'
+    AND enabled = TRUE
+    AND NOT (mount_path = ANY($1::text[]))
+  RETURNING id, mount_path
+`;
+
 export async function retireRemovedMusicLibraries(
   database: Pick<Pool, 'query'>,
   configuredDirs: string[]
@@ -64,5 +78,20 @@ export async function retireRemovedMusicLibraries(
     mountPath: row.mount_path,
     retiredTracks: Number(row.retired_tracks),
     deactivated: row.deactivated,
+  }));
+}
+
+export async function deactivateRemovedAudiobookLibraries(
+  database: Pick<Pool, 'query'>,
+  configuredDirs: string[]
+): Promise<DeactivatedAudiobookLibrary[]> {
+  const result = await database.query<{ id: number | string; mount_path: string }>(
+    DEACTIVATE_REMOVED_AUDIOBOOK_LIBRARIES_SQL,
+    [configuredDirs]
+  );
+
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    mountPath: row.mount_path,
   }));
 }

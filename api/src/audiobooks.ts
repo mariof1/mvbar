@@ -89,7 +89,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
                 WHEN uap.chapter_id IS NOT NULL THEN (SELECT COUNT(*)::int FROM audiobook_chapters WHERE audiobook_id = a.id AND position < pc.position)
                 ELSE 0
               END AS chapters_finished
-       FROM audiobooks a
+       FROM active_audiobooks a
        LEFT JOIN user_audiobook_progress uap ON uap.audiobook_id = a.id AND uap.user_id = $1
        LEFT JOIN audiobook_chapters pc ON pc.id = uap.chapter_id
        WHERE ($2::bigint[] IS NULL OR a.library_id = ANY($2::bigint[]))
@@ -135,7 +135,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const bookR = await db().query<Audiobook>(
       `SELECT id, library_id, path, title, author, narrator, description, language, cover_path, duration_ms, created_at, updated_at
-       FROM audiobooks
+       FROM active_audiobooks
        WHERE id = $1
          AND ($2::bigint[] IS NULL OR library_id = ANY($2::bigint[]))`,
       [id, allowed]
@@ -177,7 +177,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
     const r = await db().query<{ chapter_path: string }>(
       `SELECT c.path AS chapter_path
        FROM audiobook_chapters c
-       JOIN audiobooks a ON a.id = c.audiobook_id
+       JOIN active_audiobooks a ON a.id = c.audiobook_id
        WHERE c.id = $1
          AND c.audiobook_id = $2
          AND ($3::bigint[] IS NULL OR a.library_id = ANY($3::bigint[]))`,
@@ -280,7 +280,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
          previous_chapter.position as previous_chapter_position,
          previous_chapter.duration_ms as previous_chapter_duration_ms
        FROM audiobook_chapters chapter
-       JOIN audiobooks book ON book.id = chapter.audiobook_id
+       JOIN active_audiobooks book ON book.id = chapter.audiobook_id
        LEFT JOIN user_audiobook_progress progress
          ON progress.audiobook_id = book.id AND progress.user_id = $3
        LEFT JOIN audiobook_chapters previous_chapter ON previous_chapter.id = progress.chapter_id
@@ -350,7 +350,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const r = await db().query<{ cover_path: string | null }>(
       `SELECT cover_path
-       FROM audiobooks
+       FROM active_audiobooks
        WHERE id = $1
          AND ($2::bigint[] IS NULL OR library_id = ANY($2::bigint[]))`,
       [id, allowed]
@@ -419,7 +419,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
          progress.chapter_id as previous_chapter_id,
          progress.position_ms as previous_position_ms,
          progress.finished as previous_finished
-       FROM audiobooks book
+       FROM active_audiobooks book
        JOIN audiobook_chapters chapter ON chapter.audiobook_id = book.id
        LEFT JOIN user_audiobook_progress progress
          ON progress.audiobook_id = book.id AND progress.user_id = $2
@@ -507,7 +507,14 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
     vals.push(id);
 
     const r = await db().query(
-      `UPDATE audiobooks SET ${sets.join(', ')} WHERE id = $${idx}`,
+      `UPDATE audiobooks
+       SET ${sets.join(', ')}
+       WHERE id = $${idx}
+         AND EXISTS (
+           SELECT 1 FROM libraries
+           WHERE libraries.id = audiobooks.library_id
+             AND libraries.enabled = true
+         )`,
       vals
     );
     if (r.rowCount === 0) return reply.code(404).send({ ok: false });
@@ -534,7 +541,11 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
     const title = typeof body.title === 'string' ? body.title.trim() || null : null;
 
     const r = await db().query(
-      'UPDATE audiobook_chapters SET title = $1, metadata_locked = true WHERE id = $2 AND audiobook_id = $3',
+      `UPDATE audiobook_chapters
+       SET title = $1, metadata_locked = true
+       WHERE id = $2
+         AND audiobook_id = $3
+         AND EXISTS (SELECT 1 FROM active_audiobooks WHERE id = $3)`,
       [title, chapterId, id]
     );
     if (r.rowCount === 0) return reply.code(404).send({ ok: false });

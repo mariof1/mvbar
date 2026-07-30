@@ -677,6 +677,26 @@ export async function initDb() {
   `);
   await pool.query(`ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS metadata_locked boolean NOT NULL DEFAULT false`);
   await pool.query(`ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS language text`);
+  await pool.query(`
+    create or replace view active_audiobooks as
+    select
+      audiobook.id,
+      audiobook.library_id,
+      audiobook.path,
+      audiobook.title,
+      audiobook.author,
+      audiobook.narrator,
+      audiobook.description,
+      audiobook.language,
+      audiobook.cover_path,
+      audiobook.duration_ms,
+      audiobook.metadata_locked,
+      audiobook.created_at,
+      audiobook.updated_at
+    from audiobooks as audiobook
+    join libraries as library on library.id = audiobook.library_id
+    where library.enabled = true
+  `);
 
   await pool.query(`
     create table if not exists audiobook_chapters (

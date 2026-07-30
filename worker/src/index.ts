@@ -5,7 +5,10 @@ import { audit, db, initDb } from './db.js';
 import * as transcodeJobs from './transcodeRepo.js';
 import { transcodeTrackToHls } from './transcoder.js';
 import { runFastScan } from './fastScan.js';
-import { retireRemovedMusicLibraries } from './libraryReconciliation.js';
+import {
+  deactivateRemovedAudiobookLibraries,
+  retireRemovedMusicLibraries,
+} from './libraryReconciliation.js';
 import { runTempoBackfillBatch } from './tempoBackfill.js';
 import { startPodcastRefresh } from './podcastRefresh.js';
 import { scanAudiobooks } from './audiobookScanner.js';
@@ -86,6 +89,19 @@ for (const dir of audiobookDirs) {
       [dir]
     );
   }
+}
+
+const deactivatedAudiobookLibraries =
+  await deactivateRemovedAudiobookLibraries(db(), audiobookDirs);
+for (const library of deactivatedAudiobookLibraries) {
+  logger.info(
+    'audiobook-scan',
+    `Removed audiobook library from the active catalog: ${library.mountPath}`
+  );
+  await audit('audiobook_library_unconfigured', {
+    libraryId: library.id,
+    mountPath: library.mountPath,
+  });
 }
 
 try {

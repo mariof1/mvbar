@@ -430,10 +430,7 @@ internal static class Program
     private static Dictionary<string, string> CreateDefaultConfig()
     {
         string music = Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
-        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string audiobooks = Path.Combine(profile, "Audiobooks");
         Directory.CreateDirectory(music);
-        Directory.CreateDirectory(audiobooks);
 
         var config = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         config["ADMIN_EMAIL"] = "admin@local";
@@ -442,7 +439,7 @@ internal static class Program
         config["JWT_SECRET"] = RandomHex(48);
         config["MEILI_MASTER_KEY"] = RandomHex(32);
         config["MUSIC_DIRS"] = music;
-        config["AUDIOBOOK_DIRS"] = audiobooks;
+        config["AUDIOBOOK_DIRS"] = "";
         config["LISTEN_HOST"] = "127.0.0.1";
         config["PORT"] = "8080";
         return config;
@@ -505,7 +502,8 @@ internal static class Program
         return new LauncherSettings(
             Get(config, "LISTEN_HOST", "127.0.0.1"),
             ParsePort(Get(config, "PORT", "8080"), 8080),
-            SplitMusicDirectories(Get(config, "MUSIC_DIRS", "")));
+            SplitDirectories(Get(config, "MUSIC_DIRS", "")),
+            SplitDirectories(Get(config, "AUDIOBOOK_DIRS", "")));
     }
 
     private static void SaveLauncherSettings(LauncherSettings settings)
@@ -524,9 +522,38 @@ internal static class Program
             throw new InvalidOperationException("Enter a port between 1 and 65535.");
         }
 
-        var musicDirectories = new List<string>();
+        List<string> musicDirectories =
+            NormalizeLibraryDirectories(settings.MusicDirectories, "Music");
+        if (musicDirectories.Count == 0)
+        {
+            throw new InvalidOperationException("Add at least one music library folder.");
+        }
+        List<string> audiobookDirectories =
+            NormalizeLibraryDirectories(settings.AudiobookDirectories, "Audiobook");
+
+        string configPath = Path.Combine(homeRoot, "config.env");
+        Dictionary<string, string> config =
+            ParseConfig(File.ReadAllLines(configPath, Encoding.UTF8));
+        config["LISTEN_HOST"] = settings.ListenHost.Trim();
+        config["PORT"] = settings.Port.ToString();
+        config["MUSIC_DIRS"] = String.Join(",", musicDirectories.ToArray());
+        config["AUDIOBOOK_DIRS"] = String.Join(",", audiobookDirectories.ToArray());
+        WriteConfig(configPath, config);
+        LogLauncher(
+            "INFO",
+            "Launcher settings updated: bind=" + config["LISTEN_HOST"] +
+                ", port=" + config["PORT"] +
+                ", musicDirectories=" + musicDirectories.Count +
+                ", audiobookDirectories=" + audiobookDirectories.Count);
+    }
+
+    private static List<string> NormalizeLibraryDirectories(
+        IEnumerable<string> rawDirectories,
+        string mediaLabel)
+    {
+        var directories = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string rawPath in settings.MusicDirectories)
+        foreach (string rawPath in rawDirectories)
         {
             string path = rawPath == null ? "" : rawPath.Trim();
             if (path.Length == 0 || !seen.Add(path))
@@ -536,30 +563,14 @@ internal static class Program
             if (path.IndexOf(',') >= 0)
             {
                 throw new InvalidOperationException(
-                    "Music folder paths cannot contain a comma:\r\n" + path);
+                    mediaLabel + " folder paths cannot contain a comma:\r\n" + path);
             }
-            musicDirectories.Add(path);
+            directories.Add(path);
         }
-        if (musicDirectories.Count == 0)
-        {
-            throw new InvalidOperationException("Add at least one music library folder.");
-        }
-
-        string configPath = Path.Combine(homeRoot, "config.env");
-        Dictionary<string, string> config =
-            ParseConfig(File.ReadAllLines(configPath, Encoding.UTF8));
-        config["LISTEN_HOST"] = settings.ListenHost.Trim();
-        config["PORT"] = settings.Port.ToString();
-        config["MUSIC_DIRS"] = String.Join(",", musicDirectories.ToArray());
-        WriteConfig(configPath, config);
-        LogLauncher(
-            "INFO",
-            "Launcher settings updated: bind=" + config["LISTEN_HOST"] +
-                ", port=" + config["PORT"] +
-                ", musicDirectories=" + musicDirectories.Count);
+        return directories;
     }
 
-    private static List<string> SplitMusicDirectories(string value)
+    private static List<string> SplitDirectories(string value)
     {
         var result = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1552,15 +1563,18 @@ internal static class Program
         internal readonly string ListenHost;
         internal readonly int Port;
         internal readonly List<string> MusicDirectories;
+        internal readonly List<string> AudiobookDirectories;
 
         internal LauncherSettings(
             string listenHost,
             int port,
-            IEnumerable<string> musicDirectories)
+            IEnumerable<string> musicDirectories,
+            IEnumerable<string> audiobookDirectories)
         {
             ListenHost = listenHost;
             Port = port;
             MusicDirectories = new List<string>(musicDirectories);
+            AudiobookDirectories = new List<string>(audiobookDirectories);
         }
     }
 
@@ -2119,7 +2133,7 @@ internal static class Program
         private readonly TextBox customAddressBox;
         private readonly NumericUpDown portBox;
         private readonly ListBox musicFoldersList;
-        private readonly TextBox addPathBox;
+        private readonly ListBox audiobookFoldersList;
 
         internal LauncherSettings Settings { get; private set; }
 
@@ -2153,7 +2167,7 @@ internal static class Program
             introduction.Font = new Font("Segoe UI", 9F);
             introduction.ForeColor = Color.FromArgb(83, 94, 115);
             introduction.Text =
-                "Choose where MVBar is available and which folders make up the music library.";
+                "Choose where MVBar is available and which folders make up each media library.";
             Controls.Add(introduction);
 
             var networkGroup = new GroupBox();
@@ -2219,81 +2233,37 @@ internal static class Program
             }
             UpdateBindingControls();
 
-            var musicGroup = new GroupBox();
-            musicGroup.Location = new Point(24, 268);
-            musicGroup.Size = new Size(602, 270);
-            musicGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-            musicGroup.ForeColor = Color.FromArgb(37, 47, 66);
-            musicGroup.Text = "Music library";
-            Controls.Add(musicGroup);
+            var mediaGroup = new GroupBox();
+            mediaGroup.Location = new Point(24, 268);
+            mediaGroup.Size = new Size(602, 270);
+            mediaGroup.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            mediaGroup.ForeColor = Color.FromArgb(37, 47, 66);
+            mediaGroup.Text = "Media libraries";
+            Controls.Add(mediaGroup);
 
-            var musicHint = new Label();
-            musicHint.Location = new Point(18, 27);
-            musicHint.Size = new Size(562, 20);
-            musicHint.Font = new Font("Segoe UI", 8.5F);
-            musicHint.ForeColor = Color.FromArgb(83, 94, 115);
-            musicHint.Text = "MVBar scans every listed local or network folder.";
-            musicGroup.Controls.Add(musicHint);
+            var libraryTabs = new TabControl();
+            libraryTabs.Location = new Point(14, 24);
+            libraryTabs.Size = new Size(570, 230);
+            libraryTabs.Font = new Font("Segoe UI", 9F);
+            mediaGroup.Controls.Add(libraryTabs);
 
-            musicFoldersList = new ListBox();
-            musicFoldersList.Location = new Point(18, 51);
-            musicFoldersList.Size = new Size(470, 124);
-            musicFoldersList.Font = new Font("Segoe UI", 9.5F);
-            musicFoldersList.HorizontalScrollbar = true;
-            foreach (string path in settings.MusicDirectories)
-            {
-                musicFoldersList.Items.Add(path);
-            }
-            musicGroup.Controls.Add(musicFoldersList);
+            LibraryTabControls musicTab = CreateLibraryTab(
+                "Music",
+                "At least one music folder is required.",
+                "Select a music library folder",
+                @"Examples: C:\Music or \\nas\music",
+                settings.MusicDirectories);
+            musicFoldersList = musicTab.Folders;
+            libraryTabs.TabPages.Add(musicTab.Page);
 
-            musicGroup.Controls.Add(CreateDialogButton(
-                "Browse...",
-                500,
-                51,
-                82,
-                delegate { BrowseForMusicFolder(); }));
-            musicGroup.Controls.Add(CreateDialogButton(
-                "Remove",
-                500,
-                89,
-                82,
-                delegate
-                {
-                    int selectedIndex = musicFoldersList.SelectedIndex;
-                    if (selectedIndex >= 0)
-                    {
-                        musicFoldersList.Items.RemoveAt(selectedIndex);
-                    }
-                }));
-
-            AddDialogLabel(musicGroup, "Add a local or network path", 18, 186);
-            addPathBox = new TextBox();
-            addPathBox.Location = new Point(18, 207);
-            addPathBox.Size = new Size(470, 28);
-            addPathBox.Font = new Font("Segoe UI", 9.5F);
-            addPathBox.KeyDown += delegate(object sender, KeyEventArgs eventArgs)
-            {
-                if (eventArgs.KeyCode == Keys.Enter)
-                {
-                    eventArgs.SuppressKeyPress = true;
-                    AddEnteredMusicPath();
-                }
-            };
-            musicGroup.Controls.Add(addPathBox);
-            musicGroup.Controls.Add(CreateDialogButton(
-                "Add",
-                500,
-                205,
-                82,
-                delegate { AddEnteredMusicPath(); }));
-
-            var pathHint = new Label();
-            pathHint.Location = new Point(18, 239);
-            pathHint.Size = new Size(562, 18);
-            pathHint.Font = new Font("Segoe UI", 8F);
-            pathHint.ForeColor = Color.FromArgb(103, 113, 132);
-            pathHint.Text = @"Examples: C:\Music or \\nas\music";
-            musicGroup.Controls.Add(pathHint);
+            LibraryTabControls audiobookTab = CreateLibraryTab(
+                "Audiobooks",
+                "Optional. Leave this list empty when audiobooks are not used.",
+                "Select an audiobook library folder",
+                @"Examples: C:\Audiobooks or \\nas\audiobooks",
+                settings.AudiobookDirectories);
+            audiobookFoldersList = audiobookTab.Folders;
+            libraryTabs.TabPages.Add(audiobookTab.Page);
 
             var saveButton = CreateDialogButton(
                 "Save and restart",
@@ -2327,15 +2297,99 @@ internal static class Program
                 : Color.FromArgb(235, 237, 241);
         }
 
-        private void BrowseForMusicFolder()
+        private LibraryTabControls CreateLibraryTab(
+            string title,
+            string hintText,
+            string browserDescription,
+            string exampleText,
+            IEnumerable<string> directories)
+        {
+            var page = new TabPage(title);
+            page.BackColor = Color.FromArgb(247, 248, 250);
+            page.Padding = new Padding(8);
+
+            var hint = new Label();
+            hint.Location = new Point(10, 10);
+            hint.Size = new Size(522, 20);
+            hint.Font = new Font("Segoe UI", 8.5F);
+            hint.ForeColor = Color.FromArgb(83, 94, 115);
+            hint.Text = hintText;
+            page.Controls.Add(hint);
+
+            var folders = new ListBox();
+            folders.Location = new Point(10, 34);
+            folders.Size = new Size(430, 86);
+            folders.Font = new Font("Segoe UI", 9.5F);
+            folders.HorizontalScrollbar = true;
+            foreach (string path in directories)
+            {
+                folders.Items.Add(path);
+            }
+            page.Controls.Add(folders);
+
+            page.Controls.Add(CreateDialogButton(
+                "Browse...",
+                450,
+                34,
+                82,
+                delegate { BrowseForLibraryFolder(folders, browserDescription); }));
+            page.Controls.Add(CreateDialogButton(
+                "Remove",
+                450,
+                72,
+                82,
+                delegate
+                {
+                    int selectedIndex = folders.SelectedIndex;
+                    if (selectedIndex >= 0)
+                    {
+                        folders.Items.RemoveAt(selectedIndex);
+                    }
+                }));
+
+            AddDialogLabel(page, "Add a local or network path", 10, 128);
+            var pathBox = new TextBox();
+            pathBox.Location = new Point(10, 148);
+            pathBox.Size = new Size(430, 28);
+            pathBox.Font = new Font("Segoe UI", 9.5F);
+            pathBox.KeyDown += delegate(object sender, KeyEventArgs eventArgs)
+            {
+                if (eventArgs.KeyCode == Keys.Enter)
+                {
+                    eventArgs.SuppressKeyPress = true;
+                    AddEnteredLibraryPath(folders, pathBox);
+                }
+            };
+            page.Controls.Add(pathBox);
+            page.Controls.Add(CreateDialogButton(
+                "Add",
+                450,
+                146,
+                82,
+                delegate { AddEnteredLibraryPath(folders, pathBox); }));
+
+            var pathHint = new Label();
+            pathHint.Location = new Point(10, 179);
+            pathHint.Size = new Size(522, 18);
+            pathHint.Font = new Font("Segoe UI", 8F);
+            pathHint.ForeColor = Color.FromArgb(103, 113, 132);
+            pathHint.Text = exampleText;
+            page.Controls.Add(pathHint);
+
+            return new LibraryTabControls(page, folders);
+        }
+
+        private void BrowseForLibraryFolder(
+            ListBox folders,
+            string browserDescription)
         {
             using (var browser = new FolderBrowserDialog())
             {
-                browser.Description = "Select a music library folder";
+                browser.Description = browserDescription;
                 browser.ShowNewFolderButton = false;
-                if (musicFoldersList.SelectedItem != null)
+                if (folders.SelectedItem != null)
                 {
-                    string selectedPath = musicFoldersList.SelectedItem.ToString();
+                    string selectedPath = folders.SelectedItem.ToString();
                     if (Directory.Exists(selectedPath))
                     {
                         browser.SelectedPath = selectedPath;
@@ -2343,14 +2397,14 @@ internal static class Program
                 }
                 if (browser.ShowDialog(this) == DialogResult.OK)
                 {
-                    AddMusicPath(browser.SelectedPath);
+                    AddLibraryPath(folders, browser.SelectedPath);
                 }
             }
         }
 
-        private void AddEnteredMusicPath()
+        private void AddEnteredLibraryPath(ListBox folders, TextBox pathBox)
         {
-            string path = addPathBox.Text.Trim();
+            string path = pathBox.Text.Trim();
             if (path.Length == 0)
             {
                 return;
@@ -2365,11 +2419,11 @@ internal static class Program
                     MessageBoxIcon.Information);
                 return;
             }
-            AddMusicPath(path);
-            addPathBox.Clear();
+            AddLibraryPath(folders, path);
+            pathBox.Clear();
         }
 
-        private void AddMusicPath(string path)
+        private static void AddLibraryPath(ListBox folders, string path)
         {
             string normalized = path.Trim();
             string root = Path.GetPathRoot(normalized);
@@ -2379,19 +2433,19 @@ internal static class Program
                     Path.DirectorySeparatorChar,
                     Path.AltDirectorySeparatorChar);
             }
-            for (int index = 0; index < musicFoldersList.Items.Count; index++)
+            for (int index = 0; index < folders.Items.Count; index++)
             {
                 if (String.Equals(
-                    musicFoldersList.Items[index].ToString(),
+                    folders.Items[index].ToString(),
                     normalized,
                     StringComparison.OrdinalIgnoreCase))
                 {
-                    musicFoldersList.SelectedIndex = index;
+                    folders.SelectedIndex = index;
                     return;
                 }
             }
-            musicFoldersList.Items.Add(normalized);
-            musicFoldersList.SelectedIndex = musicFoldersList.Items.Count - 1;
+            folders.Items.Add(normalized);
+            folders.SelectedIndex = folders.Items.Count - 1;
         }
 
         private void SaveSettings()
@@ -2422,11 +2476,8 @@ internal static class Program
                 return;
             }
 
-            var musicDirectories = new List<string>();
-            for (int index = 0; index < musicFoldersList.Items.Count; index++)
-            {
-                musicDirectories.Add(musicFoldersList.Items[index].ToString());
-            }
+            List<string> musicDirectories =
+                ReadLibraryDirectories(musicFoldersList);
             if (musicDirectories.Count == 0)
             {
                 MessageBox.Show(
@@ -2437,13 +2488,26 @@ internal static class Program
                     MessageBoxIcon.Information);
                 return;
             }
+            List<string> audiobookDirectories =
+                ReadLibraryDirectories(audiobookFoldersList);
 
             Settings = new LauncherSettings(
                 listenHost,
                 Decimal.ToInt32(portBox.Value),
-                musicDirectories);
+                musicDirectories,
+                audiobookDirectories);
             DialogResult = DialogResult.OK;
             Close();
+        }
+
+        private static List<string> ReadLibraryDirectories(ListBox folders)
+        {
+            var result = new List<string>();
+            for (int index = 0; index < folders.Items.Count; index++)
+            {
+                result.Add(folders.Items[index].ToString());
+            }
+            return result;
         }
 
         private static void AddDialogLabel(
@@ -2476,6 +2540,20 @@ internal static class Program
             button.UseVisualStyleBackColor = true;
             button.Click += delegate { action(); };
             return button;
+        }
+
+        private sealed class LibraryTabControls
+        {
+            internal readonly TabPage Page;
+            internal readonly ListBox Folders;
+
+            internal LibraryTabControls(
+                TabPage page,
+                ListBox folders)
+            {
+                Page = page;
+                Folders = folders;
+            }
         }
     }
 
