@@ -820,3 +820,22 @@ export type ScanProgress = {
 export async function getScanProgress(token: string) {
   return (await apiFetch('/scan/progress', { method: 'GET' }, token)) as ScanProgress;
 }
+
+// =========================================================================
+// AI Search
+// =========================================================================
+
+export interface AiSearchResponse {
+  ok: boolean;
+  model: string;
+  originalQuery: string;
+  searchQuery: string;
+  explanation: string;
+}
+
+export async function sendAiSearch(token: string, query: string): Promise<AiSearchResponse> {
+  return (await apiFetch('/ai/search', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  }, token)) as AiSearchResponse;
+}

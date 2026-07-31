@@ -76,6 +76,20 @@ export function Settings() {
   const [subsonicError, setSubsonicError] = useState<string | null>(null);
   const [subsonicNotice, setSubsonicNotice] = useState<string | null>(null);
 
+  // OpenRouter AI search settings
+  const openrouterConfigured = usePreferences((s) => s.openrouterConfigured);
+  const [orApiKey, setOrApiKey] = useState('');
+  const [orLoading, setOrLoading] = useState(false);
+  const [orError, setOrError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const requestedTab = window.sessionStorage.getItem('mvbar_settings_tab');
+    if (requestedTab === 'account' || requestedTab === 'playback' || requestedTab === 'integrations' || requestedTab === 'about') {
+      setActiveTab(requestedTab);
+    }
+    window.sessionStorage.removeItem('mvbar_settings_tab');
+  }, []);
+
   // Load profile
   const loadProfile = async () => {
     if (!token) return;
@@ -633,6 +647,93 @@ export function Settings() {
                 {subsonicNotice && <div className="text-green-400 text-sm">{subsonicNotice}</div>}
                 {subsonicError && <div className="text-red-400 text-sm">{subsonicError}</div>}
               </div>
+            </section>
+
+            {/* OpenRouter AI */}
+            <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                {openrouterConfigured ? (
+                  <svg className="w-5 h-5 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                  </svg>
+                ) : (
+                  <span className="text-lg">✨</span>
+                )}
+                AI Search
+              </h2>
+
+              <p className="text-sm text-slate-400">
+                Connect your <a href="https://openrouter.ai" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">OpenRouter</a> account
+                to search your music library with natural-language requests. Only your search wording is sent to OpenRouter; your library stays inside MVBar.
+              </p>
+
+              {openrouterConfigured ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
+                    <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <div>
+                      <div className="text-green-400 font-medium">Connected</div>
+                      <div className="text-sm text-slate-400">Choose Ask AI from the normal Search window.</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      setOrLoading(true);
+                      setOrError(null);
+                      try {
+                        const saved = await updatePreferences(token!, { openrouter_api_key: '' });
+                        if (!saved) setOrError('Failed to remove API key');
+                      } catch {
+                        setOrError('Failed to remove API key');
+                      }
+                      setOrLoading(false);
+                    }}
+                    disabled={orLoading}
+                    className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
+                  >
+                    {orLoading ? 'Disconnecting...' : 'Remove API Key'}
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3 max-w-md">
+                  <div className="text-sm text-slate-400">
+                    Get your API key from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">OpenRouter Keys</a>. Free models are available.
+                  </div>
+                  <input
+                    type="password"
+                    placeholder="Paste your OpenRouter API key"
+                    value={orApiKey}
+                    onChange={(e) => setOrApiKey(e.target.value)}
+                    maxLength={500}
+                    className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!orApiKey.trim()) return;
+                      setOrLoading(true);
+                      setOrError(null);
+                      try {
+                        const saved = await updatePreferences(token!, { openrouter_api_key: orApiKey.trim() });
+                        if (saved) {
+                          setOrApiKey('');
+                        } else {
+                          setOrError('Failed to save API key');
+                        }
+                      } catch {
+                        setOrError('Failed to save API key');
+                      }
+                      setOrLoading(false);
+                    }}
+                    disabled={orLoading || !orApiKey.trim()}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors"
+                  >
+                    {orLoading ? 'Saving...' : 'Connect OpenRouter'}
+                  </button>
+                  {orError && <div className="text-red-400 text-sm">{orError}</div>}
+                </div>
+              )}
             </section>
 
             {/* ListenBrainz */}

@@ -26,6 +26,7 @@ import { preferencesPlugin } from './preferences.js';
 import { deviceLogsPlugin } from './deviceLogs.js';
 import { telegramPlugin } from './telegram.js';
 import { userAuditPlugin } from './userAudit.js';
+import { aiPlugin } from './ai.js';
 import googleAuthPlugin, { startAvatarSyncScheduler } from './googleAuth.js';
 import { initDb } from './db.js';
 import logger from './logger.js';
@@ -136,6 +137,7 @@ await app.register(audiobooksPlugin);
 await app.register(preferencesPlugin);
 await app.register(deviceLogsPlugin);
 await app.register(telegramPlugin);
+await app.register(aiPlugin);
 
 const host = process.env.HOST ?? '0.0.0.0';
 await app.listen({ port: config.port, host });
