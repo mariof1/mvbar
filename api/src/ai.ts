@@ -6,6 +6,7 @@ import { getSimilarArtists, isLastfmEnabled } from './lastfm.js';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODEL = 'google/gemini-3.6-flash';
+const DEFAULT_FREE_MODEL = 'openrouter/free';
 const MAX_QUERY_LENGTH = 500;
 const MAX_REQUESTS_PER_MINUTE = 10;
 const MAX_CANDIDATES = 1_200;
@@ -72,11 +73,18 @@ type RateWindow = {
 };
 
 type OpenRouterResponse = {
+  model?: string;
   choices?: Array<{
     message?: {
       content?: string | null;
     };
   }>;
+};
+
+export type MusicIntentRequestResult = {
+  intent: MusicIntent;
+  model: string;
+  usedFreeFallback: boolean;
 };
 
 const rateWindows = new Map<string, RateWindow>();
@@ -1096,7 +1104,13 @@ function openRouterError(status: number): { status: number; message: string } {
   }
 }
 
-async function requestMusicIntent(apiKey: string, model: string, query: string, signal: AbortSignal): Promise<MusicIntent> {
+async function requestMusicIntentOnce(
+  apiKey: string,
+  model: string,
+  query: string,
+  signal: AbortSignal,
+  allowProviderDataCollection: boolean
+): Promise<{ intent: MusicIntent; model: string }> {
   const response = await fetch(OPENROUTER_URL, {
     method: 'POST',
     headers: {
@@ -1111,7 +1125,7 @@ async function requestMusicIntent(apiKey: string, model: string, query: string, 
       max_tokens: 2_000,
       provider: {
         require_parameters: true,
-        data_collection: 'deny',
+        data_collection: allowProviderDataCollection ? 'allow' : 'deny',
       },
       messages: [
         {
@@ -1196,13 +1210,41 @@ async function requestMusicIntent(apiKey: string, model: string, query: string, 
 
   if (!response.ok) {
     const mapped = openRouterError(response.status);
-    throw Object.assign(new Error(mapped.message), { status: mapped.status, retryAfter: response.headers.get('Retry-After') });
+    throw Object.assign(new Error(mapped.message), {
+      status: mapped.status,
+      openRouterStatus: response.status,
+      retryAfter: response.headers.get('Retry-After'),
+    });
   }
 
   const data = await response.json() as OpenRouterResponse;
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw Object.assign(new Error('OpenRouter returned an empty music interpretation.'), { status: 502 });
-  return parseMusicIntent(content, query);
+  return {
+    intent: parseMusicIntent(content, query),
+    model: cleanText(data.model || model, 160),
+  };
+}
+
+export async function requestMusicIntent(
+  apiKey: string,
+  model: string,
+  freeModel: string,
+  query: string,
+  signal: AbortSignal
+): Promise<MusicIntentRequestResult> {
+  try {
+    const result = await requestMusicIntentOnce(apiKey, model, query, signal, false);
+    return { ...result, usedFreeFallback: false };
+  } catch (error) {
+    const openRouterStatus = error instanceof Error && 'openRouterStatus' in error
+      ? Number((error as Error & { openRouterStatus: number }).openRouterStatus)
+      : null;
+    if (openRouterStatus !== 402 || model === freeModel) throw error;
+
+    const result = await requestMusicIntentOnce(apiKey, freeModel, query, signal, true);
+    return { ...result, usedFreeFallback: true };
+  }
 }
 
 export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
@@ -1237,14 +1279,15 @@ export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
       return reply.code(429).send({ ok: false, error: 'Too many AI requests. Please wait a minute and try again.' });
     }
 
-    const model = process.env.AI_SEARCH_MODEL?.trim() || DEFAULT_MODEL;
+    const requestedModel = process.env.AI_SEARCH_MODEL?.trim() || DEFAULT_MODEL;
+    const freeModel = process.env.AI_SEARCH_FREE_MODEL?.trim() || DEFAULT_FREE_MODEL;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
 
     try {
-      const baseIntent = await requestMusicIntent(apiKey, model, query, controller.signal);
+      const aiResult = await requestMusicIntent(apiKey, requestedModel, freeModel, query, controller.signal);
       const [intent, allowed] = await Promise.all([
-        enrichSimilarity(baseIntent),
+        enrichSimilarity(aiResult.intent),
         allowedLibrariesForUser(req.user.userId, req.user.role),
       ]);
       const seed = `${req.user.userId}:${query}:${Date.now()}`;
@@ -1253,7 +1296,9 @@ export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
 
       return {
         ok: true,
-        model,
+        model: aiResult.model,
+        requestedModel,
+        usedFreeFallback: aiResult.usedFreeFallback,
         originalQuery: query,
         action: intent.action,
         requestedTrackCount: intent.trackCount,

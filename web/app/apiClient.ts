@@ -840,6 +840,8 @@ export interface AiIntentTrack {
 export interface AiIntentResponse {
   ok: boolean;
   model: string;
+  requestedModel: string;
+  usedFreeFallback: boolean;
   originalQuery: string;
   action: 'play' | 'queue' | 'search';
   requestedTrackCount: number;
@@ -849,6 +851,7 @@ export interface AiIntentResponse {
     moods: string[];
     genres: string[];
     relatedGenres: string[];
+    requireGenreMatch: boolean;
     countries: string[];
     countryMode: 'strict' | 'prefer' | 'any';
     yearStart: number | null;

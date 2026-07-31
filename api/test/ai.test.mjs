@@ -7,6 +7,7 @@ import {
   matchesSemanticConstraints,
   normalizeCountryTerms,
   parseMusicIntent,
+  requestMusicIntent,
   scoreSemanticCandidate,
 } from '../dist/ai.js';
 
@@ -132,6 +133,39 @@ test('parseMusicIntent safely falls back when the response is invalid', () => {
   assert.equal(intent.action, 'play');
   assert.equal(intent.energy, 'low');
   assert.ok(intent.genres.includes('downtempo'));
+});
+
+test('requestMusicIntent retries insufficient credit through the free router', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(String(options?.body));
+    requests.push({ model: body.model, dataCollection: body.provider?.data_collection });
+    if (requests.length === 1) return new Response('', { status: 402 });
+
+    return new Response(JSON.stringify({
+      model: 'nvidia/example:free',
+      choices: [{ message: { content: JSON.stringify(fallbackMusicIntent('play soft music')) } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  try {
+    const result = await requestMusicIntent(
+      'test-key',
+      'google/gemini-test',
+      'openrouter/free',
+      'play soft music',
+      new AbortController().signal
+    );
+    assert.equal(result.usedFreeFallback, true);
+    assert.equal(result.model, 'nvidia/example:free');
+    assert.deepEqual(requests, [
+      { model: 'google/gemini-test', dataCollection: 'deny' },
+      { model: 'openrouter/free', dataCollection: 'allow' },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 function candidate(overrides) {

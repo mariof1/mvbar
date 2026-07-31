@@ -69,6 +69,8 @@ type AiInterpretation = {
   originalQuery: string;
   searchQuery: string;
   explanation: string;
+  model: string;
+  usedFreeFallback: boolean;
 };
 
 const AI_SEARCH_SUGGESTIONS = [
@@ -263,6 +265,8 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
         originalQuery: result.originalQuery,
         searchQuery: result.searchQuery,
         explanation: result.explanation,
+        model: result.model,
+        usedFreeFallback: result.usedFreeFallback,
       });
 
       if (result.action === 'play' || result.action === 'queue') {
@@ -486,7 +490,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                       ))}
                     </div>
                     <p className="text-[11px] text-slate-600 mt-6">
-                      Your request is sent to OpenRouter. For “similar” requests, seed artist names may also use the server&apos;s Last.fm integration. Library contents stay inside MVBar.
+                      Your request is sent to OpenRouter. If paid credit is unavailable, MVBar automatically uses a free model whose provider may log the request. For “similar” requests, seed artist names may also use the server&apos;s Last.fm integration. Library contents stay inside MVBar.
                     </p>
                   </>
                 )}
@@ -506,6 +510,11 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                   <div className="text-xs text-slate-500 mt-1 truncate">
                     “{aiInterpretation.originalQuery}” → “{aiInterpretation.searchQuery}”
                   </div>
+                  {aiInterpretation.usedFreeFallback && (
+                    <div className="text-xs text-amber-300/80 mt-1">
+                      Free-model fallback: {aiInterpretation.model}
+                    </div>
+                  )}
                 </div>
                 <button
                   onClick={() => setAiInterpretation(null)}
