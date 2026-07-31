@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   chooseSemanticTracks,
   fallbackMusicIntent,
+  normalizeCountryTerms,
   parseMusicIntent,
   scoreSemanticCandidate,
 } from '../dist/ai.js';
@@ -24,6 +25,15 @@ test('parseMusicIntent accepts a structured OpenRouter response', () => {
     searchQuery: 'ambient calm',
     moods: ['gentle', 'calm'],
     genres: ['ambient', 'acoustic'],
+    relatedGenres: ['downtempo'],
+    countries: [],
+    countryMode: 'any',
+    yearStart: null,
+    yearEnd: null,
+    namedArtists: [],
+    similarToArtists: [],
+    referenceArtists: [],
+    includeSimilar: false,
     avoid: ['metal'],
     energy: 'low',
     bpmMin: 50,
@@ -37,6 +47,24 @@ test('parseMusicIntent accepts a structured OpenRouter response', () => {
   assert.deepEqual(intent.moods, ['gentle', 'calm']);
   assert.equal(intent.targetBpm, 72);
   assert.equal(intent.trackCount, 20);
+});
+
+test('fallbackMusicIntent decomposes British grunge and similar into provenance and close genres', () => {
+  const intent = fallbackMusicIntent('play British grunge from the nineties and similar');
+  assert.equal(intent.action, 'play');
+  assert.equal(intent.textQuery, '');
+  assert.deepEqual(intent.countries, ['united kingdom']);
+  assert.equal(intent.countryMode, 'prefer');
+  assert.deepEqual(intent.genres, ['grunge']);
+  assert.ok(intent.relatedGenres.includes('post-grunge'));
+  assert.ok(intent.relatedGenres.includes('alternative rock'));
+  assert.equal(intent.yearStart, 1990);
+  assert.equal(intent.yearEnd, 1999);
+  assert.equal(intent.includeSimilar, true);
+});
+
+test('country normalization treats UK nations and nationality aliases as one provenance group', () => {
+  assert.deepEqual(normalizeCountryTerms(['British', 'England', 'United Kingdom']), ['united kingdom']);
 });
 
 test('parseMusicIntent safely falls back when the response is invalid', () => {
@@ -59,6 +87,8 @@ function candidate(overrides) {
     durationMs: 180000,
     genre: null,
     mood: null,
+    country: null,
+    year: null,
     bpm: null,
     playCount: 0,
     skipCount: 0,
@@ -74,6 +104,36 @@ test('semantic scoring prefers genuinely soft tracks over aggressive tracks', ()
   const aggressive = candidate({ id: 2, genre: 'industrial metal', mood: 'aggressive intense', bpm: 168 });
 
   assert.ok(scoreSemanticCandidate(soft, intent) > scoreSemanticCandidate(aggressive, intent) + 50);
+});
+
+test('semantic scoring prioritizes country and exact genre before adjacent or foreign matches', () => {
+  const intent = fallbackMusicIntent('play British grunge and similar');
+  const britishGrunge = candidate({ id: 1, genre: 'grunge', country: 'England', bpm: 120 });
+  const britishAdjacent = candidate({ id: 2, genre: 'alternative rock', country: 'United Kingdom', bpm: 120 });
+  const americanGrunge = candidate({ id: 3, genre: 'grunge', country: 'United States', bpm: 120 });
+  const unrelated = candidate({ id: 4, genre: 'dance pop', country: 'United States', bpm: 120 });
+
+  const exactScore = scoreSemanticCandidate(britishGrunge, intent);
+  const adjacentScore = scoreSemanticCandidate(britishAdjacent, intent);
+  const foreignScore = scoreSemanticCandidate(americanGrunge, intent);
+  const unrelatedScore = scoreSemanticCandidate(unrelated, intent);
+  assert.ok(exactScore > adjacentScore);
+  assert.ok(adjacentScore > foreignScore);
+  assert.ok(foreignScore > unrelatedScore);
+});
+
+test('semantic scoring recognizes reference and Last.fm-similar artists without substring collisions', () => {
+  const intent = {
+    ...fallbackMusicIntent('play British grunge and similar'),
+    referenceArtists: ['Bush'],
+    similarArtists: ['Feeder'],
+  };
+  const bush = candidate({ id: 1, artist: 'Bush', displayArtist: 'Bush', genre: 'grunge' });
+  const kateBush = candidate({ id: 2, artist: 'Kate Bush', displayArtist: 'Kate Bush', genre: 'art pop' });
+  const feeder = candidate({ id: 3, artist: 'Feeder', displayArtist: 'Feeder', genre: 'alternative rock' });
+
+  assert.ok(scoreSemanticCandidate(bush, intent) > scoreSemanticCandidate(kateBush, intent));
+  assert.ok(scoreSemanticCandidate(feeder, intent) > scoreSemanticCandidate(kateBush, intent));
 });
 
 test('semantic selection returns a varied playable queue', () => {

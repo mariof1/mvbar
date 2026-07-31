@@ -847,6 +847,16 @@ export interface AiIntentResponse {
   interpretation: {
     moods: string[];
     genres: string[];
+    relatedGenres: string[];
+    countries: string[];
+    countryMode: 'strict' | 'prefer' | 'any';
+    yearStart: number | null;
+    yearEnd: number | null;
+    namedArtists: string[];
+    similarToArtists: string[];
+    referenceArtists: string[];
+    similarArtists: string[];
+    includeSimilar: boolean;
     avoid: string[];
     energy: 'low' | 'medium' | 'high' | 'any';
     bpmMin: number | null;

@@ -72,7 +72,7 @@ type AiInterpretation = {
 
 const AI_SEARCH_SUGGESTIONS = [
   'Play soft music',
-  'Play something calm for a quiet evening',
+  'Play British grunge and similar',
   'Queue upbeat electronic music',
   'Play jazz for a rainy afternoon',
 ];
@@ -478,7 +478,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                       ))}
                     </div>
                     <p className="text-[11px] text-slate-600 mt-6">
-                      Your request is sent to OpenRouter. Library contents stay inside MVBar.
+                      Your request is sent to OpenRouter. For “similar” requests, seed artist names may also use the server&apos;s Last.fm integration. Library contents stay inside MVBar.
                     </p>
                   </>
                 )}

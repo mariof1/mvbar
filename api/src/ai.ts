@@ -2,15 +2,17 @@ import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 import { allowedLibrariesForUser } from './access.js';
 import { db } from './db.js';
+import { getSimilarArtists, isLastfmEnabled } from './lastfm.js';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'google/gemini-2.5-flash-lite';
+const DEFAULT_MODEL = 'google/gemini-3.6-flash';
 const MAX_QUERY_LENGTH = 500;
 const MAX_REQUESTS_PER_MINUTE = 10;
 const MAX_CANDIDATES = 1_200;
 
 export type MusicIntentAction = 'play' | 'queue' | 'search';
 export type MusicEnergy = 'low' | 'medium' | 'high' | 'any';
+export type CountryMode = 'strict' | 'prefer' | 'any';
 
 export type MusicIntent = {
   action: MusicIntentAction;
@@ -18,6 +20,16 @@ export type MusicIntent = {
   searchQuery: string;
   moods: string[];
   genres: string[];
+  relatedGenres: string[];
+  countries: string[];
+  countryMode: CountryMode;
+  yearStart: number | null;
+  yearEnd: number | null;
+  namedArtists: string[];
+  similarToArtists: string[];
+  referenceArtists: string[];
+  similarArtists: string[];
+  includeSimilar: boolean;
   avoid: string[];
   energy: MusicEnergy;
   bpmMin: number | null;
@@ -42,6 +54,8 @@ export type AiTrack = {
 export type SemanticCandidate = AiTrack & {
   genre: string | null;
   mood: string | null;
+  country: string | null;
+  year: number | null;
   bpm: number | null;
   playCount: number;
   skipCount: number;
@@ -64,6 +78,34 @@ type OpenRouterResponse = {
 
 const rateWindows = new Map<string, RateWindow>();
 
+const COUNTRY_ALIASES: Record<string, string> = {
+  american: 'united states', america: 'united states', usa: 'united states', us: 'united states', 'united states of america': 'united states',
+  british: 'united kingdom', britain: 'united kingdom', uk: 'united kingdom', 'great britain': 'united kingdom',
+  english: 'united kingdom', england: 'united kingdom', scottish: 'united kingdom', scotland: 'united kingdom',
+  welsh: 'united kingdom', wales: 'united kingdom', 'northern irish': 'united kingdom', 'northern ireland': 'united kingdom',
+  polish: 'poland', polska: 'poland', german: 'germany', deutsch: 'germany', french: 'france',
+  spanish: 'spain', italian: 'italy', japanese: 'japan', korean: 'south korea', brazilian: 'brazil',
+  russian: 'russia', dutch: 'netherlands', swedish: 'sweden', norwegian: 'norway', danish: 'denmark',
+  finnish: 'finland', canadian: 'canada', australian: 'australia', irish: 'ireland', mexican: 'mexico',
+  jamaican: 'jamaica', portuguese: 'portugal', czech: 'czech republic', ukrainian: 'ukraine',
+};
+
+const COUNTRY_GROUPS: Record<string, string[]> = {
+  'united kingdom': ['united kingdom', 'uk', 'great britain', 'britain', 'england', 'scotland', 'wales', 'northern ireland'],
+  'united states': ['united states', 'united states of america', 'usa', 'us', 'america'],
+};
+
+const DECADE_PATTERNS: Array<{ pattern: RegExp; start: number; end: number; words: string[] }> = [
+  { pattern: /\b(?:50s|fifties|1950s?)\b/i, start: 1950, end: 1959, words: ['50s', 'fifties', '1950', '1950s'] },
+  { pattern: /\b(?:60s|sixties|1960s?)\b/i, start: 1960, end: 1969, words: ['60s', 'sixties', '1960', '1960s'] },
+  { pattern: /\b(?:70s|seventies|1970s?)\b/i, start: 1970, end: 1979, words: ['70s', 'seventies', '1970', '1970s'] },
+  { pattern: /\b(?:80s|eighties|1980s?)\b/i, start: 1980, end: 1989, words: ['80s', 'eighties', '1980', '1980s'] },
+  { pattern: /\b(?:90s|nineties|1990s?)\b/i, start: 1990, end: 1999, words: ['90s', 'nineties', '1990', '1990s'] },
+  { pattern: /\b(?:2000s|zeroes|noughties)\b/i, start: 2000, end: 2009, words: ['2000s', 'zeroes', 'noughties'] },
+  { pattern: /\b(?:2010s|tens)\b/i, start: 2010, end: 2019, words: ['2010s', 'tens'] },
+  { pattern: /\b(?:2020s|twenties)\b/i, start: 2020, end: 2029, words: ['2020s', 'twenties'] },
+];
+
 function cleanText(value: string, maxLength: number): string {
   return value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
@@ -82,6 +124,36 @@ function boundedBpm(value: unknown): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
   return Math.round(Math.max(30, Math.min(240, parsed)));
+}
+
+function boundedYear(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.round(Math.max(1900, Math.min(2100, parsed)));
+}
+
+function canonicalCountry(value: string): string {
+  const normalized = normalizedTerm(value);
+  return COUNTRY_ALIASES[normalized] || normalized;
+}
+
+export function normalizeCountryTerms(value: unknown): string[] {
+  return Array.from(new Set(normalizedTerms(value, 10).map(canonicalCountry).filter(Boolean)));
+}
+
+function expandedCountryTerms(countries: string[]): string[] {
+  const terms = new Set<string>();
+  for (const value of countries) {
+    const canonical = canonicalCountry(value);
+    terms.add(canonical);
+    for (const alias of COUNTRY_GROUPS[canonical] || []) terms.add(alias);
+  }
+  return [...terms];
+}
+
+function mergeTerms(...lists: string[][]): string[] {
+  return Array.from(new Set(lists.flat().map(normalizedTerm).filter(Boolean)));
 }
 
 function consumeRateLimit(userId: string): boolean {
@@ -108,8 +180,8 @@ function textQueryWithoutFiller(query: string, semanticWords: string[]): string 
   let result = query.toLowerCase();
   const removable = [
     'play', 'put on', 'start', 'listen to', 'give me', 'spin', 'queue', 'enqueue',
-    'find', 'show me', 'search for', 'look for', 'music', 'songs', 'tracks',
-    'something', 'some', 'please', 'for me', 'kind of', 'a bit of',
+    'find', 'show me', 'search for', 'look for', 'from the', 'from', 'music', 'songs', 'tracks',
+    'something', 'some', 'please', 'for me', 'kind of', 'a bit of', 'and',
     ...semanticWords,
   ].sort((a, b) => b.length - a.length);
 
@@ -124,6 +196,14 @@ export function fallbackMusicIntent(query: string): MusicIntent {
   const lower = query.toLowerCase();
   let moods: string[] = [];
   let genres: string[] = [];
+  let relatedGenres: string[] = [];
+  let countries: string[] = [];
+  let countryMode: CountryMode = 'any';
+  let yearStart: number | null = null;
+  let yearEnd: number | null = null;
+  const namedArtists: string[] = [];
+  const similarToArtists: string[] = [];
+  const referenceArtists: string[] = [];
   let avoid: string[] = [];
   let energy: MusicEnergy = 'any';
   let bpmMin: number | null = null;
@@ -204,8 +284,52 @@ export function fallbackMusicIntent(query: string): MusicIntent {
     concept = 'warm and romantic music';
   }
 
+  if (/\bgrunge\b/.test(lower)) {
+    genres = mergeTerms(['grunge'], genres);
+    relatedGenres = mergeTerms(relatedGenres, ['post-grunge', 'alternative rock', 'noise rock', 'garage rock', 'sludge rock', 'hard rock']);
+    moods = mergeTerms(moods, ['raw', 'gritty', 'brooding', 'distorted', 'angst']);
+    if (energy === 'any') {
+      energy = 'medium';
+      bpmMin = 70;
+      bpmMax = 165;
+      targetBpm = 118;
+    }
+    semanticWords.push('grunge');
+    concept = 'grunge first, followed by closely related alternative and post-grunge music';
+  }
+
+  const countryAliases = Object.keys(COUNTRY_ALIASES).sort((a, b) => b.length - a.length);
+  const countryAlias = countryAliases.find((alias) => new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')}\\b`, 'i').test(lower));
+  if (countryAlias) {
+    countries = [canonicalCountry(countryAlias)];
+    countryMode = /\b(?:only|exclusively|strictly)\b/i.test(query) ? 'strict' : 'prefer';
+    semanticWords.push(countryAlias);
+    const countryLabel = countries[0] === 'united kingdom' ? 'British' : countries[0];
+    concept = `${countryLabel} ${concept}`;
+  }
+
+  for (const decade of DECADE_PATTERNS) {
+    if (!decade.pattern.test(query)) continue;
+    yearStart = decade.start;
+    yearEnd = decade.end;
+    semanticWords.push(...decade.words);
+    break;
+  }
+
+  if (yearStart === null) {
+    const yearMatch = query.match(/\b(19[0-9]{2}|20[0-9]{2}|2100)\b/);
+    if (yearMatch) {
+      yearStart = Number(yearMatch[1]);
+      yearEnd = yearStart;
+      semanticWords.push(yearMatch[1]);
+    }
+  }
+
+  const includeSimilar = /\b(?:similar|related|adjacent|like this|more like|in the vein of|in the style of)\b/i.test(query);
+  if (includeSimilar) semanticWords.push('similar', 'related', 'adjacent', 'like this', 'more like', 'in the vein of', 'in the style of');
+
   const textQuery = textQueryWithoutFiller(query, semanticWords);
-  const searchQuery = cleanText([textQuery, genres[0] || moods[0]].filter(Boolean).join(' '), 200) || cleanText(query, 200);
+  const searchQuery = cleanText([textQuery, countries[0], genres[0] || moods[0]].filter(Boolean).join(' '), 200) || cleanText(query, 200);
 
   return {
     action: inferAction(query),
@@ -213,6 +337,16 @@ export function fallbackMusicIntent(query: string): MusicIntent {
     searchQuery,
     moods,
     genres,
+    relatedGenres,
+    countries,
+    countryMode,
+    yearStart,
+    yearEnd,
+    namedArtists,
+    similarToArtists,
+    referenceArtists,
+    similarArtists: [],
+    includeSimilar,
     avoid,
     energy,
     bpmMin,
@@ -241,6 +375,9 @@ function applyEnergyDefaults(intent: MusicIntent): MusicIntent {
   if (intent.bpmMin !== null && intent.bpmMax !== null && intent.bpmMin > intent.bpmMax) {
     [intent.bpmMin, intent.bpmMax] = [intent.bpmMax, intent.bpmMin];
   }
+  if (intent.yearStart !== null && intent.yearEnd !== null && intent.yearStart > intent.yearEnd) {
+    [intent.yearStart, intent.yearEnd] = [intent.yearEnd, intent.yearStart];
+  }
   return intent;
 }
 
@@ -256,11 +393,21 @@ export function parseMusicIntent(content: string, fallbackQuery: string): MusicI
     const energy = parsed.energy === 'low' || parsed.energy === 'medium' || parsed.energy === 'high' || parsed.energy === 'any'
       ? parsed.energy
       : fallback.energy;
+    const countryMode = parsed.countryMode === 'strict' || parsed.countryMode === 'prefer' || parsed.countryMode === 'any'
+      ? parsed.countryMode
+      : fallback.countryMode;
     const textQuery = cleanText(typeof parsed.textQuery === 'string' ? parsed.textQuery : fallback.textQuery, 160);
     const moods = normalizedTerms(parsed.moods);
     const genres = normalizedTerms(parsed.genres);
+    const relatedGenres = normalizedTerms(parsed.relatedGenres);
+    const countries = normalizeCountryTerms(parsed.countries);
+    const namedArtists = normalizedTerms(parsed.namedArtists, 10);
+    const similarToArtists = normalizedTerms(parsed.similarToArtists, 6);
+    const referenceArtists = normalizedTerms(parsed.referenceArtists, 10);
     const searchQuery = cleanText(
-      typeof parsed.searchQuery === 'string' ? parsed.searchQuery : [textQuery, genres[0], moods[0]].filter(Boolean).join(' '),
+      typeof parsed.searchQuery === 'string'
+        ? parsed.searchQuery
+        : [textQuery, countries[0], genres[0], moods[0]].filter(Boolean).join(' '),
       200
     ) || fallback.searchQuery;
     const trackCountRaw = Number(parsed.trackCount);
@@ -271,6 +418,16 @@ export function parseMusicIntent(content: string, fallbackQuery: string): MusicI
       searchQuery,
       moods: moods.length > 0 ? moods : fallback.moods,
       genres: genres.length > 0 ? genres : fallback.genres,
+      relatedGenres: relatedGenres.length > 0 ? relatedGenres : fallback.relatedGenres,
+      countries: countries.length > 0 ? countries : fallback.countries,
+      countryMode,
+      yearStart: boundedYear(parsed.yearStart) ?? fallback.yearStart,
+      yearEnd: boundedYear(parsed.yearEnd) ?? fallback.yearEnd,
+      namedArtists: namedArtists.length > 0 ? namedArtists : fallback.namedArtists,
+      similarToArtists: similarToArtists.length > 0 ? similarToArtists : fallback.similarToArtists,
+      referenceArtists: referenceArtists.length > 0 ? referenceArtists : fallback.referenceArtists,
+      similarArtists: [],
+      includeSimilar: typeof parsed.includeSimilar === 'boolean' ? parsed.includeSimilar : fallback.includeSimilar,
       avoid: normalizedTerms(parsed.avoid).length > 0 ? normalizedTerms(parsed.avoid) : fallback.avoid,
       energy,
       bpmMin: boundedBpm(parsed.bpmMin) ?? fallback.bpmMin,
@@ -284,31 +441,108 @@ export function parseMusicIntent(content: string, fallbackQuery: string): MusicI
   }
 }
 
+function normalizeFeature(value: string): string {
+  return value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+}
+
 function featureText(...values: Array<string | null>): string {
-  return values.filter(Boolean).join(' ').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return normalizeFeature(values.filter(Boolean).join(' '));
+}
+
+function featureValues(...values: Array<string | null>): string[] {
+  const result = new Set<string>();
+  for (const value of values) {
+    for (const part of String(value || '').split(/[;,/|]/)) {
+      const normalized = normalizeFeature(part);
+      if (normalized) result.add(normalized);
+    }
+  }
+  return [...result];
 }
 
 function termMatches(text: string, term: string): boolean {
-  return text.includes(term.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+  const comparable = (value: string) => normalizeFeature(value).replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
+  return comparable(text).includes(comparable(term));
+}
+
+function exactFeatureMatch(values: string[], term: string): boolean {
+  const normalized = normalizeFeature(term);
+  return values.some((value) => value === normalized);
+}
+
+function bestArtistMatch(artistValues: string[], terms: string[]): boolean {
+  return terms.some((term) => exactFeatureMatch(artistValues, term));
 }
 
 export function scoreSemanticCandidate(candidate: SemanticCandidate, intent: MusicIntent, now = Date.now()): number {
   const genre = featureText(candidate.genre);
+  const genreValues = featureValues(candidate.genre);
   const mood = featureText(candidate.mood);
+  const countryValues = featureValues(candidate.country).map(canonicalCountry);
+  const artistValues = featureValues(candidate.artist, candidate.albumArtist, candidate.displayArtist);
   const identity = featureText(candidate.title, candidate.artist, candidate.album);
-  const allMetadata = `${genre} ${mood} ${identity}`;
+  const allMetadata = `${genre} ${mood} ${identity} ${featureText(candidate.country)}`;
   let score = 0;
 
+  let moodScore = 0;
   for (const term of intent.moods) {
-    if (termMatches(mood, term)) score += 16;
-    else if (termMatches(genre, term)) score += 6;
+    if (termMatches(mood, term)) moodScore += 16;
+    else if (termMatches(genre, term)) moodScore += 6;
   }
+  score += Math.min(44, moodScore);
+
+  let primaryGenreScore = 0;
   for (const term of intent.genres) {
-    if (termMatches(genre, term)) score += 12;
-    else if (termMatches(mood, term)) score += 5;
+    if (exactFeatureMatch(genreValues, term)) primaryGenreScore += 30;
+    else if (termMatches(genre, term)) primaryGenreScore += 15;
+    else if (termMatches(mood, term)) primaryGenreScore += 6;
   }
+  score += Math.min(52, primaryGenreScore);
+
+  let relatedGenreScore = 0;
+  for (const term of intent.relatedGenres) {
+    if (exactFeatureMatch(genreValues, term)) relatedGenreScore += 13;
+    else if (termMatches(genre, term)) relatedGenreScore += 7;
+  }
+  score += Math.min(28, relatedGenreScore);
+
   for (const term of intent.avoid) {
-    if (termMatches(allMetadata, term)) score -= 28;
+    if (termMatches(allMetadata, term)) score -= 30;
+  }
+
+  if (intent.countries.length > 0 && intent.countryMode !== 'any') {
+    const wanted = new Set(intent.countries.map(canonicalCountry));
+    const countryMatches = countryValues.some((country) => wanted.has(country));
+    if (countryMatches) score += intent.countryMode === 'strict' ? 44 : 34;
+    else if (countryValues.length > 0) score -= intent.countryMode === 'strict' ? 52 : 10;
+    else if (intent.countryMode === 'strict') score -= 8;
+  }
+
+  const candidateYear = Number(candidate.year);
+  if (intent.yearStart !== null || intent.yearEnd !== null) {
+    const start = intent.yearStart ?? 1900;
+    const end = intent.yearEnd ?? 2100;
+    if (Number.isFinite(candidateYear) && candidateYear > 0) {
+      if (candidateYear >= start && candidateYear <= end) score += 24;
+      else {
+        const distance = candidateYear < start ? start - candidateYear : candidateYear - end;
+        score -= Math.min(30, distance * 2);
+      }
+    } else {
+      score -= 5;
+    }
+  }
+
+  const namedArtistMatch = bestArtistMatch(artistValues, intent.namedArtists);
+  const similarityAnchorMatch = bestArtistMatch(artistValues, intent.similarToArtists);
+  const referenceArtistMatch = bestArtistMatch(artistValues, intent.referenceArtists);
+  const similarArtistMatch = bestArtistMatch(artistValues, intent.similarArtists);
+  if (namedArtistMatch) score += 64;
+  if (similarityAnchorMatch) score += intent.includeSimilar ? 8 : 48;
+  if (referenceArtistMatch) score += 28;
+  if (similarArtistMatch) score += 24;
+  if (intent.namedArtists.length > 0 && !namedArtistMatch && !similarArtistMatch && !intent.includeSimilar) {
+    score -= 38;
   }
 
   if (intent.textQuery) {
@@ -416,7 +650,37 @@ export function chooseSemanticTracks(
 }
 
 function patternsForTerms(terms: string[]): string[] {
-  return Array.from(new Set(terms.map((term) => `%${term.replace(/[\\%_]/g, '')}%`).filter((term) => term !== '%%')));
+  const variants = terms.flatMap((term) => {
+    const cleaned = term.replace(/[\\%_]/g, '');
+    return [cleaned, cleaned.replace(/[-_]+/g, ' '), cleaned.replace(/\s+/g, '-')];
+  });
+  return Array.from(new Set(variants.map((term) => `%${term}%`).filter((term) => term !== '%%')));
+}
+
+async function enrichSimilarity(intent: MusicIntent): Promise<MusicIntent> {
+  if (!intent.includeSimilar || !isLastfmEnabled()) return intent;
+
+  const anchors = mergeTerms(intent.similarToArtists, intent.namedArtists, intent.referenceArtists).slice(0, 3);
+  if (anchors.length === 0) return intent;
+
+  const settled = await Promise.allSettled(anchors.map((artist) => getSimilarArtists(artist, 20)));
+  const anchorSet = new Set(anchors.map(normalizeFeature));
+  const similarArtists: string[] = [];
+  const seen = new Set<string>();
+  for (const result of settled) {
+    if (result.status !== 'fulfilled') continue;
+    for (const artist of result.value) {
+      const name = cleanText(artist.name, 100);
+      const key = normalizeFeature(name);
+      if (!key || anchorSet.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      similarArtists.push(name);
+      if (similarArtists.length >= 40) break;
+    }
+    if (similarArtists.length >= 40) break;
+  }
+
+  return { ...intent, similarArtists };
 }
 
 async function loadSemanticCandidates(
@@ -428,41 +692,111 @@ async function loadSemanticCandidates(
   const params: unknown[] = [userId];
   const accessConditions: string[] = [];
   const matchConditions: string[] = [];
+  const priorityConditions: Array<{ sql: string; weight: number }> = [];
+
+  const addMatch = (sql: string, weight: number) => {
+    matchConditions.push(sql);
+    priorityConditions.push({ sql, weight });
+  };
 
   if (allowed !== null) {
     params.push(allowed);
     accessConditions.push(`t.library_id = any($${params.length}::bigint[])`);
   }
 
-  const semanticPatterns = patternsForTerms([...intent.moods, ...intent.genres]);
-  if (semanticPatterns.length > 0) {
-    params.push(semanticPatterns);
-    matchConditions.push(`(
+  const primaryGenrePatterns = patternsForTerms(intent.genres);
+  if (primaryGenrePatterns.length > 0) {
+    params.push(primaryGenrePatterns);
+    addMatch(`(
       lower(concat_ws(' ', coalesce(t.genre, ''), coalesce(t.mood, ''))) like any($${params.length}::text[])
       or exists (
         select 1 from track_genres matched_genre
         where matched_genre.track_id = t.id
           and lower(matched_genre.genre) like any($${params.length}::text[])
       )
-    )`);
+    )`, 4);
+  }
+
+  const relatedPatterns = patternsForTerms([...intent.relatedGenres, ...intent.moods]);
+  if (relatedPatterns.length > 0) {
+    params.push(relatedPatterns);
+    addMatch(`(
+      lower(concat_ws(' ', coalesce(t.genre, ''), coalesce(t.mood, ''))) like any($${params.length}::text[])
+      or exists (
+        select 1 from track_genres related_genre
+        where related_genre.track_id = t.id
+          and lower(related_genre.genre) like any($${params.length}::text[])
+      )
+    )`, 2);
+  }
+
+  const countryTerms = expandedCountryTerms(intent.countries);
+  if (countryTerms.length > 0) {
+    params.push(countryTerms);
+    addMatch(`(
+      exists (
+        select 1 from unnest(regexp_split_to_array(coalesce(t.country, ''), '\\s*[;,|/]\\s*')) raw_country
+        where lower(trim(raw_country)) = any($${params.length}::text[])
+      )
+      or exists (
+        select 1 from track_countries matched_country
+        where matched_country.track_id = t.id
+          and lower(trim(matched_country.country)) = any($${params.length}::text[])
+      )
+    )`, 4);
+  }
+
+  const directArtists = mergeTerms(intent.namedArtists, intent.similarToArtists);
+  if (directArtists.length > 0) {
+    params.push(directArtists);
+    addMatch(`exists (
+      select 1 from unnest(regexp_split_to_array(concat_ws(';', t.artist, t.album_artist), '\\s*[;|]\\s*')) direct_artist
+      where lower(trim(direct_artist)) = any($${params.length}::text[])
+    ) or exists (
+      select 1 from track_artists direct_ta
+      join artists direct_a on direct_a.id = direct_ta.artist_id
+      where direct_ta.track_id = t.id
+        and lower(trim(direct_a.name)) = any($${params.length}::text[])
+    )`, 5);
+  }
+
+  const discoveryArtists = mergeTerms(intent.referenceArtists, intent.similarArtists);
+  if (discoveryArtists.length > 0) {
+    params.push(discoveryArtists);
+    addMatch(`exists (
+      select 1 from unnest(regexp_split_to_array(concat_ws(';', t.artist, t.album_artist), '\\s*[;|]\\s*')) discovery_artist
+      where lower(trim(discovery_artist)) = any($${params.length}::text[])
+    ) or exists (
+      select 1 from track_artists discovery_ta
+      join artists discovery_a on discovery_a.id = discovery_ta.artist_id
+      where discovery_ta.track_id = t.id
+        and lower(trim(discovery_a.name)) = any($${params.length}::text[])
+    )`, 3);
   }
 
   if (intent.textQuery) {
     const identityTerms = [intent.textQuery, ...intent.textQuery.split(/\s+/).filter((word) => word.length > 1)];
     params.push(patternsForTerms(identityTerms));
-    matchConditions.push(`lower(concat_ws(' ', coalesce(t.title, ''), coalesce(t.artist, ''), coalesce(t.album_artist, ''), coalesce(t.album, ''))) like any($${params.length}::text[])`);
+    addMatch(`lower(concat_ws(' ', coalesce(t.title, ''), coalesce(t.artist, ''), coalesce(t.album_artist, ''), coalesce(t.album, ''))) like any($${params.length}::text[])`, 5);
+  }
+
+  if (intent.yearStart !== null || intent.yearEnd !== null) {
+    const start = intent.yearStart ?? 1900;
+    const end = intent.yearEnd ?? 2100;
+    params.push(start, end);
+    addMatch(`coalesce(t.original_year, t.year) between $${params.length - 1} and $${params.length}`, 3);
   }
 
   if (intent.bpmMin !== null || intent.bpmMax !== null) {
     if (intent.bpmMin !== null && intent.bpmMax !== null) {
       params.push(intent.bpmMin, intent.bpmMax);
-      matchConditions.push(`t.bpm between $${params.length - 1} and $${params.length}`);
+      addMatch(`t.bpm between $${params.length - 1} and $${params.length}`, 1);
     } else if (intent.bpmMin !== null) {
       params.push(intent.bpmMin);
-      matchConditions.push(`t.bpm >= $${params.length}`);
+      addMatch(`t.bpm >= $${params.length}`, 1);
     } else if (intent.bpmMax !== null) {
       params.push(intent.bpmMax);
-      matchConditions.push(`t.bpm <= $${params.length}`);
+      addMatch(`t.bpm <= $${params.length}`, 1);
     }
   }
 
@@ -472,6 +806,9 @@ async function loadSemanticCandidates(
     ...accessConditions,
     ...(matchConditions.length > 0 ? [`(${matchConditions.join(' or ')})`] : []),
   ];
+  const databasePriority = priorityConditions.length > 0
+    ? priorityConditions.map(({ sql, weight }) => `(case when ${sql} then ${weight} else 0 end)`).join(' + ')
+    : '0';
 
   const result = await db().query<{
     id: number;
@@ -484,6 +821,8 @@ async function loadSemanticCandidates(
     duration_ms: number | null;
     genre: string | null;
     mood: string | null;
+    country: string | null;
+    year: number | null;
     bpm: number | null;
     play_count: number;
     skip_count: number;
@@ -491,21 +830,30 @@ async function loadSemanticCandidates(
     is_favorite: boolean;
   }>(
     `select t.id::int, t.title, t.artist, t.album_artist, t.album, t.path, t.ext, t.duration_ms,
-            concat_ws(' ', t.genre, genre_tags.genres) as genre, t.mood, t.bpm,
+            concat_ws(';', nullif(t.genre, ''), genre_tags.genres) as genre,
+            t.mood,
+            concat_ws(';', nullif(t.country, ''), country_tags.countries) as country,
+            coalesce(t.original_year, t.year) as year,
+            t.bpm,
             coalesce(uts.play_count, 0)::int as play_count,
             coalesce(uts.skip_count, 0)::int as skip_count,
             uts.last_played_at,
             (ft.track_id is not null) as is_favorite
      from active_tracks t
      left join lateral (
-       select string_agg(tg.genre, ' ') as genres
+       select string_agg(tg.genre, ';') as genres
        from track_genres tg
        where tg.track_id = t.id
      ) genre_tags on true
+     left join lateral (
+       select string_agg(tc.country, ';') as countries
+       from track_countries tc
+       where tc.track_id = t.id
+     ) country_tags on true
      left join user_track_stats uts on uts.track_id = t.id and uts.user_id = $1
      left join favorite_tracks ft on ft.track_id = t.id and ft.user_id = $1
      ${whereParts.length > 0 ? `where ${whereParts.join(' and ')}` : ''}
-     order by md5(t.id::text || $${seedParam})
+     order by (${databasePriority}) desc, md5(t.id::text || $${seedParam})
      limit ${MAX_CANDIDATES}`,
     params
   );
@@ -525,6 +873,8 @@ async function loadSemanticCandidates(
       durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
       genre: row.genre,
       mood: row.mood,
+      country: row.country,
+      year: row.year == null ? null : Number(row.year),
       bpm: row.bpm == null ? null : Number(row.bpm),
       playCount: Number(row.play_count || 0),
       skipCount: Number(row.skip_count || 0),
@@ -561,7 +911,7 @@ async function requestMusicIntent(apiKey: string, model: string, query: string, 
     body: JSON.stringify({
       model,
       temperature: 0.1,
-      max_tokens: 500,
+      max_tokens: 2_000,
       provider: {
         require_parameters: true,
         data_collection: 'deny',
@@ -571,13 +921,22 @@ async function requestMusicIntent(apiKey: string, model: string, query: string, 
           role: 'system',
           content: [
             'You are a music programming engine, not a chat assistant.',
-            'Translate the user request into musical attributes that can select tracks from a local library.',
+            'Use accurate music knowledge to translate the request into attributes that can rank tracks in a local library.',
             'Understand abstract concepts such as soft, warm, dark, dreamy, romantic, focused or energetic.',
             'Never merely copy an abstract adjective into textQuery. Expand it into real mood tags, genres, energy and BPM.',
-            'textQuery must contain only explicitly named artists, songs or albums; otherwise it must be empty.',
+            'Keep primary genres narrow and exact. Put plausible neighbouring styles in relatedGenres; do not flatten a request into a broad family like rock.',
+            'Use canonical country names for artist provenance. British means United Kingdom and covers England, Scotland, Wales and Northern Ireland.',
+            'countryMode is strict only when the user says only/exclusively; use prefer for a nationality adjective, otherwise any.',
+            'namedArtists contains artists the user explicitly wants to hear. similarToArtists contains explicit similarity seeds.',
+            'referenceArtists may contain up to eight well-established representatives of a broad scene when this materially improves identification.',
+            'Never invent an artist. Leave all artist arrays empty when uncertain.',
+            'textQuery contains only an explicitly named song or album not represented elsewhere; otherwise it is empty.',
+            'Set includeSimilar when the user says similar, related, adjacent, in the vein of, or equivalent wording.',
             'Choose action play for requests such as play, put on, start or give me; queue for add/queue; search otherwise.',
             'For "play soft music", use low energy, roughly 50-105 BPM, moods such as gentle/calm/mellow/soothing,',
             'genres such as ambient/acoustic/downtempo/folk/classical/smooth jazz, and avoid aggressive genres.',
+            'For "play British grunge and similar", use grunge as the primary genre; post-grunge, alternative rock, noise rock,',
+            'garage rock and sludge rock as related genres; United Kingdom with prefer mode; includeSimilar true; and only factual UK scene references.',
             'Return 20-30 tracks by default and explain the musical interpretation briefly.',
           ].join(' '),
         },
@@ -595,7 +954,16 @@ async function requestMusicIntent(apiKey: string, model: string, query: string, 
               textQuery: { type: 'string', description: 'Only named artist, title or album text, otherwise empty.' },
               searchQuery: { type: 'string', description: 'Concise fallback query for normal MVBar search.' },
               moods: { type: 'array', items: { type: 'string' }, maxItems: 12 },
-              genres: { type: 'array', items: { type: 'string' }, maxItems: 12 },
+              genres: { type: 'array', items: { type: 'string' }, maxItems: 8, description: 'Narrow primary genre tags.' },
+              relatedGenres: { type: 'array', items: { type: 'string' }, maxItems: 12, description: 'Close musical neighbours, ordered by relevance.' },
+              countries: { type: 'array', items: { type: 'string' }, maxItems: 6, description: 'Canonical artist-origin countries.' },
+              countryMode: { type: 'string', enum: ['strict', 'prefer', 'any'] },
+              yearStart: { type: ['number', 'null'] },
+              yearEnd: { type: ['number', 'null'] },
+              namedArtists: { type: 'array', items: { type: 'string' }, maxItems: 10 },
+              similarToArtists: { type: 'array', items: { type: 'string' }, maxItems: 6 },
+              referenceArtists: { type: 'array', items: { type: 'string' }, maxItems: 8 },
+              includeSimilar: { type: 'boolean' },
               avoid: { type: 'array', items: { type: 'string' }, maxItems: 12 },
               energy: { type: 'string', enum: ['low', 'medium', 'high', 'any'] },
               bpmMin: { type: ['number', 'null'] },
@@ -605,7 +973,9 @@ async function requestMusicIntent(apiKey: string, model: string, query: string, 
               explanation: { type: 'string' },
             },
             required: [
-              'action', 'textQuery', 'searchQuery', 'moods', 'genres', 'avoid',
+              'action', 'textQuery', 'searchQuery', 'moods', 'genres', 'relatedGenres',
+              'countries', 'countryMode', 'yearStart', 'yearEnd', 'namedArtists',
+              'similarToArtists', 'referenceArtists', 'includeSimilar', 'avoid',
               'energy', 'bpmMin', 'bpmMax', 'targetBpm', 'trackCount', 'explanation',
             ],
             additionalProperties: false,
@@ -663,8 +1033,11 @@ export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
     const timeout = setTimeout(() => controller.abort(), 30_000);
 
     try {
-      const intent = await requestMusicIntent(apiKey, model, query, controller.signal);
-      const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
+      const baseIntent = await requestMusicIntent(apiKey, model, query, controller.signal);
+      const [intent, allowed] = await Promise.all([
+        enrichSimilarity(baseIntent),
+        allowedLibrariesForUser(req.user.userId, req.user.role),
+      ]);
       const seed = `${req.user.userId}:${query}:${Date.now()}`;
       const candidates = await loadSemanticCandidates(req.user.userId, allowed, intent, seed);
       const tracks = chooseSemanticTracks(candidates, intent, seed);
@@ -679,6 +1052,16 @@ export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
         interpretation: {
           moods: intent.moods,
           genres: intent.genres,
+          relatedGenres: intent.relatedGenres,
+          countries: intent.countries,
+          countryMode: intent.countryMode,
+          yearStart: intent.yearStart,
+          yearEnd: intent.yearEnd,
+          namedArtists: intent.namedArtists,
+          similarToArtists: intent.similarToArtists,
+          referenceArtists: intent.referenceArtists,
+          similarArtists: intent.similarArtists,
+          includeSimilar: intent.includeSimilar,
           avoid: intent.avoid,
           energy: intent.energy,
           bpmMin: intent.bpmMin,

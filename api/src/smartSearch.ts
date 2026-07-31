@@ -42,8 +42,9 @@ for (const fam of GENRE_FAMILIES) {
 
 // Country name normalization
 const COUNTRY_ALIASES: Record<string, string> = {
-  'usa': 'USA', 'us': 'USA', 'united states': 'USA', 'america': 'USA',
-  'uk': 'United Kingdom', 'england': 'United Kingdom', 'britain': 'United Kingdom', 'great britain': 'United Kingdom',
+  'usa': 'USA', 'us': 'USA', 'united states': 'USA', 'america': 'USA', 'american': 'USA',
+  'uk': 'United Kingdom', 'united kingdom': 'United Kingdom', 'england': 'United Kingdom',
+  'british': 'United Kingdom', 'britain': 'United Kingdom', 'great britain': 'United Kingdom',
   'pl': 'Poland', 'polska': 'Poland',
   'de': 'Germany', 'deutschland': 'Germany',
   'fr': 'France', 'french': 'France',

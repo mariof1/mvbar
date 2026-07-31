@@ -664,7 +664,7 @@ export function Settings() {
 
               <p className="text-sm text-slate-400">
                 Connect your <a href="https://openrouter.ai" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">OpenRouter</a> account
-                to search, queue or play your music with natural-language requests. Only your wording is sent to OpenRouter; MVBar chooses tracks locally from your permitted libraries.
+                to search, queue or play your music with natural-language requests. Your wording is sent to OpenRouter; MVBar chooses tracks locally from your permitted libraries. “Similar” requests can also use the server&apos;s Last.fm artist-similarity service.
               </p>
 
               {openrouterConfigured ? (
