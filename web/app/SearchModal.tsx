@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from './store';
-import { apiFetch, browseAlbum, browseArtistTracks, sendAiSearch } from './apiClient';
+import { apiFetch, browseAlbum, browseArtistTracks, sendAiIntent, type AiIntentTrack } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { usePreferences } from './preferencesStore';
 import { useRouter } from './router';
@@ -71,10 +71,10 @@ type AiInterpretation = {
 };
 
 const AI_SEARCH_SUGGESTIONS = [
-  'Polish rock from the 80s',
-  'Something calm for a quiet evening',
-  'Upbeat electronic music from the 2000s',
-  'Jazz for a rainy afternoon',
+  'Play soft music',
+  'Play something calm for a quiet evening',
+  'Queue upbeat electronic music',
+  'Play jazz for a rainy afternoon',
 ];
 
 function getInitials(name: string) {
@@ -113,9 +113,11 @@ interface SearchModalProps {
   onClose: () => void;
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
   onAddToQueue?: (t: { id: number; title: string | null; artist: string | null }) => void;
+  onPlayAll?: (tracks: AiIntentTrack[]) => void;
+  onQueueAll?: (tracks: AiIntentTrack[]) => void;
 }
 
-export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchModalProps) {
+export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, onQueueAll }: SearchModalProps) {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
   const navigate = useRouter((s) => s.navigate);
@@ -254,21 +256,45 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
     setAiLoading(true);
     setAiError(null);
     try {
-      const result = await sendAiSearch(token, prompt);
+      const result = await sendAiIntent(token, prompt);
       setAiInterpretation({
         originalQuery: result.originalQuery,
         searchQuery: result.searchQuery,
         explanation: result.explanation,
       });
+
+      if (result.action === 'play' || result.action === 'queue') {
+        if (result.tracks.length === 0) {
+          setAiError(`No matching tracks were found in your permitted libraries. ${result.explanation}`);
+          return;
+        }
+
+        if (result.action === 'play') {
+          if (onPlayAll) onPlayAll(result.tracks);
+          else {
+            const first = result.tracks[0];
+            onPlay?.({ id: first.id, title: first.title, artist: first.displayArtist || first.artist });
+          }
+        } else if (onQueueAll) {
+          onQueueAll(result.tracks);
+        } else {
+          result.tracks.forEach((track) => {
+            onAddToQueue?.({ id: track.id, title: track.title, artist: track.displayArtist || track.artist });
+          });
+        }
+        onClose();
+        return;
+      }
+
       setQ(result.searchQuery);
       setMode('library');
     } catch (e: any) {
       if (e?.status === 401) clear();
-      setAiError(e?.data?.error || e?.message || 'AI search failed');
+      setAiError(e?.data?.error || e?.message || 'AI music request failed');
     } finally {
       setAiLoading(false);
     }
-  }, [aiPrompt, aiLoading, token, clear]);
+  }, [aiPrompt, aiLoading, token, clear, onPlayAll, onQueueAll, onPlay, onAddToQueue, onClose]);
 
   const handleNavigate = useCallback((route: Parameters<typeof navigate>[0]) => {
     navigate(route);
@@ -336,7 +362,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                 }
               }}
               placeholder={mode === 'ai'
-                ? 'Describe what you want to find...'
+                ? 'Try “play soft music” or describe a mood...'
                 : 'Search songs, artists, albums, podcasts...'}
               maxLength={mode === 'ai' ? 500 : undefined}
               className="min-w-0 flex-1 bg-transparent text-white text-base sm:text-lg placeholder-slate-500 focus:outline-none"
@@ -375,7 +401,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                   setTimeout(() => inputRef.current?.focus(), 0);
                 }}
                 className="flex-shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 transition-colors text-xs font-medium"
-                title="Search with natural language"
+                title="Play or search with natural language"
               >
                 <span aria-hidden="true">✨</span>
                 <span className="hidden sm:inline">Ask AI</span>
@@ -398,7 +424,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                   disabled={aiLoading || !aiPrompt.trim() || !openrouterConfigured}
                   className="flex-shrink-0 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 text-white transition-colors text-xs font-medium"
                 >
-                  Search
+                  Go
                 </button>
               </>
             )}
@@ -413,7 +439,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                     <div className="w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-400/20 flex items-center justify-center text-2xl mb-4">
                       🔑
                     </div>
-                    <h3 className="text-white font-semibold">Connect OpenRouter to use AI search</h3>
+                    <h3 className="text-white font-semibold">Connect OpenRouter to use AI music</h3>
                     <p className="text-sm text-slate-400 max-w-md mt-2">
                       Add your own API key in Settings. MVBar sends only the words you type here—not your library or listening data.
                     </p>
@@ -434,7 +460,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                     </div>
                     <h3 className="text-white font-semibold">Describe the music you want</h3>
                     <p className="text-sm text-slate-400 max-w-md mt-2">
-                      AI turns your request into a focused query, then MVBar searches your permitted libraries locally.
+                      Say “play” or “queue” and MVBar will understand the mood, tempo and style, choose matching tracks locally, and act immediately.
                     </p>
                     <div className="flex flex-wrap justify-center gap-2 mt-5">
                       {AI_SEARCH_SUGGESTIONS.map((suggestion) => (

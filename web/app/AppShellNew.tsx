@@ -1405,7 +1405,7 @@ export function AppShellNew() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
+  const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, addManyToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
   const nowPlaying = isOpen ? queue[index] ?? null : null;
 
   const token = useAuth((s) => s.token);
@@ -1938,6 +1938,20 @@ export function AppShellNew() {
         onClose={() => setSearchOpen(false)}
         onPlay={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
         onAddToQueue={(t) => addToQueue({ id: t.id, title: t.title, artist: t.artist })}
+        onPlayAll={(tracks) => setQueueAndPlay(tracks.map((t) => ({
+          id: t.id,
+          title: t.title,
+          artist: t.displayArtist || t.artist,
+          album: t.album,
+          duration_ms: t.durationMs,
+        })), 0)}
+        onQueueAll={(tracks) => addManyToQueue(tracks.map((t) => ({
+          id: t.id,
+          title: t.title,
+          artist: t.displayArtist || t.artist,
+          album: t.album,
+          duration_ms: t.durationMs,
+        })))}
       />
 
       <ToastContainer />

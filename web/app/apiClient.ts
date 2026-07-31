@@ -822,20 +822,43 @@ export async function getScanProgress(token: string) {
 }
 
 // =========================================================================
-// AI Search
+// AI Music
 // =========================================================================
 
-export interface AiSearchResponse {
+export interface AiIntentTrack {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  albumArtist: string | null;
+  displayArtist: string | null;
+  album: string | null;
+  path: string;
+  ext: string;
+  durationMs: number | null;
+}
+
+export interface AiIntentResponse {
   ok: boolean;
   model: string;
   originalQuery: string;
+  action: 'play' | 'queue' | 'search';
   searchQuery: string;
   explanation: string;
+  interpretation: {
+    moods: string[];
+    genres: string[];
+    avoid: string[];
+    energy: 'low' | 'medium' | 'high' | 'any';
+    bpmMin: number | null;
+    bpmMax: number | null;
+    targetBpm: number | null;
+  };
+  tracks: AiIntentTrack[];
 }
 
-export async function sendAiSearch(token: string, query: string): Promise<AiSearchResponse> {
-  return (await apiFetch('/ai/search', {
+export async function sendAiIntent(token: string, query: string): Promise<AiIntentResponse> {
+  return (await apiFetch('/ai/intent', {
     method: 'POST',
     body: JSON.stringify({ query }),
-  }, token)) as AiSearchResponse;
+  }, token)) as AiIntentResponse;
 }

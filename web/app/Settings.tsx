@@ -76,7 +76,7 @@ export function Settings() {
   const [subsonicError, setSubsonicError] = useState<string | null>(null);
   const [subsonicNotice, setSubsonicNotice] = useState<string | null>(null);
 
-  // OpenRouter AI search settings
+  // OpenRouter AI music settings
   const openrouterConfigured = usePreferences((s) => s.openrouterConfigured);
   const [orApiKey, setOrApiKey] = useState('');
   const [orLoading, setOrLoading] = useState(false);
@@ -659,12 +659,12 @@ export function Settings() {
                 ) : (
                   <span className="text-lg">✨</span>
                 )}
-                AI Search
+                AI Search & Play
               </h2>
 
               <p className="text-sm text-slate-400">
                 Connect your <a href="https://openrouter.ai" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">OpenRouter</a> account
-                to search your music library with natural-language requests. Only your search wording is sent to OpenRouter; your library stays inside MVBar.
+                to search, queue or play your music with natural-language requests. Only your wording is sent to OpenRouter; MVBar chooses tracks locally from your permitted libraries.
               </p>
 
               {openrouterConfigured ? (
@@ -675,7 +675,7 @@ export function Settings() {
                     </svg>
                     <div>
                       <div className="text-green-400 font-medium">Connected</div>
-                      <div className="text-sm text-slate-400">Choose Ask AI from the normal Search window.</div>
+                      <div className="text-sm text-slate-400">Choose Ask AI from Search, then try “play soft music”.</div>
                     </div>
                   </div>
                   <button
