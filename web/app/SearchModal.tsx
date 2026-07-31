@@ -9,6 +9,7 @@ import { useRouter } from './router';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { useUi, type PodcastEpisode } from './uiStore';
+import { useToastStore } from './Toast';
 
 type Hit = {
   id: number;
@@ -73,6 +74,7 @@ type AiInterpretation = {
 const AI_SEARCH_SUGGESTIONS = [
   'Play soft music',
   'Play British grunge and similar',
+  'Play 10 songs, each 10 minutes or longer',
   'Queue upbeat electronic music',
   'Play jazz for a rainy afternoon',
 ];
@@ -275,6 +277,12 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
             const first = result.tracks[0];
             onPlay?.({ id: first.id, title: first.title, artist: first.displayArtist || first.artist });
           }
+          useToastStore.getState().show(
+            result.tracks.length < result.requestedTrackCount
+              ? `Playing ${result.tracks.length} of ${result.requestedTrackCount} matching tracks`
+              : `Playing ${result.tracks.length} matching tracks`,
+            'success'
+          );
         } else if (onQueueAll) {
           onQueueAll(result.tracks);
         } else {

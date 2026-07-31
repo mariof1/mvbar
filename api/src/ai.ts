@@ -35,6 +35,8 @@ export type MusicIntent = {
   bpmMin: number | null;
   bpmMax: number | null;
   targetBpm: number | null;
+  minDurationMinutes: number | null;
+  maxDurationMinutes: number | null;
   trackCount: number;
   explanation: string;
 };
@@ -133,6 +135,69 @@ function boundedYear(value: unknown): number | null {
   return Math.round(Math.max(1900, Math.min(2100, parsed)));
 }
 
+function boundedMinutes(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.round(Math.max(0.25, Math.min(1_440, parsed)) * 100) / 100;
+}
+
+function durationValueInMinutes(value: string, unit: string): number {
+  const amount = Number(value);
+  if (/^h(?:our|ours|r|rs)?$/i.test(unit)) return amount * 60;
+  if (/^s(?:ec|ecs|econd|econds)?$/i.test(unit)) return amount / 60;
+  return amount;
+}
+
+function fallbackQuantityAndDuration(query: string): {
+  trackCount: number;
+  minDurationMinutes: number | null;
+  maxDurationMinutes: number | null;
+  semanticWords: string[];
+} {
+  const semanticWords: string[] = [];
+  const countMatch = query.match(/\b(\d{1,3})\s*(?:songs?|tracks?)\b/i);
+  const trackCount = countMatch ? Math.max(1, Math.min(100, Number(countMatch[1]))) : 24;
+  if (countMatch) semanticWords.push(countMatch[0]);
+
+  const number = '(\\d+(?:\\.\\d+)?)';
+  const unit = '(hours?|hrs?|h|minutes?|mins?|min|m|seconds?|secs?|sec|s)';
+  const range = new RegExp(`\\b(?:between\\s+)?${number}\\s*(?:and|to|-)\\s*${number}\\s*${unit}\\b`, 'i');
+  const minimumPrefix = new RegExp(`\\b(?:at\\s+least|minimum(?:\\s+of)?|over|more\\s+than|longer\\s+than)\\s+${number}\\s*${unit}\\b`, 'i');
+  const minimumSuffix = new RegExp(`\\b${number}\\s*${unit}\\s*(?:or\\s+(?:over|more|longer)|and\\s+(?:over|up)|minimum|\\+)`, 'i');
+  const maximumPrefix = new RegExp(`\\b(?:under|less\\s+than|shorter\\s+than|no\\s+more\\s+than|up\\s+to|at\\s+most)\\s+${number}\\s*${unit}\\b`, 'i');
+  const maximumSuffix = new RegExp(`\\b${number}\\s*${unit}\\s*(?:or\\s+(?:less|under|shorter)|maximum)`, 'i');
+
+  let minDurationMinutes: number | null = null;
+  let maxDurationMinutes: number | null = null;
+  const rangeMatch = query.match(range);
+  if (rangeMatch) {
+    const first = durationValueInMinutes(rangeMatch[1], rangeMatch[3]);
+    const second = durationValueInMinutes(rangeMatch[2], rangeMatch[3]);
+    minDurationMinutes = Math.min(first, second);
+    maxDurationMinutes = Math.max(first, second);
+    semanticWords.push(rangeMatch[0]);
+  } else {
+    const minMatch = query.match(minimumPrefix) || query.match(minimumSuffix);
+    const maxMatch = query.match(maximumPrefix) || query.match(maximumSuffix);
+    if (minMatch) {
+      minDurationMinutes = durationValueInMinutes(minMatch[1], minMatch[2]);
+      semanticWords.push(minMatch[0]);
+    }
+    if (maxMatch) {
+      maxDurationMinutes = durationValueInMinutes(maxMatch[1], maxMatch[2]);
+      semanticWords.push(maxMatch[0]);
+    }
+  }
+
+  return {
+    trackCount,
+    minDurationMinutes: boundedMinutes(minDurationMinutes),
+    maxDurationMinutes: boundedMinutes(maxDurationMinutes),
+    semanticWords,
+  };
+}
+
 function canonicalCountry(value: string): string {
   const normalized = normalizedTerm(value);
   return COUNTRY_ALIASES[normalized] || normalized;
@@ -194,6 +259,7 @@ function textQueryWithoutFiller(query: string, semanticWords: string[]): string 
 
 export function fallbackMusicIntent(query: string): MusicIntent {
   const lower = query.toLowerCase();
+  const quantityAndDuration = fallbackQuantityAndDuration(query);
   let moods: string[] = [];
   let genres: string[] = [];
   let relatedGenres: string[] = [];
@@ -327,6 +393,7 @@ export function fallbackMusicIntent(query: string): MusicIntent {
 
   const includeSimilar = /\b(?:similar|related|adjacent|like this|more like|in the vein of|in the style of)\b/i.test(query);
   if (includeSimilar) semanticWords.push('similar', 'related', 'adjacent', 'like this', 'more like', 'in the vein of', 'in the style of');
+  semanticWords.push(...quantityAndDuration.semanticWords, 'each');
 
   const textQuery = textQueryWithoutFiller(query, semanticWords);
   const searchQuery = cleanText([textQuery, countries[0], genres[0] || moods[0]].filter(Boolean).join(' '), 200) || cleanText(query, 200);
@@ -352,7 +419,9 @@ export function fallbackMusicIntent(query: string): MusicIntent {
     bpmMin,
     bpmMax,
     targetBpm,
-    trackCount: 24,
+    minDurationMinutes: quantityAndDuration.minDurationMinutes,
+    maxDurationMinutes: quantityAndDuration.maxDurationMinutes,
+    trackCount: quantityAndDuration.trackCount,
     explanation: `Interpreted this as ${concept}.`,
   };
 }
@@ -377,6 +446,9 @@ function applyEnergyDefaults(intent: MusicIntent): MusicIntent {
   }
   if (intent.yearStart !== null && intent.yearEnd !== null && intent.yearStart > intent.yearEnd) {
     [intent.yearStart, intent.yearEnd] = [intent.yearEnd, intent.yearStart];
+  }
+  if (intent.minDurationMinutes !== null && intent.maxDurationMinutes !== null && intent.minDurationMinutes > intent.maxDurationMinutes) {
+    [intent.minDurationMinutes, intent.maxDurationMinutes] = [intent.maxDurationMinutes, intent.minDurationMinutes];
   }
   return intent;
 }
@@ -433,7 +505,9 @@ export function parseMusicIntent(content: string, fallbackQuery: string): MusicI
       bpmMin: boundedBpm(parsed.bpmMin) ?? fallback.bpmMin,
       bpmMax: boundedBpm(parsed.bpmMax) ?? fallback.bpmMax,
       targetBpm: boundedBpm(parsed.targetBpm) ?? fallback.targetBpm,
-      trackCount: Number.isFinite(trackCountRaw) ? Math.max(5, Math.min(50, Math.round(trackCountRaw))) : fallback.trackCount,
+      minDurationMinutes: boundedMinutes(parsed.minDurationMinutes) ?? fallback.minDurationMinutes,
+      maxDurationMinutes: boundedMinutes(parsed.maxDurationMinutes) ?? fallback.maxDurationMinutes,
+      trackCount: Number.isFinite(trackCountRaw) ? Math.max(1, Math.min(100, Math.round(trackCountRaw))) : fallback.trackCount,
       explanation: cleanText(typeof parsed.explanation === 'string' ? parsed.explanation : fallback.explanation, 300) || fallback.explanation,
     });
   } catch {
@@ -596,6 +670,15 @@ function deterministicNoise(id: number, seed: string): number {
   return (hash >>> 0) / 0xffffffff;
 }
 
+export function matchesDurationConstraints(candidate: Pick<SemanticCandidate, 'durationMs'>, intent: MusicIntent): boolean {
+  if (intent.minDurationMinutes === null && intent.maxDurationMinutes === null) return true;
+  const durationMs = Number(candidate.durationMs);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return false;
+  if (intent.minDurationMinutes !== null && durationMs < intent.minDurationMinutes * 60_000) return false;
+  if (intent.maxDurationMinutes !== null && durationMs > intent.maxDurationMinutes * 60_000) return false;
+  return true;
+}
+
 export function chooseSemanticTracks(
   candidates: SemanticCandidate[],
   intent: MusicIntent,
@@ -603,6 +686,7 @@ export function chooseSemanticTracks(
   now = Date.now()
 ): AiTrack[] {
   const ranked = candidates
+    .filter((track) => matchesDurationConstraints(track, intent))
     .map((track) => ({ track, score: scoreSemanticCandidate(track, intent, now) + deterministicNoise(track.id, seed) * 2 }))
     .sort((a, b) => b.score - a.score);
 
@@ -691,6 +775,7 @@ async function loadSemanticCandidates(
 ): Promise<SemanticCandidate[]> {
   const params: unknown[] = [userId];
   const accessConditions: string[] = [];
+  const hardConditions: string[] = [];
   const matchConditions: string[] = [];
   const priorityConditions: Array<{ sql: string; weight: number }> = [];
 
@@ -702,6 +787,15 @@ async function loadSemanticCandidates(
   if (allowed !== null) {
     params.push(allowed);
     accessConditions.push(`t.library_id = any($${params.length}::bigint[])`);
+  }
+
+  if (intent.minDurationMinutes !== null) {
+    params.push(Math.round(intent.minDurationMinutes * 60_000));
+    hardConditions.push(`t.duration_ms >= $${params.length}`);
+  }
+  if (intent.maxDurationMinutes !== null) {
+    params.push(Math.round(intent.maxDurationMinutes * 60_000));
+    hardConditions.push(`t.duration_ms <= $${params.length}`);
   }
 
   const primaryGenrePatterns = patternsForTerms(intent.genres);
@@ -804,6 +898,7 @@ async function loadSemanticCandidates(
   const seedParam = params.length;
   const whereParts = [
     ...accessConditions,
+    ...hardConditions,
     ...(matchConditions.length > 0 ? [`(${matchConditions.join(' or ')})`] : []),
   ];
   const databasePriority = priorityConditions.length > 0
@@ -932,11 +1027,15 @@ async function requestMusicIntent(apiKey: string, model: string, query: string, 
             'Never invent an artist. Leave all artist arrays empty when uncertain.',
             'textQuery contains only an explicitly named song or album not represented elsewhere; otherwise it is empty.',
             'Set includeSimilar when the user says similar, related, adjacent, in the vein of, or equivalent wording.',
+            'Honor requested quantities exactly in trackCount, from 1 to 100. Use 24 only when no quantity is requested.',
+            'minDurationMinutes and maxDurationMinutes are hard per-track constraints, not total playlist duration.',
+            'Interpret over/at least/or longer as a minimum; under/up to/or shorter as a maximum; and ranges as both.',
             'Choose action play for requests such as play, put on, start or give me; queue for add/queue; search otherwise.',
             'For "play soft music", use low energy, roughly 50-105 BPM, moods such as gentle/calm/mellow/soothing,',
             'genres such as ambient/acoustic/downtempo/folk/classical/smooth jazz, and avoid aggressive genres.',
             'For "play British grunge and similar", use grunge as the primary genre; post-grunge, alternative rock, noise rock,',
             'garage rock and sludge rock as related genres; United Kingdom with prefer mode; includeSimilar true; and only factual UK scene references.',
+            'For "play 10 songs each 10 minutes or over", set trackCount 10, minDurationMinutes 10 and maxDurationMinutes null.',
             'Return 20-30 tracks by default and explain the musical interpretation briefly.',
           ].join(' '),
         },
@@ -969,14 +1068,17 @@ async function requestMusicIntent(apiKey: string, model: string, query: string, 
               bpmMin: { type: ['number', 'null'] },
               bpmMax: { type: ['number', 'null'] },
               targetBpm: { type: ['number', 'null'] },
-              trackCount: { type: 'number' },
+              minDurationMinutes: { type: ['number', 'null'], description: 'Hard minimum duration of every selected track.' },
+              maxDurationMinutes: { type: ['number', 'null'], description: 'Hard maximum duration of every selected track.' },
+              trackCount: { type: 'number', minimum: 1, maximum: 100 },
               explanation: { type: 'string' },
             },
             required: [
               'action', 'textQuery', 'searchQuery', 'moods', 'genres', 'relatedGenres',
               'countries', 'countryMode', 'yearStart', 'yearEnd', 'namedArtists',
               'similarToArtists', 'referenceArtists', 'includeSimilar', 'avoid',
-              'energy', 'bpmMin', 'bpmMax', 'targetBpm', 'trackCount', 'explanation',
+              'energy', 'bpmMin', 'bpmMax', 'targetBpm', 'minDurationMinutes',
+              'maxDurationMinutes', 'trackCount', 'explanation',
             ],
             additionalProperties: false,
           },
@@ -1047,6 +1149,7 @@ export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
         model,
         originalQuery: query,
         action: intent.action,
+        requestedTrackCount: intent.trackCount,
         searchQuery: intent.searchQuery,
         explanation: intent.explanation,
         interpretation: {
@@ -1067,6 +1170,8 @@ export const aiPlugin: FastifyPluginAsync = fp(async (app) => {
           bpmMin: intent.bpmMin,
           bpmMax: intent.bpmMax,
           targetBpm: intent.targetBpm,
+          minDurationMinutes: intent.minDurationMinutes,
+          maxDurationMinutes: intent.maxDurationMinutes,
         },
         tracks,
       };

@@ -842,6 +842,7 @@ export interface AiIntentResponse {
   model: string;
   originalQuery: string;
   action: 'play' | 'queue' | 'search';
+  requestedTrackCount: number;
   searchQuery: string;
   explanation: string;
   interpretation: {
@@ -862,6 +863,8 @@ export interface AiIntentResponse {
     bpmMin: number | null;
     bpmMax: number | null;
     targetBpm: number | null;
+    minDurationMinutes: number | null;
+    maxDurationMinutes: number | null;
   };
   tracks: AiIntentTrack[];
 }

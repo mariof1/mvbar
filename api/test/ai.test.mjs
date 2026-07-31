@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   chooseSemanticTracks,
   fallbackMusicIntent,
+  matchesDurationConstraints,
   normalizeCountryTerms,
   parseMusicIntent,
   scoreSemanticCandidate,
@@ -39,6 +40,8 @@ test('parseMusicIntent accepts a structured OpenRouter response', () => {
     bpmMin: 50,
     bpmMax: 100,
     targetBpm: 72,
+    minDurationMinutes: null,
+    maxDurationMinutes: null,
     trackCount: 20,
     explanation: 'Selected gentle, low-energy music.',
   }), 'queue soft music');
@@ -65,6 +68,27 @@ test('fallbackMusicIntent decomposes British grunge and similar into provenance 
 
 test('country normalization treats UK nations and nationality aliases as one provenance group', () => {
   assert.deepEqual(normalizeCountryTerms(['British', 'England', 'United Kingdom']), ['united kingdom']);
+});
+
+test('fallbackMusicIntent understands exact count and per-track minimum duration', () => {
+  const intent = fallbackMusicIntent('play 10 songs each 10mins or over');
+  assert.equal(intent.action, 'play');
+  assert.equal(intent.textQuery, '');
+  assert.equal(intent.trackCount, 10);
+  assert.equal(intent.minDurationMinutes, 10);
+  assert.equal(intent.maxDurationMinutes, null);
+});
+
+test('fallbackMusicIntent understands duration maximums and ranges', () => {
+  const short = fallbackMusicIntent('queue 6 tracks under 4 minutes');
+  assert.equal(short.trackCount, 6);
+  assert.equal(short.minDurationMinutes, null);
+  assert.equal(short.maxDurationMinutes, 4);
+
+  const range = fallbackMusicIntent('play 8 songs between 5 and 9 minutes');
+  assert.equal(range.trackCount, 8);
+  assert.equal(range.minDurationMinutes, 5);
+  assert.equal(range.maxDurationMinutes, 9);
 });
 
 test('parseMusicIntent safely falls back when the response is invalid', () => {
@@ -134,6 +158,26 @@ test('semantic scoring recognizes reference and Last.fm-similar artists without 
 
   assert.ok(scoreSemanticCandidate(bush, intent) > scoreSemanticCandidate(kateBush, intent));
   assert.ok(scoreSemanticCandidate(feeder, intent) > scoreSemanticCandidate(kateBush, intent));
+});
+
+test('duration constraints are hard filters for every selected track', () => {
+  const intent = {
+    ...fallbackMusicIntent('play 10 songs each 10mins or over'),
+    trackCount: 10,
+  };
+  assert.equal(matchesDurationConstraints(candidate({ durationMs: 10 * 60_000 }), intent), true);
+  assert.equal(matchesDurationConstraints(candidate({ durationMs: 9 * 60_000 + 59_000 }), intent), false);
+  assert.equal(matchesDurationConstraints(candidate({ durationMs: null }), intent), false);
+
+  const candidates = Array.from({ length: 14 }, (_, index) => candidate({
+    id: index + 1,
+    artist: `Artist ${index}`,
+    displayArtist: `Artist ${index}`,
+    durationMs: (index < 3 ? 8 : 10 + index) * 60_000,
+  }));
+  const tracks = chooseSemanticTracks(candidates, intent, 'duration-test');
+  assert.equal(tracks.length, 10);
+  assert.ok(tracks.every((track) => Number(track.durationMs) >= 10 * 60_000));
 });
 
 test('semantic selection returns a varied playable queue', () => {
