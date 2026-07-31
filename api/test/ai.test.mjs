@@ -4,6 +4,7 @@ import {
   chooseSemanticTracks,
   fallbackMusicIntent,
   matchesDurationConstraints,
+  matchesSemanticConstraints,
   normalizeCountryTerms,
   parseMusicIntent,
   scoreSemanticCandidate,
@@ -27,6 +28,7 @@ test('parseMusicIntent accepts a structured OpenRouter response', () => {
     moods: ['gentle', 'calm'],
     genres: ['ambient', 'acoustic'],
     relatedGenres: ['downtempo'],
+    requireGenreMatch: false,
     countries: [],
     countryMode: 'any',
     yearStart: null,
@@ -64,6 +66,40 @@ test('fallbackMusicIntent decomposes British grunge and similar into provenance 
   assert.equal(intent.yearStart, 1990);
   assert.equal(intent.yearEnd, 1999);
   assert.equal(intent.includeSimilar, true);
+});
+
+test('fallbackMusicIntent treats country western as a genre rather than a text search', () => {
+  const intent = fallbackMusicIntent('play country western');
+  assert.equal(intent.action, 'play');
+  assert.equal(intent.textQuery, '');
+  assert.ok(intent.genres.includes('country'));
+  assert.ok(intent.genres.includes('country western'));
+  assert.ok(intent.relatedGenres.includes('honky tonk'));
+  assert.ok(intent.relatedGenres.includes('western swing'));
+  assert.equal(intent.requireGenreMatch, true);
+  assert.ok(intent.avoid.includes('industrial'));
+  assert.ok(intent.avoid.includes('metal'));
+});
+
+test('country-western safeguards override an overly broad model interpretation', () => {
+  const intent = parseMusicIntent(JSON.stringify({
+    action: 'play',
+    textQuery: 'country western',
+    genres: ['country', 'rock'],
+    relatedGenres: ['western swing', 'rock', 'pop'],
+    requireGenreMatch: false,
+    moods: ['rustic', 'rebellious'],
+    avoid: [],
+    trackCount: 24,
+  }), 'play country western');
+
+  assert.equal(intent.textQuery, '');
+  assert.equal(intent.requireGenreMatch, true);
+  assert.equal(intent.genres.includes('rock'), false);
+  assert.ok(intent.relatedGenres.includes('western swing'));
+  assert.equal(intent.relatedGenres.includes('rock'), false);
+  assert.equal(intent.relatedGenres.includes('pop'), false);
+  assert.ok(intent.avoid.includes('industrial'));
 });
 
 test('country normalization treats UK nations and nationality aliases as one provenance group', () => {
@@ -158,6 +194,26 @@ test('semantic scoring recognizes reference and Last.fm-similar artists without 
 
   assert.ok(scoreSemanticCandidate(bush, intent) > scoreSemanticCandidate(kateBush, intent));
   assert.ok(scoreSemanticCandidate(feeder, intent) > scoreSemanticCandidate(kateBush, intent));
+});
+
+test('semantic selection never fills a country-western queue with unrelated music', () => {
+  const intent = {
+    ...fallbackMusicIntent('play country western'),
+    moods: ['rustic', 'rebellious'],
+    trackCount: 8,
+  };
+  const candidates = [
+    candidate({ id: 1, artist: 'Country Artist', genre: 'Country', bpm: 102 }),
+    candidate({ id: 2, artist: 'Western Artist', genre: 'Western Swing', bpm: 110 }),
+    candidate({ id: 3, artist: 'Roots Artist', genre: 'Americana', bpm: 96 }),
+    candidate({ id: 4, artist: 'Marilyn Manson', genre: 'Industrial Metal;Shock Rock', bpm: 104, playCount: 500, isFavorite: true }),
+    candidate({ id: 5, artist: 'Pop Artist', genre: 'Dance Pop', mood: 'rustic;rebellious', bpm: 104, playCount: 500, isFavorite: true }),
+  ];
+
+  assert.equal(matchesSemanticConstraints(candidates[3], intent), false);
+  assert.equal(matchesSemanticConstraints(candidates[4], intent), false);
+  const tracks = chooseSemanticTracks(candidates, intent, 'country-western-test');
+  assert.deepEqual(new Set(tracks.map((track) => track.id)), new Set([1, 2, 3]));
 });
 
 test('duration constraints are hard filters for every selected track', () => {
