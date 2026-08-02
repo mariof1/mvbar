@@ -820,3 +820,56 @@ export type ScanProgress = {
 export async function getScanProgress(token: string) {
   return (await apiFetch('/scan/progress', { method: 'GET' }, token)) as ScanProgress;
 }
+
+// =========================================================================
+// AI Music
+// =========================================================================
+
+export interface AiIntentTrack {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  albumArtist: string | null;
+  displayArtist: string | null;
+  album: string | null;
+  path: string;
+  ext: string;
+  durationMs: number | null;
+}
+
+export interface AiIntentResponse {
+  ok: boolean;
+  provider: 'audiomuse';
+  model: string;
+  originalQuery: string;
+  action: 'play' | 'queue' | 'search';
+  requestedTrackCount: number;
+  searchQuery: string;
+  explanation: string;
+  sonicAnalysis: {
+    query: string;
+    candidateCount: number;
+    confidenceFloor: number | null;
+    minDurationMinutes: number | null;
+    maxDurationMinutes: number | null;
+  };
+  tracks: AiIntentTrack[];
+}
+
+export async function sendAiIntent(token: string, query: string): Promise<AiIntentResponse> {
+  return (await apiFetch('/ai/intent', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  }, token)) as AiIntentResponse;
+}
+
+export async function getAudioMuseStatus(token: string) {
+  return (await apiFetch('/ai/status', { method: 'GET' }, token)) as {
+    ok: boolean;
+    configured: boolean;
+    reachable: boolean;
+    ready: boolean;
+    analyzedTracks: number;
+    error?: string;
+  };
+}

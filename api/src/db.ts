@@ -833,6 +833,9 @@ export async function initDb() {
     );
   `);
 
+  await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS audiomuse_url text`);
+  await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS audiomuse_api_token text`);
+
   // ========================================================================
   // POPULATE ASCII NAMES FOR ARTISTS (one-time migration - runs in background)
   // ========================================================================

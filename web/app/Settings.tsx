@@ -10,6 +10,7 @@ import {
   getSubsonicSettings,
   setSubsonicPassword,
   clearSubsonicPassword,
+  getAudioMuseStatus,
 } from './apiClient';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
@@ -75,6 +76,28 @@ export function Settings() {
   const [subsonicLoading, setSubsonicLoading] = useState(false);
   const [subsonicError, setSubsonicError] = useState<string | null>(null);
   const [subsonicNotice, setSubsonicNotice] = useState<string | null>(null);
+
+  // AudioMuse-AI sonic search settings
+  const audiomuseConfigured = usePreferences((s) => s.audiomuseConfigured);
+  const audiomuseTokenConfigured = usePreferences((s) => s.audiomuseTokenConfigured);
+  const savedAudioMuseUrl = usePreferences((s) => s.audiomuseUrl);
+  const [amUrl, setAmUrl] = useState('http://127.0.0.1:8000');
+  const [amToken, setAmToken] = useState('');
+  const [amLoading, setAmLoading] = useState(false);
+  const [amError, setAmError] = useState<string | null>(null);
+  const [amStatus, setAmStatus] = useState<{ reachable: boolean; ready: boolean; analyzedTracks: number } | null>(null);
+
+  useEffect(() => {
+    setAmUrl(savedAudioMuseUrl || 'http://127.0.0.1:8000');
+  }, [savedAudioMuseUrl]);
+
+  useEffect(() => {
+    const requestedTab = window.sessionStorage.getItem('mvbar_settings_tab');
+    if (requestedTab === 'account' || requestedTab === 'playback' || requestedTab === 'integrations' || requestedTab === 'about') {
+      setActiveTab(requestedTab);
+    }
+    window.sessionStorage.removeItem('mvbar_settings_tab');
+  }, []);
 
   // Load profile
   const loadProfile = async () => {
@@ -632,6 +655,168 @@ export function Settings() {
                 )}
                 {subsonicNotice && <div className="text-green-400 text-sm">{subsonicNotice}</div>}
                 {subsonicError && <div className="text-red-400 text-sm">{subsonicError}</div>}
+              </div>
+            </section>
+
+            {/* AudioMuse-AI */}
+            <section className="bg-slate-800/50 rounded-xl p-6 space-y-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                    <span className="text-lg">🎧</span>
+                    AudioMuse-AI sonic search
+                  </h2>
+                  <p className="text-sm text-slate-400 mt-2 max-w-3xl">
+                    Replaces cloud AI providers with local analysis of the recordings themselves. AudioMuse-AI&apos;s DCLAP model matches phrases such as “soft music” or “country western” against actual sound, so incorrect library tags do not control the result.
+                  </p>
+                </div>
+                <span className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap ${
+                  amStatus?.ready
+                    ? 'bg-emerald-500/15 text-emerald-300'
+                    : audiomuseConfigured
+                      ? 'bg-amber-500/15 text-amber-300'
+                      : 'bg-slate-700 text-slate-400'
+                }`}>
+                  {amStatus?.ready ? 'Ready' : audiomuseConfigured ? 'Configured' : 'Not connected'}
+                </span>
+              </div>
+
+              <div className="rounded-xl border border-violet-400/20 bg-violet-500/5 p-4 space-y-4">
+                <div className="grid gap-3 md:grid-cols-[1fr_1fr]">
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-medium text-slate-300">Native AudioMuse-AI URL</span>
+                    <input
+                      type="url"
+                      value={amUrl}
+                      onChange={(e) => setAmUrl(e.target.value)}
+                      maxLength={500}
+                      placeholder="http://127.0.0.1:8000"
+                      className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-violet-500"
+                    />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-medium text-slate-300">
+                      API token {audiomuseTokenConfigured && <span className="text-emerald-400">(saved; leave blank to keep)</span>}
+                    </span>
+                    <input
+                      type="password"
+                      value={amToken}
+                      onChange={(e) => setAmToken(e.target.value)}
+                      maxLength={500}
+                      placeholder={audiomuseTokenConfigured ? 'Saved token' : 'AudioMuse-AI API_TOKEN'}
+                      className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-violet-500"
+                    />
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={async () => {
+                      if (!token || !amUrl.trim()) return;
+                      setAmLoading(true);
+                      setAmError(null);
+                      setAmStatus(null);
+                      try {
+                        const updates: { audiomuse_url: string; audiomuse_api_token?: string } = { audiomuse_url: amUrl.trim() };
+                        if (amToken.trim()) updates.audiomuse_api_token = amToken.trim();
+                        const saved = await updatePreferences(token, updates);
+                        if (!saved) throw new Error('Failed to save AudioMuse-AI settings');
+                        setAmToken('');
+                        const status = await getAudioMuseStatus(token);
+                        setAmStatus(status);
+                        if (!status.reachable) setAmError(status.error || 'AudioMuse-AI is not reachable.');
+                        else if (!status.ready) setAmError('Connected, but the CLAP index is not ready. Run song analysis in AudioMuse-AI.');
+                      } catch (e) {
+                        setAmError(e instanceof Error ? e.message : 'AudioMuse-AI connection failed');
+                      } finally {
+                        setAmLoading(false);
+                      }
+                    }}
+                    disabled={amLoading || !amUrl.trim()}
+                    className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors"
+                  >
+                    {amLoading ? 'Checking...' : 'Save & test'}
+                  </button>
+                  {audiomuseConfigured && (
+                    <button
+                      onClick={async () => {
+                        if (!token) return;
+                        setAmLoading(true);
+                        setAmError(null);
+                        try {
+                          const status = await getAudioMuseStatus(token);
+                          setAmStatus(status);
+                          if (!status.reachable) setAmError(status.error || 'AudioMuse-AI is not reachable.');
+                          else if (!status.ready) setAmError('Connected, but song analysis is not ready.');
+                        } catch (e) {
+                          setAmError(e instanceof Error ? e.message : 'AudioMuse-AI connection failed');
+                        } finally {
+                          setAmLoading(false);
+                        }
+                      }}
+                      disabled={amLoading}
+                      className="px-4 py-2 bg-white/5 hover:bg-white/10 text-slate-200 rounded-lg transition-colors"
+                    >
+                      Test again
+                    </button>
+                  )}
+                  {audiomuseConfigured && (
+                    <button
+                      onClick={async () => {
+                        if (!token) return;
+                        setAmLoading(true);
+                        setAmError(null);
+                        try {
+                          const saved = await updatePreferences(token, { audiomuse_url: '', audiomuse_api_token: '' });
+                          if (!saved) setAmError('Failed to disconnect AudioMuse-AI');
+                          else setAmStatus(null);
+                        } catch (e) {
+                          setAmError(e instanceof Error ? e.message : 'Failed to disconnect AudioMuse-AI');
+                        } finally {
+                          setAmLoading(false);
+                        }
+                      }}
+                      disabled={amLoading}
+                      className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
+                    >
+                      Disconnect
+                    </button>
+                  )}
+                  <a
+                    href="https://github.com/NeptuneHub/AudioMuse-AI/releases/latest"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2 bg-white/5 hover:bg-white/10 text-cyan-300 rounded-lg transition-colors"
+                  >
+                    Download native Windows app
+                  </a>
+                  <a
+                    href={savedAudioMuseUrl || 'http://127.0.0.1:8000'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2 bg-white/5 hover:bg-white/10 text-cyan-300 rounded-lg transition-colors"
+                  >
+                    Open AudioMuse-AI
+                  </a>
+                </div>
+
+                {amStatus?.ready && (
+                  <div className="text-sm text-emerald-300">
+                    Ready — {amStatus.analyzedTracks.toLocaleString()} analyzed tracks in the CLAP index.
+                  </div>
+                )}
+                {amError && <div className="text-sm text-amber-300">{amError}</div>}
+              </div>
+
+              <div className="rounded-lg bg-slate-900/60 border border-slate-700/60 p-4 text-xs text-slate-400 space-y-2">
+                <div className="font-medium text-slate-200">One-time native setup</div>
+                <ol className="list-decimal pl-5 space-y-1">
+                  <li>Install and start the AudioMuse-AI Windows release—Docker is not required.</li>
+                  <li>In its setup wizard, add a Navidrome/OpenSubsonic server pointing to this MVBar server address (normally <span className="text-slate-200">http://127.0.0.1:8080</span> on the standalone PC).</li>
+                  <li>Use your MVBar OpenSubsonic username/password from the integration below, enable CLAP, then run the initial song analysis.</li>
+                  <li>Copy AudioMuse-AI&apos;s API token here and choose Save &amp; test.</li>
+                </ol>
+                <p>All sonic inference stays local. MVBar sends only your search phrase to your AudioMuse-AI instance and accepts only track IDs the signed-in user can access.</p>
               </div>
             </section>
 

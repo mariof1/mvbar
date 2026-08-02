@@ -2,12 +2,14 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from './store';
-import { apiFetch, browseAlbum, browseArtistTracks } from './apiClient';
+import { apiFetch, browseAlbum, browseArtistTracks, sendAiIntent, type AiIntentTrack } from './apiClient';
 import { useFavorites } from './favoritesStore';
+import { usePreferences } from './preferencesStore';
 import { useRouter } from './router';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { useUi, type PodcastEpisode } from './uiStore';
+import { useToastStore } from './Toast';
 
 type Hit = {
   id: number;
@@ -61,6 +63,25 @@ type PodcastEpisodeHit = PodcastEpisode & {
   podcast_image_path?: string | null;
 };
 
+type SearchMode = 'library' | 'ai';
+
+type AiInterpretation = {
+  originalQuery: string;
+  searchQuery: string;
+  explanation: string;
+  model: string;
+  candidateCount: number;
+  confidenceFloor: number | null;
+};
+
+const SONIC_SEARCH_SUGGESTIONS = [
+  'Play soft music',
+  'Play British grunge and similar',
+  'Play 10 songs, each 10 minutes or longer',
+  'Queue upbeat electronic music',
+  'Play jazz for a rainy afternoon',
+];
+
 function getInitials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   const a = parts[0]?.[0] ?? '?';
@@ -97,19 +118,27 @@ interface SearchModalProps {
   onClose: () => void;
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
   onAddToQueue?: (t: { id: number; title: string | null; artist: string | null }) => void;
+  onPlayAll?: (tracks: AiIntentTrack[]) => void;
+  onQueueAll?: (tracks: AiIntentTrack[]) => void;
 }
 
-export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchModalProps) {
+export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, onQueueAll }: SearchModalProps) {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
   const navigate = useRouter((s) => s.navigate);
   const setPodcastEpisode = useUi((s) => s.setPodcastEpisode);
   const favIds = useFavorites((s) => s.ids);
   const toggleFav = useFavorites((s) => s.toggle);
+  const audiomuseConfigured = usePreferences((s) => s.audiomuseConfigured);
   const lastUpdate = useLibraryUpdates((s) => s.lastUpdate);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const [mode, setMode] = useState<SearchMode>('library');
   const [q, setQ] = useState('');
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiInterpretation, setAiInterpretation] = useState<AiInterpretation | null>(null);
   const [hits, setHits] = useState<Hit[]>([]);
   const [artistHits, setArtistHits] = useState<ArtistHit[]>([]);
   const [albumHits, setAlbumHits] = useState<AlbumHit[]>([]);
@@ -141,6 +170,11 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
         setPodcastHits([]);
         setPodcastEpisodeHits([]);
         setError(null);
+        setMode('library');
+        setAiPrompt('');
+        setAiLoading(false);
+        setAiError(null);
+        setAiInterpretation(null);
       }, 150);
       return () => clearTimeout(t);
     }
@@ -168,7 +202,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
 
   // Search API call (debounced)
   useEffect(() => {
-    if (!isOpen || !token || q.trim().length === 0) {
+    if (!isOpen || mode !== 'library' || !token || q.trim().length === 0) {
       if (q.trim().length === 0) {
         setHits([]);
         setArtistHits([]);
@@ -218,7 +252,63 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
       }
     }, 200);
     return () => clearTimeout(id);
-  }, [q, isOpen, token, clear, lastUpdate]);
+  }, [q, mode, isOpen, token, clear, lastUpdate]);
+
+  const handleAiSearch = useCallback(async () => {
+    const prompt = aiPrompt.trim();
+    if (!token || !prompt || aiLoading) return;
+
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const result = await sendAiIntent(token, prompt);
+      setAiInterpretation({
+        originalQuery: result.originalQuery,
+        searchQuery: result.searchQuery,
+        explanation: result.explanation,
+        model: result.model,
+        candidateCount: result.sonicAnalysis.candidateCount,
+        confidenceFloor: result.sonicAnalysis.confidenceFloor,
+      });
+
+      if (result.action === 'play' || result.action === 'queue') {
+        if (result.tracks.length === 0) {
+          setAiError(`No matching tracks were found in your permitted libraries. ${result.explanation}`);
+          return;
+        }
+
+        if (result.action === 'play') {
+          if (onPlayAll) onPlayAll(result.tracks);
+          else {
+            const first = result.tracks[0];
+            onPlay?.({ id: first.id, title: first.title, artist: first.displayArtist || first.artist });
+          }
+          useToastStore.getState().show(
+            result.tracks.length < result.requestedTrackCount
+              ? `Sonic match: playing ${result.tracks.length} of ${result.requestedTrackCount} tracks`
+              : `Sonic match: playing ${result.tracks.length} tracks`,
+            'success'
+          );
+        } else if (onQueueAll) {
+          onQueueAll(result.tracks);
+        } else {
+          result.tracks.forEach((track) => {
+            onAddToQueue?.({ id: track.id, title: track.title, artist: track.displayArtist || track.artist });
+          });
+        }
+        onClose();
+        return;
+      }
+
+      setQ(result.searchQuery);
+      setMode('library');
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      setAiError(e?.data?.error || e?.message || 'Sonic music search failed');
+    } finally {
+      setAiLoading(false);
+    }
+  }, [aiPrompt, aiLoading, token, clear, onPlayAll, onQueueAll, onPlay, onAddToQueue, onClose]);
 
   const handleNavigate = useCallback((route: Parameters<typeof navigate>[0]) => {
     navigate(route);
@@ -259,39 +349,190 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
       >
         <div className="glass rounded-2xl border border-white/10 shadow-2xl shadow-black/50 overflow-hidden">
           {/* Search Input */}
-          <div className="flex items-center gap-3 px-5 py-4 border-b border-white/10">
-            <svg className="w-5 h-5 text-cyan-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
+          <div className="flex items-center gap-2 sm:gap-3 px-4 sm:px-5 py-4 border-b border-white/10">
+            {mode === 'ai' ? (
+              <span className="w-5 text-lg leading-none text-center flex-shrink-0" aria-hidden="true">✨</span>
+            ) : (
+              <svg className="w-5 h-5 text-cyan-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            )}
             <input
               ref={inputRef}
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search songs, artists, albums, podcasts..."
-              className="flex-1 bg-transparent text-white text-lg placeholder-slate-500 focus:outline-none"
+              value={mode === 'ai' ? aiPrompt : q}
+              onChange={(e) => {
+                if (mode === 'ai') {
+                  setAiPrompt(e.target.value);
+                  setAiError(null);
+                } else {
+                  setQ(e.target.value);
+                  setAiInterpretation(null);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (mode === 'ai' && e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAiSearch();
+                }
+              }}
+              placeholder={mode === 'ai'
+                ? 'Try “play soft music” or describe a mood...'
+                : 'Search songs, artists, albums, podcasts...'}
+              maxLength={mode === 'ai' ? 500 : undefined}
+              className="min-w-0 flex-1 bg-transparent text-white text-base sm:text-lg placeholder-slate-500 focus:outline-none"
               autoComplete="off"
               spellCheck={false}
             />
-            {loading && (
+            {(loading || aiLoading) && (
               <div className="w-5 h-5 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
             )}
-            {q && !loading && (
+            {(mode === 'ai' ? aiPrompt : q) && !loading && !aiLoading && (
               <button
-                onClick={() => { setQ(''); inputRef.current?.focus(); }}
+                onClick={() => {
+                  if (mode === 'ai') {
+                    setAiPrompt('');
+                    setAiError(null);
+                  } else {
+                    setQ('');
+                    setAiInterpretation(null);
+                  }
+                  inputRef.current?.focus();
+                }}
                 className="p-1 hover:bg-white/10 rounded-md transition-colors flex-shrink-0"
+                aria-label="Clear search"
               >
                 <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             )}
-            <kbd className="hidden sm:inline-flex items-center px-2 py-1 text-[11px] text-slate-500 bg-white/5 rounded border border-white/10 font-mono">
-              ESC
-            </kbd>
+            {mode === 'library' ? (
+              <button
+                onClick={() => {
+                  setAiPrompt(q);
+                  setAiError(null);
+                  setMode('ai');
+                  setTimeout(() => inputRef.current?.focus(), 0);
+                }}
+                className="flex-shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 transition-colors text-xs font-medium"
+                title="Play or search with natural language"
+              >
+                <span aria-hidden="true">✨</span>
+                <span className="hidden sm:inline">Sonic search</span>
+                <span className="sm:hidden">Sonic</span>
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => {
+                    setMode('library');
+                    setAiError(null);
+                    setTimeout(() => inputRef.current?.focus(), 0);
+                  }}
+                  className="flex-shrink-0 px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors text-xs"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={handleAiSearch}
+                  disabled={aiLoading || !aiPrompt.trim() || !audiomuseConfigured}
+                  className="flex-shrink-0 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 text-white transition-colors text-xs font-medium"
+                >
+                  Go
+                </button>
+              </>
+            )}
           </div>
 
           {/* Results */}
           <div className="max-h-[60vh] overflow-y-auto overscroll-contain">
+            {mode === 'ai' ? (
+              <div className="min-h-[280px] px-6 py-8 flex flex-col items-center justify-center text-center">
+                {!audiomuseConfigured ? (
+                  <>
+                    <div className="w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-400/20 flex items-center justify-center text-2xl mb-4">
+                      🔑
+                    </div>
+                    <h3 className="text-white font-semibold">Connect AudioMuse-AI to use sonic search</h3>
+                    <p className="text-sm text-slate-400 max-w-md mt-2">
+                      Install the native AudioMuse-AI app, connect it to MVBar&apos;s OpenSubsonic API, and run its initial song analysis.
+                    </p>
+                    <button
+                      onClick={() => {
+                        window.sessionStorage.setItem('mvbar_settings_tab', 'integrations');
+                        handleNavigate({ type: 'settings' });
+                      }}
+                      className="mt-5 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm transition-colors"
+                    >
+                      Open integration settings
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-400/20 flex items-center justify-center text-2xl mb-4">
+                      ✨
+                    </div>
+                    <h3 className="text-white font-semibold">Describe the music you want</h3>
+                    <p className="text-sm text-slate-400 max-w-md mt-2">
+                      Say “play” or “queue” and MVBar will understand the mood, tempo and style, choose matching tracks locally, and act immediately.
+                    </p>
+                    <div className="flex flex-wrap justify-center gap-2 mt-5">
+                      {SONIC_SEARCH_SUGGESTIONS.map((suggestion) => (
+                        <button
+                          key={suggestion}
+                          onClick={() => {
+                            setAiPrompt(suggestion);
+                            setAiError(null);
+                            setTimeout(() => inputRef.current?.focus(), 0);
+                          }}
+                          className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-violet-500/15 border border-white/10 hover:border-violet-400/30 text-xs text-slate-300 hover:text-violet-100 transition-colors"
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-6">
+                      AudioMuse-AI matches your words against embeddings generated from the actual audio. No cloud AI, external metadata, or library tags are used for the sonic match.
+                    </p>
+                  </>
+                )}
+                {aiError && (
+                  <div className="mt-5 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 text-sm">
+                    {aiError}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+            {aiInterpretation && (
+              <div className="px-5 py-3 border-b border-violet-400/15 bg-violet-500/5 flex items-start gap-3">
+                <span className="text-sm mt-0.5" aria-hidden="true">✨</span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-violet-100">{aiInterpretation.explanation}</div>
+                  <div className="text-xs text-slate-500 mt-1 truncate">
+                    “{aiInterpretation.originalQuery}” → “{aiInterpretation.searchQuery}”
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    {aiInterpretation.model}
+                    {aiInterpretation.candidateCount > 0 && ` · ${aiInterpretation.candidateCount} sonic candidates compared`}
+                  </div>
+                  {aiInterpretation.confidenceFloor !== null && (
+                    <div className="text-xs text-emerald-300/80 mt-1">
+                      Low-confidence tail results were removed to avoid unrelated filler.
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => setAiInterpretation(null)}
+                  className="p-1 rounded text-slate-500 hover:text-white hover:bg-white/10 transition-colors"
+                  aria-label="Dismiss sonic interpretation"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            )}
             {error && (
               <div className="px-5 py-3 text-red-400 text-sm border-b border-white/5">{error}</div>
             )}
@@ -576,6 +817,8 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                 </svg>
                 <p className="text-sm">Start typing to search your library</p>
               </div>
+            )}
+              </>
             )}
           </div>
         </div>

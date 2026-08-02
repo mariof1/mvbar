@@ -6,6 +6,7 @@ import { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 import { db } from './db.js';
 import { findSimilarLocalTracks, findSimilarLocalArtists, isLastfmEnabled } from './lastfm.js';
+import { normalizeAudioMuseUrl } from './ai.js';
 
 interface UserPreferences {
   auto_continue: boolean;
@@ -22,45 +23,91 @@ export const preferencesPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/preferences', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
 
-    const r = await db().query<UserPreferences>(
-      'SELECT auto_continue, prefer_hls FROM user_preferences WHERE user_id = $1',
+    const r = await db().query<UserPreferences & { audiomuse_url?: string; audiomuse_api_token?: string }>(
+      'SELECT auto_continue, prefer_hls, audiomuse_url, audiomuse_api_token FROM user_preferences WHERE user_id = $1',
       [req.user.userId]
     );
 
     if (r.rows.length === 0) {
-      return { ok: true, preferences: DEFAULT_PREFS, lastfmEnabled: isLastfmEnabled() };
+      return {
+        ok: true,
+        preferences: DEFAULT_PREFS,
+        lastfmEnabled: isLastfmEnabled(),
+        audiomuseConfigured: false,
+        audiomuseUrl: 'http://127.0.0.1:8000',
+      };
     }
 
-    return { ok: true, preferences: r.rows[0], lastfmEnabled: isLastfmEnabled() };
+    const { audiomuse_url, audiomuse_api_token, ...prefs } = r.rows[0];
+    return {
+      ok: true,
+      preferences: prefs,
+      lastfmEnabled: isLastfmEnabled(),
+      audiomuseConfigured: !!audiomuse_url,
+      audiomuseTokenConfigured: !!audiomuse_api_token,
+      audiomuseUrl: audiomuse_url || 'http://127.0.0.1:8000',
+    };
   });
 
   // Update user preferences (upsert)
   app.patch('/api/preferences', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
 
-    const body = req.body as Partial<UserPreferences>;
+    const body = req.body as Partial<UserPreferences> & { audiomuse_url?: unknown; audiomuse_api_token?: unknown };
+    if (body.audiomuse_url !== undefined && typeof body.audiomuse_url !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'AudioMuse-AI URL must be text.' });
+    }
+    if (typeof body.audiomuse_url === 'string' && body.audiomuse_url.trim().length > 500) {
+      return reply.code(400).send({ ok: false, error: 'AudioMuse-AI URL is too long.' });
+    }
+    if (body.audiomuse_api_token !== undefined && typeof body.audiomuse_api_token !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'AudioMuse-AI API token must be text.' });
+    }
+    if (typeof body.audiomuse_api_token === 'string' && body.audiomuse_api_token.trim().length > 500) {
+      return reply.code(400).send({ ok: false, error: 'AudioMuse-AI API token is too long.' });
+    }
     
     // Get current preferences first
-    const current = await db().query<UserPreferences>(
-      'SELECT auto_continue, prefer_hls FROM user_preferences WHERE user_id = $1',
+    const current = await db().query<UserPreferences & { audiomuse_url?: string; audiomuse_api_token?: string }>(
+      'SELECT auto_continue, prefer_hls, audiomuse_url, audiomuse_api_token FROM user_preferences WHERE user_id = $1',
       [req.user.userId]
     );
     
-    const existing = current.rows[0] || DEFAULT_PREFS;
+    const existing = current.rows[0] || { ...DEFAULT_PREFS, audiomuse_url: null, audiomuse_api_token: null };
     const newPrefs = {
       auto_continue: typeof body.auto_continue === 'boolean' ? body.auto_continue : existing.auto_continue,
       prefer_hls: typeof body.prefer_hls === 'boolean' ? body.prefer_hls : existing.prefer_hls,
     };
+    let newAudioMuseUrl = existing.audiomuse_url || null;
+    if (typeof body.audiomuse_url === 'string') {
+      try {
+        newAudioMuseUrl = body.audiomuse_url.trim() ? normalizeAudioMuseUrl(body.audiomuse_url) : null;
+      } catch (error) {
+        return reply.code(400).send({
+          ok: false,
+          error: error instanceof Error ? error.message : 'AudioMuse-AI URL is invalid.',
+        });
+      }
+    }
+    const newAudioMuseToken = typeof body.audiomuse_api_token === 'string'
+      ? body.audiomuse_api_token.trim()
+      : existing.audiomuse_api_token;
 
     await db().query(
-      `INSERT INTO user_preferences (user_id, auto_continue, prefer_hls, updated_at)
-       VALUES ($1, $2, $3, now())
+      `INSERT INTO user_preferences (user_id, auto_continue, prefer_hls, audiomuse_url, audiomuse_api_token, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
        ON CONFLICT (user_id) DO UPDATE SET 
-         auto_continue = $2, prefer_hls = $3, updated_at = now()`,
-      [req.user.userId, newPrefs.auto_continue, newPrefs.prefer_hls]
+         auto_continue = $2, prefer_hls = $3, audiomuse_url = $4, audiomuse_api_token = $5, updated_at = now()`,
+      [req.user.userId, newPrefs.auto_continue, newPrefs.prefer_hls, newAudioMuseUrl, newAudioMuseToken || null]
     );
 
-    return { ok: true, preferences: newPrefs };
+    return {
+      ok: true,
+      preferences: newPrefs,
+      audiomuseConfigured: !!newAudioMuseUrl,
+      audiomuseTokenConfigured: !!newAudioMuseToken,
+      audiomuseUrl: newAudioMuseUrl || 'http://127.0.0.1:8000',
+    };
   });
 
   // Get similar tracks for auto-continue feature
