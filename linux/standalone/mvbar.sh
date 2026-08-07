@@ -132,6 +132,13 @@ ensure_config_schema() {
     "LOG_LEVEL=info" \
     "DEBUG="
 
+  append_config_section "Sandboxed plugins" \
+    "PLUGINS_ENABLED=true" \
+    "PLUGIN_MAX_UPLOAD_MB=50" \
+    "PLUGIN_TIMEOUT_MS=15000" \
+    "PLUGIN_MEMORY_MB=64" \
+    "PLUGIN_MAX_CONCURRENCY=4"
+
   append_config_section "Library scanning and background refresh" \
     "LIBRARY_READ_ONLY=1" \
     "FAST_SCAN=1" \
@@ -163,7 +170,8 @@ ensure_config_schema() {
     "PODCAST_ART_DIR=$DATA_ROOT/cache/podcast-art" \
     "AUDIOBOOK_ART_DIR=$DATA_ROOT/cache/audiobook-art" \
     "DEVICE_LOG_DIR=$DATA_ROOT/device-logs" \
-    "BACKUP_DIR=$DATA_ROOT/backups"
+    "BACKUP_DIR=$DATA_ROOT/backups" \
+    "PLUGINS_DIR=$DATA_ROOT/plugins"
 }
 
 random_hex() {
@@ -232,6 +240,11 @@ load_config() {
   BACKUP_MAX_UPLOAD_MB=$(config_get BACKUP_MAX_UPLOAD_MB)
   LOG_LEVEL=$(config_get LOG_LEVEL)
   DEBUG=$(config_get DEBUG)
+  PLUGINS_ENABLED=$(config_get PLUGINS_ENABLED)
+  PLUGIN_MAX_UPLOAD_MB=$(config_get PLUGIN_MAX_UPLOAD_MB)
+  PLUGIN_TIMEOUT_MS=$(config_get PLUGIN_TIMEOUT_MS)
+  PLUGIN_MEMORY_MB=$(config_get PLUGIN_MEMORY_MB)
+  PLUGIN_MAX_CONCURRENCY=$(config_get PLUGIN_MAX_CONCURRENCY)
   LIBRARY_READ_ONLY=$(config_get LIBRARY_READ_ONLY)
   FAST_SCAN=$(config_get FAST_SCAN)
   UV_THREADPOOL_SIZE=$(config_get UV_THREADPOOL_SIZE)
@@ -259,6 +272,7 @@ load_config() {
   AUDIOBOOK_ART_DIR=$(config_get AUDIOBOOK_ART_DIR)
   DEVICE_LOG_DIR=$(config_get DEVICE_LOG_DIR)
   BACKUP_DIR=$(config_get BACKUP_DIR)
+  PLUGINS_DIR=$(config_get PLUGINS_DIR)
 
   [ -n "$ADMIN_EMAIL" ] || fail "ADMIN_EMAIL is empty in $CONFIG_PATH"
   [ -n "$ADMIN_PASSWORD" ] || fail "ADMIN_PASSWORD is empty in $CONFIG_PATH"
@@ -277,6 +291,12 @@ load_config() {
     ''|*[!0-9]*) fail "BACKUP_MAX_UPLOAD_MB must be a positive integer in $CONFIG_PATH" ;;
   esac
   [ "$BACKUP_MAX_UPLOAD_MB" -gt 0 ] || fail "BACKUP_MAX_UPLOAD_MB must be greater than zero in $CONFIG_PATH"
+  for plugin_number in "$PLUGIN_MAX_UPLOAD_MB" "$PLUGIN_TIMEOUT_MS" "$PLUGIN_MEMORY_MB" "$PLUGIN_MAX_CONCURRENCY"; do
+    case "$plugin_number" in
+      ''|*[!0-9]*) fail "Plugin size, timeout, memory, and concurrency settings must be positive integers in $CONFIG_PATH" ;;
+    esac
+    [ "$plugin_number" -gt 0 ] || fail "Plugin size, timeout, memory, and concurrency settings must be greater than zero in $CONFIG_PATH"
+  done
 }
 
 create_directories() {
@@ -293,6 +313,7 @@ create_directories() {
     "$DATA_ROOT/hls" \
     "$DATA_ROOT/podcasts" \
     "$DATA_ROOT/device-logs" \
+    "$DATA_ROOT/plugins" \
     "$DATA_ROOT/caddy" \
     "$DATA_ROOT/caddy-config" \
     "$LOG_ROOT" \
@@ -310,7 +331,8 @@ create_configured_directories() {
     "$PODCAST_ART_DIR" \
     "$AUDIOBOOK_ART_DIR" \
     "$DEVICE_LOG_DIR" \
-    "$BACKUP_DIR"; do
+    "$BACKUP_DIR" \
+    "$PLUGINS_DIR"; do
     [ -n "$configured_directory" ] || fail "A generated-media path is empty in $CONFIG_PATH"
     mkdir -p "$configured_directory"
   done
@@ -389,6 +411,8 @@ export_application_environment() {
   export LASTFM_API_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_CALLBACK_URL
   export COOKIE_NAME COOKIE_SECURE TRUST_PROXY TZ
   export DB_POOL_SIZE MEILI_TASK_TIMEOUT_MS BACKUP_MAX_UPLOAD_MB LOG_LEVEL DEBUG
+  export PLUGINS_ENABLED PLUGIN_MAX_UPLOAD_MB PLUGIN_TIMEOUT_MS PLUGIN_MEMORY_MB
+  export PLUGIN_MAX_CONCURRENCY PLUGINS_DIR
   export LIBRARY_READ_ONLY FAST_SCAN UV_THREADPOOL_SIZE SCAN_CONCURRENCY
   export ARTIST_ART_CONCURRENCY SCAN_MAX_QUEUE SCAN_REFRESH_META METADATA_TIMEOUT_MS
   export RESCAN_INTERVAL_MS AUDIOBOOK_RESCAN_INTERVAL_MS PODCAST_REFRESH_INTERVAL_MS
@@ -448,7 +472,7 @@ start_services() {
   (
     cd "$APP_ROOT/app/api"
     exec env LD_LIBRARY_PATH="$RUNTIME_LIB" PORT="$API_PORT" HOST=127.0.0.1 \
-      "$NODE" dist/index.js
+      "$NODE" --experimental-global-webcrypto dist/index.js
   ) > "$LOG_ROOT/api.log" 2>&1 &
   PID_API=$!
   wait_http "http://127.0.0.1:$API_PORT/health" 180

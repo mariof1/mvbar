@@ -83,9 +83,15 @@ They are grouped as follows:
   `TEMPO_BACKFILL_BATCH`;
 - resources and diagnostics: `DB_POOL_SIZE`, `MEILI_TASK_TIMEOUT_MS`,
   `BACKUP_MAX_UPLOAD_MB`, `UV_THREADPOOL_SIZE`, `LOG_LEVEL`, `DEBUG`, `TZ`;
+- sandboxed plugins: `PLUGINS_ENABLED`, `PLUGIN_MAX_UPLOAD_MB`,
+  `PLUGIN_TIMEOUT_MS`, `PLUGIN_MEMORY_MB`, `PLUGIN_MAX_CONCURRENCY`;
 - persistent generated-data paths: `LYRICS_DIR`, `ART_DIR`, `AVATARS_DIR`,
   `HLS_DIR`, `PODCAST_DIR`, `PODCAST_ART_DIR`, `AUDIOBOOK_ART_DIR`,
-  `DEVICE_LOG_DIR`, `BACKUP_DIR`.
+  `DEVICE_LOG_DIR`, `BACKUP_DIR`, `PLUGINS_DIR`.
+
+Plugin packages can be installed from **Admin → Plugins** or copied into
+`PLUGINS_DIR`. They are disabled until an administrator reviews and approves
+their requested permissions. See `docs/plugins.md` in the source repository.
 
 `DATABASE_PASSWORD` and `MEILI_MASTER_KEY` also remain available in the file.
 Internal connection URLs, private service ports, API/web bind addresses, and

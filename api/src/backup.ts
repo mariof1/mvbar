@@ -1,5 +1,6 @@
 import fp from 'fastify-plugin';
 import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
+import { rescanPlugins } from './pluginSystem/registry.js';
 import { ZipArchive } from 'archiver';
 import * as unzipper from 'unzipper';
 import { to as copyTo } from 'pg-copy-streams';
@@ -793,6 +794,7 @@ async function restoreArchiveFile(archivePath: string, requestedCaches: boolean,
     }
     const restoreCaches = requestedCaches && manifest.caches.included;
     const databaseResult = await restoreDatabase(extractedRoot, manifest, restoreCaches);
+    await rescanPlugins();
     let cacheFiles = 0;
     let cacheWarning: string | undefined;
     if (restoreCaches) {

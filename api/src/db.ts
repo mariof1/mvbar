@@ -821,6 +821,59 @@ export async function initDb() {
   );
 
   // ========================================================================
+  // SANDBOXED PLUGINS
+  // ========================================================================
+
+  await pool.query(`
+    create table if not exists plugins (
+      id text primary key,
+      filename text not null,
+      name text not null,
+      author text not null,
+      version text not null,
+      description text,
+      homepage text,
+      manifest jsonb not null,
+      config jsonb not null default '{}'::jsonb,
+      enabled boolean not null default false,
+      package_sha256 text not null,
+      permission_fingerprint text not null,
+      installed_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      last_loaded_at timestamptz,
+      last_error text
+    );
+  `);
+  await pool.query('create unique index if not exists plugins_filename_idx on plugins(filename)');
+  await pool.query('create index if not exists plugins_enabled_idx on plugins(enabled) where enabled = true');
+
+  await pool.query(`
+    create table if not exists plugin_kv (
+      plugin_id text not null references plugins(id) on delete cascade,
+      key text not null,
+      value bytea not null,
+      expires_at timestamptz,
+      updated_at timestamptz not null default now(),
+      primary key (plugin_id, key)
+    );
+  `);
+  await pool.query('create index if not exists plugin_kv_expiry_idx on plugin_kv(expires_at) where expires_at is not null');
+
+  await pool.query(`
+    create table if not exists plugin_runs (
+      id bigserial primary key,
+      plugin_id text not null references plugins(id) on delete cascade,
+      export_name text not null,
+      ok boolean not null,
+      duration_ms integer not null,
+      error text,
+      logs jsonb not null default '[]'::jsonb,
+      created_at timestamptz not null default now()
+    );
+  `);
+  await pool.query('create index if not exists plugin_runs_plugin_created_idx on plugin_runs(plugin_id, created_at desc)');
+
+  // ========================================================================
   // USER PREFERENCES
   // ========================================================================
 

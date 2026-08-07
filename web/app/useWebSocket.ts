@@ -86,7 +86,11 @@ export type BackupUpdate =
   | { type: 'backup:deleted'; data: { name: string } }
   | { type: 'backup:error'; data: { operation: string; error: string } };
 
-type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | BackupUpdate | { type: 'connected' } | { type: 'ping' };
+export type PluginUpdate =
+  | { type: 'plugin:changed'; data: { event: string; id?: string; name?: string; at: string } }
+  | { type: 'plugin:error'; data: { operation: string; id?: string; actionId?: string; error: string } };
+
+type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | BackupUpdate | PluginUpdate | { type: 'connected' } | { type: 'ping' };
 
 // Store for library update notifications
 interface LibraryUpdateStore {
@@ -166,6 +170,18 @@ interface BackupUpdateStore {
 }
 
 export const useBackupUpdates = create<BackupUpdateStore>((set) => ({
+  lastUpdate: 0,
+  lastEvent: null,
+  setEvent: (event) => set({ lastUpdate: Date.now(), lastEvent: event }),
+}));
+
+interface PluginUpdateStore {
+  lastUpdate: number;
+  lastEvent: PluginUpdate | null;
+  setEvent: (event: PluginUpdate) => void;
+}
+
+export const usePluginUpdates = create<PluginUpdateStore>((set) => ({
   lastUpdate: 0,
   lastEvent: null,
   setEvent: (event) => set({ lastUpdate: Date.now(), lastEvent: event }),
@@ -315,6 +331,16 @@ export function useWebSocket(isAdmin = false) {
                 );
               } else if (msg.type === 'backup:error') {
                 useToastStore.getState().show(msg.data.error || 'Backup failed', 'error', 'top-right');
+              }
+            }
+          } else if (msg.type === 'plugin:changed' || msg.type === 'plugin:error') {
+            if (useAuth.getState().user?.role === 'admin') {
+              usePluginUpdates.getState().setEvent(msg);
+              if (msg.type === 'plugin:changed') {
+                const subject = msg.data.name || msg.data.id || 'Plugin';
+                useToastStore.getState().show(`${subject}: ${msg.data.event}`, 'success', 'top-right');
+              } else {
+                useToastStore.getState().show(msg.data.error || 'Plugin operation failed', 'error', 'top-right');
               }
             }
           }

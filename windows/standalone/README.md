@@ -48,6 +48,13 @@ are stored in `%LOCALAPPDATA%\MVBar\config.env`.
 Server-managed portable backups are stored under `%LOCALAPPDATA%\MVBar\data\backups`
 by default. The location can be changed with `BACKUP_DIR` in `config.env`.
 
+Sandboxed `.ndp` plugins are stored under
+`%LOCALAPPDATA%\MVBar\data\plugins` by default. Install and manage them from
+**Admin → Plugins**, or copy packages into `PLUGINS_DIR` and select
+**Rescan folder**. Plugin execution can be stopped globally with
+`PLUGINS_ENABLED=false`; timeout, memory, upload, and concurrency limits are
+also exposed in `config.env`.
+
 The default music library uses the current user's `Music` folder. Audiobooks
 are optional and have no default folder. Multiple paths are comma separated
 in `config.env`.

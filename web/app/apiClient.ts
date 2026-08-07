@@ -128,6 +128,151 @@ export async function uploadAdminBackup(token: string, file: File) {
   return (await response.json()) as { ok: true; backup: AdminBackup };
 }
 
+export type PluginPermissionInfo = {
+  key: string;
+  reason: string | null;
+  detail: string | null;
+  broad: boolean;
+  supported: boolean;
+};
+
+export type PluginSchemaProperty = {
+  type?: 'string' | 'integer' | 'number' | 'boolean';
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum?: unknown[];
+  minimum?: number;
+  maximum?: number;
+  format?: string;
+};
+
+export type AdminPluginAction = {
+  id: string;
+  name: string;
+  description?: string;
+  export: string;
+  inputSchema?: {
+    type?: 'object';
+    properties?: Record<string, PluginSchemaProperty>;
+    required?: string[];
+  };
+};
+
+export type AdminPlugin = {
+  id: string;
+  filename: string;
+  name: string;
+  author: string;
+  version: string;
+  description: string | null;
+  homepage: string | null;
+  enabled: boolean;
+  enabledInDatabase: boolean;
+  present: boolean;
+  packageSha256: string;
+  permissionFingerprint: string;
+  permissions: PluginPermissionInfo[];
+  configSchema: {
+    type?: 'object';
+    properties?: Record<string, PluginSchemaProperty>;
+    required?: string[];
+    additionalProperties?: boolean;
+  } | null;
+  config: Record<string, unknown>;
+  configuredSecrets: string[];
+  actions: AdminPluginAction[];
+  exports: string[];
+  installedAt: string;
+  updatedAt: string;
+  lastLoadedAt: string | null;
+  lastError: string | null;
+};
+
+export type AdminPluginRun = {
+  id: number;
+  export_name: string;
+  ok: boolean;
+  duration_ms: number;
+  error: string | null;
+  logs: Array<{ level: string; message: string }>;
+  created_at: string;
+};
+
+export async function listAdminPlugins(token: string) {
+  return (await apiFetch('/admin/plugins', { method: 'GET' }, token)) as {
+    ok: true;
+    executionEnabled: boolean;
+    uploadLimitBytes: number;
+    plugins: AdminPlugin[];
+  };
+}
+
+export async function uploadAdminPlugin(token: string, file: File) {
+  const form = new FormData();
+  form.append('plugin', file, file.name);
+  const response = await fetch(`${API_BASE}/admin/plugins/upload`, {
+    method: 'POST',
+    headers: adminTransferHeaders(token),
+    body: form,
+    cache: 'no-store',
+    credentials: 'same-origin',
+  });
+  if (!response.ok) await transferError(response);
+  return (await response.json()) as { ok: true; plugin: AdminPlugin };
+}
+
+export async function rescanAdminPlugins(token: string) {
+  return (await apiFetch('/admin/plugins/rescan', { method: 'POST' }, token)) as {
+    ok: true;
+    found: number;
+    installed: string[];
+    updated: string[];
+    errors: Array<{ filename: string; error: string }>;
+  };
+}
+
+export async function configureAdminPlugin(token: string, id: string, config: Record<string, unknown>) {
+  return (await apiFetch(`/admin/plugins/${encodeURIComponent(id)}/config`, {
+    method: 'PUT',
+    body: JSON.stringify({ config }),
+  }, token)) as { ok: true; plugin: AdminPlugin };
+}
+
+export async function setAdminPluginEnabled(token: string, plugin: AdminPlugin, enabled: boolean) {
+  return (await apiFetch(`/admin/plugins/${encodeURIComponent(plugin.id)}/enabled`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled, permissionFingerprint: plugin.permissionFingerprint }),
+  }, token)) as { ok: true; plugin: AdminPlugin };
+}
+
+export async function testAdminPlugin(token: string, id: string) {
+  return (await apiFetch(`/admin/plugins/${encodeURIComponent(id)}/test`, { method: 'POST' }, token)) as {
+    ok: true;
+    exports: string[];
+    imports: string[];
+    logs: Array<{ level: string; message: string }>;
+  };
+}
+
+export async function listAdminPluginRuns(token: string, id: string) {
+  return (await apiFetch(`/admin/plugins/${encodeURIComponent(id)}/runs`, { method: 'GET' }, token)) as {
+    ok: true;
+    runs: AdminPluginRun[];
+  };
+}
+
+export async function runAdminPluginAction(token: string, id: string, actionId: string, input: Record<string, unknown>) {
+  return (await apiFetch(`/admin/plugins/${encodeURIComponent(id)}/actions/${encodeURIComponent(actionId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ input }),
+  }, token)) as { ok: true; output: unknown };
+}
+
+export async function deleteAdminPlugin(token: string, id: string) {
+  return (await apiFetch(`/admin/plugins/${encodeURIComponent(id)}`, { method: 'DELETE' }, token)) as { ok: true };
+}
+
 export async function deleteAdminBackup(token: string, name: string) {
   return (await apiFetch(`/admin/backups/${encodeURIComponent(name)}`, {
     method: 'DELETE',

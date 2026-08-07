@@ -212,7 +212,7 @@ internal static class Program
         var apiEnvironment = CopyEnvironment(common);
         apiEnvironment["PORT"] = apiPort.ToString();
         apiEnvironment["HOST"] = "127.0.0.1";
-        StartService("api", nodePath, Args("dist/index.js"),
+        StartService("api", nodePath, "--experimental-global-webcrypto " + Args("dist/index.js"),
             AppPath("app", "api"), apiEnvironment);
         WaitForHttp("http://127.0.0.1:" + apiPort + "/health", 180);
 
@@ -412,15 +412,40 @@ internal static class Program
             Directory.CreateDirectory(homeRoot);
             WriteConfig(configPath, config);
         }
-        else if (!config.ContainsKey("BACKUP_DIR") ||
-            String.IsNullOrWhiteSpace(config["BACKUP_DIR"]))
+        else
         {
-            config["BACKUP_DIR"] = Path.Combine(dataRoot, "backups");
-            File.AppendAllText(
-                configPath,
-                Environment.NewLine + "# Server-managed backup storage" + Environment.NewLine +
-                    "BACKUP_DIR=" + config["BACKUP_DIR"] + Environment.NewLine,
-                Encoding.UTF8);
+            var additions = new List<string>();
+            if (!config.ContainsKey("BACKUP_DIR") || String.IsNullOrWhiteSpace(config["BACKUP_DIR"]))
+            {
+                config["BACKUP_DIR"] = Path.Combine(dataRoot, "backups");
+                additions.Add("BACKUP_DIR=" + config["BACKUP_DIR"]);
+            }
+            string[,] pluginDefaults =
+            {
+                { "PLUGINS_ENABLED", "true" },
+                { "PLUGINS_DIR", Path.Combine(dataRoot, "plugins") },
+                { "PLUGIN_MAX_UPLOAD_MB", "50" },
+                { "PLUGIN_TIMEOUT_MS", "15000" },
+                { "PLUGIN_MEMORY_MB", "64" },
+                { "PLUGIN_MAX_CONCURRENCY", "4" }
+            };
+            for (int i = 0; i < pluginDefaults.GetLength(0); i++)
+            {
+                string key = pluginDefaults[i, 0];
+                if (!config.ContainsKey(key) || String.IsNullOrWhiteSpace(config[key]))
+                {
+                    config[key] = pluginDefaults[i, 1];
+                    additions.Add(key + "=" + config[key]);
+                }
+            }
+            if (additions.Count > 0)
+            {
+                File.AppendAllText(
+                    configPath,
+                    Environment.NewLine + "# Server-managed backup and sandboxed plugins" + Environment.NewLine +
+                        String.Join(Environment.NewLine, additions.ToArray()) + Environment.NewLine,
+                    Encoding.UTF8);
+            }
         }
 
         config["_FIRST_RUN"] = firstRun ? "1" : "0";
@@ -451,6 +476,12 @@ internal static class Program
         config["MUSIC_DIRS"] = music;
         config["AUDIOBOOK_DIRS"] = "";
         config["BACKUP_DIR"] = Path.Combine(dataRoot, "backups");
+        config["PLUGINS_ENABLED"] = "true";
+        config["PLUGINS_DIR"] = Path.Combine(dataRoot, "plugins");
+        config["PLUGIN_MAX_UPLOAD_MB"] = "50";
+        config["PLUGIN_TIMEOUT_MS"] = "15000";
+        config["PLUGIN_MEMORY_MB"] = "64";
+        config["PLUGIN_MAX_CONCURRENCY"] = "4";
         config["LISTEN_HOST"] = "127.0.0.1";
         config["PORT"] = "8080";
         return config;
@@ -464,7 +495,9 @@ internal static class Program
         string[] keys =
         {
             "ADMIN_EMAIL", "ADMIN_PASSWORD", "DATABASE_PASSWORD", "JWT_SECRET",
-            "MEILI_MASTER_KEY", "MUSIC_DIRS", "AUDIOBOOK_DIRS", "BACKUP_DIR", "LISTEN_HOST", "PORT"
+            "MEILI_MASTER_KEY", "MUSIC_DIRS", "AUDIOBOOK_DIRS", "BACKUP_DIR",
+            "PLUGINS_ENABLED", "PLUGINS_DIR", "PLUGIN_MAX_UPLOAD_MB", "PLUGIN_TIMEOUT_MS",
+            "PLUGIN_MEMORY_MB", "PLUGIN_MAX_CONCURRENCY", "LISTEN_HOST", "PORT"
         };
         foreach (string key in keys)
         {
@@ -607,7 +640,9 @@ internal static class Program
     private static void ConfigureEnvironment(Dictionary<string, string> config)
     {
         string backupDirectory = Get(config, "BACKUP_DIR", Path.Combine(dataRoot, "backups"));
+        string pluginsDirectory = Get(config, "PLUGINS_DIR", Path.Combine(dataRoot, "plugins"));
         Directory.CreateDirectory(backupDirectory);
+        Directory.CreateDirectory(pluginsDirectory);
         Environment.SetEnvironmentVariable("NODE_ENV", "production");
         Environment.SetEnvironmentVariable("JWT_SECRET", Get(config, "JWT_SECRET", ""));
         Environment.SetEnvironmentVariable("ADMIN_EMAIL", Get(config, "ADMIN_EMAIL", "admin@local"));
@@ -616,6 +651,12 @@ internal static class Program
         Environment.SetEnvironmentVariable("MUSIC_DIRS", Get(config, "MUSIC_DIRS", ""));
         Environment.SetEnvironmentVariable("AUDIOBOOK_DIRS", Get(config, "AUDIOBOOK_DIRS", ""));
         Environment.SetEnvironmentVariable("BACKUP_DIR", backupDirectory);
+        Environment.SetEnvironmentVariable("PLUGINS_ENABLED", Get(config, "PLUGINS_ENABLED", "true"));
+        Environment.SetEnvironmentVariable("PLUGINS_DIR", pluginsDirectory);
+        Environment.SetEnvironmentVariable("PLUGIN_MAX_UPLOAD_MB", Get(config, "PLUGIN_MAX_UPLOAD_MB", "50"));
+        Environment.SetEnvironmentVariable("PLUGIN_TIMEOUT_MS", Get(config, "PLUGIN_TIMEOUT_MS", "15000"));
+        Environment.SetEnvironmentVariable("PLUGIN_MEMORY_MB", Get(config, "PLUGIN_MEMORY_MB", "64"));
+        Environment.SetEnvironmentVariable("PLUGIN_MAX_CONCURRENCY", Get(config, "PLUGIN_MAX_CONCURRENCY", "4"));
         Environment.SetEnvironmentVariable("COOKIE_SECURE", "false");
         Environment.SetEnvironmentVariable("TRUST_PROXY", "true");
         Environment.SetEnvironmentVariable("LIBRARY_READ_ONLY", "1");
@@ -659,6 +700,12 @@ internal static class Program
         environment["AUDIOBOOK_ART_DIR"] = Path.Combine(dataRoot, "cache", "audiobook-art");
         environment["DEVICE_LOG_DIR"] = Path.Combine(dataRoot, "device-logs");
         environment["BACKUP_DIR"] = Get(config, "BACKUP_DIR", Path.Combine(dataRoot, "backups"));
+        environment["PLUGINS_ENABLED"] = Get(config, "PLUGINS_ENABLED", "true");
+        environment["PLUGINS_DIR"] = Get(config, "PLUGINS_DIR", Path.Combine(dataRoot, "plugins"));
+        environment["PLUGIN_MAX_UPLOAD_MB"] = Get(config, "PLUGIN_MAX_UPLOAD_MB", "50");
+        environment["PLUGIN_TIMEOUT_MS"] = Get(config, "PLUGIN_TIMEOUT_MS", "15000");
+        environment["PLUGIN_MEMORY_MB"] = Get(config, "PLUGIN_MEMORY_MB", "64");
+        environment["PLUGIN_MAX_CONCURRENCY"] = Get(config, "PLUGIN_MAX_CONCURRENCY", "4");
         environment["COOKIE_SECURE"] = "false";
         environment["TRUST_PROXY"] = "true";
         environment["LIBRARY_READ_ONLY"] = "1";

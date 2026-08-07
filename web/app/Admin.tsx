@@ -30,8 +30,9 @@ import { useAuth } from './store';
 import { showConfirm } from './ConfirmModal';
 import { useScanProgress, useLibraryUpdates, useAdminPending, useBackupUpdates } from './useWebSocket';
 import { AdminUserAudit } from './AdminUserAudit';
+import { AdminPlugins } from './AdminPlugins';
 
-type Tab = 'library' | 'users' | 'user-audit' | 'settings' | 'device-logs' | 'notifications';
+type Tab = 'library' | 'users' | 'user-audit' | 'plugins' | 'settings' | 'device-logs' | 'notifications';
 
 export function Admin() {
   const token = useAuth((s) => s.token);
@@ -70,6 +71,11 @@ export function Admin() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 19V9m5 10V5m5 14v-7m5 7V3" />
             </svg>
           )},
+          { id: 'plugins' as Tab, label: 'Plugins', icon: (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.5 3v4.5H4a1 1 0 00-1 1V12h3a2 2 0 110 4H3v3.5a1 1 0 001 1h4.5V17a2 2 0 114 0v3.5H17a1 1 0 001-1V15h1.5a2 2 0 100-4H18V8.5a1 1 0 00-1-1h-4.5V3a2 2 0 10-4 0z" />
+            </svg>
+          )},
           { id: 'settings' as Tab, label: 'Settings', icon: (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -106,6 +112,7 @@ export function Admin() {
       {activeTab === 'library' && <LibraryTab token={token} clear={clear} />}
       {activeTab === 'users' && <UsersTab token={token} clear={clear} currentUserId={user?.id} />}
       {activeTab === 'user-audit' && <AdminUserAudit token={token} clear={clear} />}
+      {activeTab === 'plugins' && <AdminPlugins token={token} />}
       {activeTab === 'settings' && <SettingsTab token={token} clear={clear} />}
       {activeTab === 'device-logs' && <DeviceLogsTab token={token} />}
       {activeTab === 'notifications' && <NotificationsTab token={token} />}

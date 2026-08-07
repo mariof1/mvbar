@@ -30,6 +30,9 @@ import googleAuthPlugin, { startAvatarSyncScheduler } from './googleAuth.js';
 import { backupPlugin } from './backup.js';
 import { initDb } from './db.js';
 import logger from './logger.js';
+import { initializePluginSystem } from './pluginSystem/registry.js';
+import { pluginUploadLimitBytes } from './pluginSystem/package.js';
+import { pluginsAdminPlugin } from './pluginSystem/routes.js';
 
 // Use pino-pretty for human-readable logs
 const app = Fastify({
@@ -86,10 +89,11 @@ function sanitizeUrlForLog(url: string) {
 }
 
 await initDb();
+await initializePluginSystem();
 logger.success('api', `Server starting on port ${config.port}`);
 
 // Register multipart for file uploads
-await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB max
+await app.register(multipart, { limits: { fileSize: Math.max(5 * 1024 * 1024, pluginUploadLimitBytes()) } });
 
 app.addHook('onResponse', async (req, reply) => {
   const method = req.method;
@@ -130,6 +134,7 @@ await app.register(statsPlugin);
 await app.register(recommendationsPlugin);
 await app.register(hlsPlugin);
 await app.register(websocketPlugin);
+await app.register(pluginsAdminPlugin);
 await app.register(smartPlaylistsPlugin);
 await app.register(listenbrainzPlugin);
 await app.register(subsonicPlugin);
