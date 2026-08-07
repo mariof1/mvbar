@@ -65,39 +65,126 @@ config_get() {
   ' "$CONFIG_PATH"
 }
 
+config_has_key() {
+  awk -v wanted="$1" '
+    /^[[:space:]]*#/ { next }
+    {
+      separator = index($0, "=")
+      if (separator < 2) next
+      key = substr($0, 1, separator - 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      if (key == wanted) found = 1
+    }
+    END { exit found ? 0 : 1 }
+  ' "$CONFIG_PATH"
+}
+
+append_config_section() {
+  section_heading=$1
+  shift
+  section_missing=0
+  for config_entry in "$@"; do
+    config_key=${config_entry%%=*}
+    config_has_key "$config_key" || section_missing=1
+  done
+  [ "$section_missing" -eq 1 ] || return 0
+
+  {
+    say ""
+    say "# $section_heading"
+    for config_entry in "$@"; do
+      config_key=${config_entry%%=*}
+      config_has_key "$config_key" || say "$config_entry"
+    done
+  } >> "$CONFIG_PATH"
+}
+
+ensure_config_schema() {
+  append_config_section "Optional integrations" \
+    "LASTFM_API_KEY=" \
+    "GOOGLE_CLIENT_ID=" \
+    "GOOGLE_CLIENT_SECRET=" \
+    "GOOGLE_CALLBACK_URL="
+
+  append_config_section "HTTP, cookies, proxy handling, and timezone" \
+    "COOKIE_NAME=mvbar_token" \
+    "COOKIE_SECURE=false" \
+    "TRUST_PROXY=true" \
+    "TZ=Europe/London"
+
+  append_config_section "Database, search, and logging" \
+    "DB_POOL_SIZE=30" \
+    "MEILI_TASK_TIMEOUT_MS=300000" \
+    "LOG_LEVEL=info" \
+    "DEBUG="
+
+  append_config_section "Library scanning and background refresh" \
+    "LIBRARY_READ_ONLY=1" \
+    "FAST_SCAN=1" \
+    "UV_THREADPOOL_SIZE=16" \
+    "SCAN_CONCURRENCY=8" \
+    "ARTIST_ART_CONCURRENCY=16" \
+    "SCAN_MAX_QUEUE=1000" \
+    "SCAN_REFRESH_META=" \
+    "METADATA_TIMEOUT_MS=300000" \
+    "RESCAN_INTERVAL_MS=3600000" \
+    "AUDIOBOOK_RESCAN_INTERVAL_MS=600000" \
+    "PODCAST_REFRESH_INTERVAL_MS=3600000"
+
+  append_config_section "Tempo analysis" \
+    "TEMPO_DETECT=0" \
+    "TEMPO_MODE=batch" \
+    "TEMPO_METHOD=energy" \
+    "TEMPO_MIN_CONF=0.35" \
+    "TEMPO_CONCURRENCY=2" \
+    "TEMPO_BACKFILL_INTERVAL_MS=1800000" \
+    "TEMPO_BACKFILL_BATCH=50"
+
+  append_config_section "Persistent cache and generated-media paths" \
+    "LYRICS_DIR=$DATA_ROOT/cache/lyrics" \
+    "ART_DIR=$DATA_ROOT/cache/art" \
+    "AVATARS_DIR=$DATA_ROOT/cache/avatars" \
+    "HLS_DIR=$DATA_ROOT/hls" \
+    "PODCAST_DIR=$DATA_ROOT/podcasts" \
+    "PODCAST_ART_DIR=$DATA_ROOT/cache/podcast-art" \
+    "AUDIOBOOK_ART_DIR=$DATA_ROOT/cache/audiobook-art" \
+    "DEVICE_LOG_DIR=$DATA_ROOT/device-logs"
+}
+
 random_hex() {
   od -An -N "$1" -tx1 /dev/urandom | tr -d ' \n'
 }
 
 create_config() {
-  [ -f "$CONFIG_PATH" ] && return
+  if [ ! -f "$CONFIG_PATH" ]; then
+    mkdir -p "$USER_HOME/Music"
+    admin_password=$(random_hex 14)
+    database_password=$(random_hex 18)
+    jwt_secret=$(random_hex 48)
+    meili_key=$(random_hex 32)
 
-  mkdir -p "$USER_HOME/Music"
-  admin_password=$(random_hex 14)
-  database_password=$(random_hex 18)
-  jwt_secret=$(random_hex 48)
-  meili_key=$(random_hex 32)
+    umask 077
+    {
+      say "# MVBar Standalone settings"
+      say "# Multiple media folders are comma separated. Restart after editing."
+      say "ADMIN_EMAIL=admin@local"
+      say "ADMIN_PASSWORD=$admin_password"
+      say "DATABASE_PASSWORD=$database_password"
+      say "JWT_SECRET=$jwt_secret"
+      say "MEILI_MASTER_KEY=$meili_key"
+      say "MUSIC_DIRS=$USER_HOME/Music"
+      say "AUDIOBOOK_DIRS="
+      say "LISTEN_HOST=127.0.0.1"
+      say "PORT=8080"
+    } > "$CONFIG_PATH"
 
-  umask 077
-  {
-    say "# MVBar Standalone settings"
-    say "# Multiple media folders are comma separated. Restart after editing."
-    say "ADMIN_EMAIL=admin@local"
-    say "ADMIN_PASSWORD=$admin_password"
-    say "DATABASE_PASSWORD=$database_password"
-    say "JWT_SECRET=$jwt_secret"
-    say "MEILI_MASTER_KEY=$meili_key"
-    say "MUSIC_DIRS=$USER_HOME/Music"
-    say "AUDIOBOOK_DIRS="
-    say "LISTEN_HOST=127.0.0.1"
-    say "PORT=8080"
-  } > "$CONFIG_PATH"
-
-  {
-    say "MVBar Standalone administrator"
-    say "Email: admin@local"
-    say "Password: $admin_password"
-  } > "$CREDENTIALS_PATH"
+    {
+      say "MVBar Standalone administrator"
+      say "Email: admin@local"
+      say "Password: $admin_password"
+    } > "$CREDENTIALS_PATH"
+  fi
+  ensure_config_schema
   chmod 600 "$CONFIG_PATH" "$CREDENTIALS_PATH"
 }
 
@@ -112,6 +199,49 @@ load_config() {
   AUDIOBOOK_DIRS=$(config_get AUDIOBOOK_DIRS)
   LISTEN_HOST=$(config_get LISTEN_HOST)
   CONFIGURED_PORT=$(config_get PORT)
+  configured_google_client_id=$(config_get GOOGLE_CLIENT_ID)
+  configured_google_client_secret=$(config_get GOOGLE_CLIENT_SECRET)
+  configured_google_callback_url=$(config_get GOOGLE_CALLBACK_URL)
+  GOOGLE_CLIENT_ID=${configured_google_client_id:-${GOOGLE_CLIENT_ID:-}}
+  GOOGLE_CLIENT_SECRET=${configured_google_client_secret:-${GOOGLE_CLIENT_SECRET:-}}
+  GOOGLE_CALLBACK_URL=${configured_google_callback_url:-${GOOGLE_CALLBACK_URL:-}}
+  configured_lastfm_api_key=$(config_get LASTFM_API_KEY)
+  LASTFM_API_KEY=${configured_lastfm_api_key:-${LASTFM_API_KEY:-}}
+  COOKIE_NAME=$(config_get COOKIE_NAME)
+  COOKIE_SECURE=$(config_get COOKIE_SECURE)
+  TRUST_PROXY=$(config_get TRUST_PROXY)
+  TZ=$(config_get TZ)
+  export TZ
+  DB_POOL_SIZE=$(config_get DB_POOL_SIZE)
+  MEILI_TASK_TIMEOUT_MS=$(config_get MEILI_TASK_TIMEOUT_MS)
+  LOG_LEVEL=$(config_get LOG_LEVEL)
+  DEBUG=$(config_get DEBUG)
+  LIBRARY_READ_ONLY=$(config_get LIBRARY_READ_ONLY)
+  FAST_SCAN=$(config_get FAST_SCAN)
+  UV_THREADPOOL_SIZE=$(config_get UV_THREADPOOL_SIZE)
+  SCAN_CONCURRENCY=$(config_get SCAN_CONCURRENCY)
+  ARTIST_ART_CONCURRENCY=$(config_get ARTIST_ART_CONCURRENCY)
+  SCAN_MAX_QUEUE=$(config_get SCAN_MAX_QUEUE)
+  SCAN_REFRESH_META=$(config_get SCAN_REFRESH_META)
+  METADATA_TIMEOUT_MS=$(config_get METADATA_TIMEOUT_MS)
+  RESCAN_INTERVAL_MS=$(config_get RESCAN_INTERVAL_MS)
+  AUDIOBOOK_RESCAN_INTERVAL_MS=$(config_get AUDIOBOOK_RESCAN_INTERVAL_MS)
+  PODCAST_REFRESH_INTERVAL_MS=$(config_get PODCAST_REFRESH_INTERVAL_MS)
+  TEMPO_DETECT=$(config_get TEMPO_DETECT)
+  TEMPO_MODE=$(config_get TEMPO_MODE)
+  TEMPO_METHOD=$(config_get TEMPO_METHOD)
+  TEMPO_MIN_CONF=$(config_get TEMPO_MIN_CONF)
+  TEMPO_CONCURRENCY=$(config_get TEMPO_CONCURRENCY)
+  TEMPO_BACKFILL_INTERVAL_MS=$(config_get TEMPO_BACKFILL_INTERVAL_MS)
+  TEMPO_BACKFILL_BATCH=$(config_get TEMPO_BACKFILL_BATCH)
+  LYRICS_DIR=$(config_get LYRICS_DIR)
+  ART_DIR=$(config_get ART_DIR)
+  AVATARS_DIR=$(config_get AVATARS_DIR)
+  HLS_DIR=$(config_get HLS_DIR)
+  PODCAST_DIR=$(config_get PODCAST_DIR)
+  PODCAST_ART_DIR=$(config_get PODCAST_ART_DIR)
+  AUDIOBOOK_ART_DIR=$(config_get AUDIOBOOK_ART_DIR)
+  DEVICE_LOG_DIR=$(config_get DEVICE_LOG_DIR)
 
   [ -n "$ADMIN_EMAIL" ] || fail "ADMIN_EMAIL is empty in $CONFIG_PATH"
   [ -n "$ADMIN_PASSWORD" ] || fail "ADMIN_PASSWORD is empty in $CONFIG_PATH"
@@ -145,6 +275,21 @@ create_directories() {
     "$LOG_ROOT" \
     "$RUN_ROOT" \
     "$RUN_ROOT/postgres"
+}
+
+create_configured_directories() {
+  for configured_directory in \
+    "$LYRICS_DIR" \
+    "$ART_DIR" \
+    "$AVATARS_DIR" \
+    "$HLS_DIR" \
+    "$PODCAST_DIR" \
+    "$PODCAST_ART_DIR" \
+    "$AUDIOBOOK_ART_DIR" \
+    "$DEVICE_LOG_DIR"; do
+    [ -n "$configured_directory" ] || fail "A generated-media path is empty in $CONFIG_PATH"
+    mkdir -p "$configured_directory"
+  done
 }
 
 pid_is_running() {
@@ -216,24 +361,16 @@ export_application_environment() {
   export REDIS_URL="redis://127.0.0.1:$REDIS_PORT"
   export MEILI_HOST="http://127.0.0.1:$MEILI_PORT"
   export MEILI_MASTER_KEY JWT_SECRET ADMIN_EMAIL ADMIN_PASSWORD MUSIC_DIRS AUDIOBOOK_DIRS
-  export LYRICS_DIR="$DATA_ROOT/cache/lyrics"
-  export ART_DIR="$DATA_ROOT/cache/art"
-  export AVATARS_DIR="$DATA_ROOT/cache/avatars"
-  export HLS_DIR="$DATA_ROOT/hls"
-  export PODCAST_DIR="$DATA_ROOT/podcasts"
-  export PODCAST_ART_DIR="$DATA_ROOT/cache/podcast-art"
-  export AUDIOBOOK_ART_DIR="$DATA_ROOT/cache/audiobook-art"
-  export DEVICE_LOG_DIR="$DATA_ROOT/device-logs"
-  export COOKIE_SECURE=false
-  export TRUST_PROXY=true
-  export LIBRARY_READ_ONLY=1
-  export FAST_SCAN=1
-  export UV_THREADPOOL_SIZE=16
-  export SCAN_CONCURRENCY=8
-  export METADATA_TIMEOUT_MS=300000
-  export RESCAN_INTERVAL_MS=3600000
-  export TEMPO_DETECT=0
-  export LOG_LEVEL=info
+  export LASTFM_API_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_CALLBACK_URL
+  export COOKIE_NAME COOKIE_SECURE TRUST_PROXY TZ
+  export DB_POOL_SIZE MEILI_TASK_TIMEOUT_MS LOG_LEVEL DEBUG
+  export LIBRARY_READ_ONLY FAST_SCAN UV_THREADPOOL_SIZE SCAN_CONCURRENCY
+  export ARTIST_ART_CONCURRENCY SCAN_MAX_QUEUE SCAN_REFRESH_META METADATA_TIMEOUT_MS
+  export RESCAN_INTERVAL_MS AUDIOBOOK_RESCAN_INTERVAL_MS PODCAST_REFRESH_INTERVAL_MS
+  export TEMPO_DETECT TEMPO_MODE TEMPO_METHOD TEMPO_MIN_CONF TEMPO_CONCURRENCY
+  export TEMPO_BACKFILL_INTERVAL_MS TEMPO_BACKFILL_BATCH
+  export LYRICS_DIR ART_DIR AVATARS_DIR HLS_DIR PODCAST_DIR PODCAST_ART_DIR
+  export AUDIOBOOK_ART_DIR DEVICE_LOG_DIR
   export NODE_ENV=production
   export APP_VERSION="standalone-$BUILD_ID"
   export GIT_COMMIT="$BUILD_ID"
@@ -384,6 +521,7 @@ monitor_services() {
 supervise() {
   create_directories
   load_config
+  create_configured_directories
   if pid_is_running && [ "$(cat "$PID_PATH")" != "$$" ]; then
     fail "MVBar is already running with PID $(cat "$PID_PATH")"
   fi
