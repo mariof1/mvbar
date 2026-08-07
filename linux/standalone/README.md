@@ -1,8 +1,8 @@
 # MVBar Standalone for Linux
 
-This build packages MVBar, Node.js, PostgreSQL, Redis, Meilisearch, FFmpeg, and
-their required libraries into one Linux x86-64 executable. Docker and a Node.js
-installation are not required on the destination computer.
+This build packages MVBar, Node.js, PostgreSQL, Redis, Meilisearch, FFmpeg,
+Caddy, and their required libraries into one Linux x86-64 executable. Docker,
+Caddy, and a Node.js installation are not required on the destination computer.
 
 The current build target is Debian 12 x86-64. The destination needs only the
 standard GNU C library, `/bin/sh`, `tar`, and `gzip` from the base operating
@@ -14,7 +14,7 @@ Build on Debian 12 with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential file git gzip postgresql-15 redis-server ffmpeg python3 tar
+sudo apt-get install -y build-essential caddy file git gzip postgresql-15 redis-server ffmpeg python3 tar
 ./linux/standalone/build-standalone.sh --meilisearch /path/to/meilisearch
 ```
 
@@ -55,6 +55,11 @@ Useful commands:
 ./MVBar-Standalone-*-linux-x64 restart
 ./MVBar-Standalone-*-linux-x64 stop
 ```
+
+The public entry point is bundled Caddy, using the same route map as the Docker
+image for the web UI, REST/API calls, HLS/streaming paths, health checks, and
+WebSockets. HAProxy or another TLS-terminating reverse proxy only needs to
+forward to this one listener.
 
 The default music library is `~/Music`, the default listening address is
 `127.0.0.1`, and the default public port is `8080`. Edit `config.env` and
@@ -122,5 +127,5 @@ After editing `config.env`, restart with
 - The executable is not code-signed.
 - The bundled native runtimes currently target Debian 12 x86-64 and compatible
   glibc environments.
-- Google OAuth requires callback URLs configured for the local address. Local
-  password authentication works without external configuration.
+- Google OAuth requires its exact public callback URL to be registered with
+  Google. Local password authentication works without external configuration.

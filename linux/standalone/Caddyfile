@@ -1,0 +1,50 @@
+{
+	admin off
+	auto_https off
+	log default {
+		exclude http.handlers.reverse_proxy
+	}
+}
+
+(trusted_proxy) {
+	trusted_proxies private_ranges
+}
+
+http://:{$MVBAR_PUBLIC_PORT} {
+	bind {$MVBAR_LISTEN_HOST}
+	encode zstd gzip
+
+	# HLS manifests and segments pass through the web layer for cookie auth.
+	@hlsJob path_regexp hlsJob ^/api/hls/[^/]+/(request|status)$
+	reverse_proxy @hlsJob 127.0.0.1:{$API_PORT} {
+		import trusted_proxy
+	}
+	reverse_proxy /api/hls/* 127.0.0.1:{$WEB_PORT} {
+		import trusted_proxy
+	}
+
+	reverse_proxy /api/stream/* 127.0.0.1:{$WEB_PORT} {
+		import trusted_proxy
+	}
+	reverse_proxy /api/audiobook-stream/* 127.0.0.1:{$WEB_PORT} {
+		import trusted_proxy
+	}
+	reverse_proxy /api/art/* 127.0.0.1:{$WEB_PORT} {
+		import trusted_proxy
+	}
+	reverse_proxy /api/lyrics/* 127.0.0.1:{$WEB_PORT} {
+		import trusted_proxy
+	}
+	reverse_proxy /api/* 127.0.0.1:{$API_PORT} {
+		import trusted_proxy
+	}
+	reverse_proxy /rest/* 127.0.0.1:{$API_PORT} {
+		import trusted_proxy
+	}
+	reverse_proxy /health 127.0.0.1:{$API_PORT} {
+		import trusted_proxy
+	}
+	reverse_proxy 127.0.0.1:{$WEB_PORT} {
+		import trusted_proxy
+	}
+}

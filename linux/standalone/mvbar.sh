@@ -26,6 +26,8 @@ PG_SHARE=$APP_ROOT/runtime/postgres/share
 REDIS_SERVER=$APP_ROOT/runtime/redis/redis-server
 MEILISEARCH=$APP_ROOT/runtime/meili/meilisearch
 FFMPEG_BIN=$APP_ROOT/runtime/ffmpeg
+CADDY=$APP_ROOT/runtime/caddy/caddy
+CADDY_CONFIG=$APP_ROOT/app/Caddyfile
 RUNTIME_LIB=$APP_ROOT/runtime/lib:$APP_ROOT/runtime/postgres/lib
 HELPER=$APP_ROOT/app/helper.cjs
 SERVICE_UNIT_SOURCE=$APP_ROOT/app/mvbar@.service
@@ -36,7 +38,7 @@ PID_MEILI=
 PID_API=
 PID_WORKER=
 PID_WEB=
-PID_PROXY=
+PID_CADDY=
 
 say() {
   printf '%s\n' "$*"
@@ -283,6 +285,8 @@ create_directories() {
     "$DATA_ROOT/hls" \
     "$DATA_ROOT/podcasts" \
     "$DATA_ROOT/device-logs" \
+    "$DATA_ROOT/caddy" \
+    "$DATA_ROOT/caddy-config" \
     "$LOG_ROOT" \
     "$RUN_ROOT" \
     "$RUN_ROOT/postgres"
@@ -459,17 +463,19 @@ start_services() {
   PID_WEB=$!
   wait_http "http://127.0.0.1:$WEB_PORT/" 180
 
-  say "Starting the local gateway..."
+  say "Starting the Caddy gateway..."
   (
     cd "$APP_ROOT"
     exec env LD_LIBRARY_PATH="$RUNTIME_LIB" \
-      MVBAR_PROXY_HOST="$LISTEN_HOST" \
-      MVBAR_PROXY_PORT="$PUBLIC_PORT" \
-      MVBAR_API_PORT="$API_PORT" \
-      MVBAR_WEB_PORT="$WEB_PORT" \
-      "$NODE" app/proxy.js
-  ) > "$LOG_ROOT/proxy.log" 2>&1 &
-  PID_PROXY=$!
+      XDG_DATA_HOME="$DATA_ROOT/caddy" \
+      XDG_CONFIG_HOME="$DATA_ROOT/caddy-config" \
+      MVBAR_LISTEN_HOST="$LISTEN_HOST" \
+      MVBAR_PUBLIC_PORT="$PUBLIC_PORT" \
+      API_PORT="$API_PORT" \
+      WEB_PORT="$WEB_PORT" \
+      "$CADDY" run --config "$CADDY_CONFIG" --adapter caddyfile
+  ) > "$LOG_ROOT/caddy.log" 2>&1 &
+  PID_CADDY=$!
   wait_http "http://127.0.0.1:$PUBLIC_PORT/health" 60
 }
 
@@ -482,7 +488,7 @@ stop_one() {
 cleanup() {
   trap '' HUP INT TERM EXIT
   rm -f "$READY_PATH"
-  stop_one "$PID_PROXY"
+  stop_one "$PID_CADDY"
   stop_one "$PID_WEB"
   stop_one "$PID_WORKER"
   stop_one "$PID_API"
@@ -491,7 +497,7 @@ cleanup() {
   stop_one "$PID_POSTGRES"
 
   deadline=$(( $(date +%s) + 20 ))
-  for service_pid in "$PID_PROXY" "$PID_WEB" "$PID_WORKER" "$PID_API" "$PID_MEILI" "$PID_REDIS" "$PID_POSTGRES"; do
+  for service_pid in "$PID_CADDY" "$PID_WEB" "$PID_WORKER" "$PID_API" "$PID_MEILI" "$PID_REDIS" "$PID_POSTGRES"; do
     [ -n "$service_pid" ] || continue
     while kill -0 "$service_pid" 2>/dev/null && [ "$(date +%s)" -lt "$deadline" ]; do
       sleep 1
@@ -518,7 +524,7 @@ monitor_services() {
       "$PID_API:api" \
       "$PID_WORKER:worker" \
       "$PID_WEB:web" \
-      "$PID_PROXY:proxy"; do
+      "$PID_CADDY:caddy"; do
       service_pid=${service%%:*}
       service_name=${service#*:}
       if ! kill -0 "$service_pid" 2>/dev/null; then
@@ -549,13 +555,8 @@ supervise() {
   API_PORT=$(find_port 53001)
   WEB_PORT=$(find_port 53000)
   PUBLIC_PORT=$(find_port "$CONFIGURED_PORT")
-  while [ "$PUBLIC_PORT" = "$PG_PORT" ] ||
-        [ "$PUBLIC_PORT" = "$REDIS_PORT" ] ||
-        [ "$PUBLIC_PORT" = "$MEILI_PORT" ] ||
-        [ "$PUBLIC_PORT" = "$API_PORT" ] ||
-        [ "$PUBLIC_PORT" = "$WEB_PORT" ]; do
-    PUBLIC_PORT=$(find_port $((PUBLIC_PORT + 1)))
-  done
+  [ "$PUBLIC_PORT" = "$CONFIGURED_PORT" ] || \
+    fail "Configured PORT $CONFIGURED_PORT is already in use"
 
   start_services
 
@@ -699,7 +700,8 @@ status() {
 show_logs() {
   service=${1:-launcher}
   case "$service" in
-    launcher|postgres|redis|meilisearch|api|worker|web|proxy) ;;
+    proxy) service=caddy ;;
+    launcher|postgres|redis|meilisearch|api|worker|web|caddy) ;;
     *) fail "Unknown log '$service'" ;;
   esac
   log_path=$LOG_ROOT/$service.log

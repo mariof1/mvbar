@@ -7,6 +7,7 @@ OUTPUT_DIRECTORY=$SCRIPT_ROOT/out
 SKIP_APP_BUILD=0
 NODE_PATH=${NODE_PATH:-}
 MEILISEARCH_PATH=${MEILISEARCH_PATH:-}
+CADDY_PATH=${CADDY_PATH:-}
 
 usage() {
   cat <<'EOF'
@@ -17,6 +18,7 @@ Options:
   --output-dir PATH      Write the executable and checksum under PATH
   --node PATH            Bundle this Node.js executable
   --meilisearch PATH     Bundle this Meilisearch executable
+  --caddy PATH           Bundle this Caddy executable
   -h, --help             Show this help
 EOF
 }
@@ -40,6 +42,11 @@ while [[ $# -gt 0 ]]; do
     --meilisearch)
       [[ $# -ge 2 ]] || { echo "--meilisearch requires a path" >&2; exit 2; }
       MEILISEARCH_PATH=$2
+      shift 2
+      ;;
+    --caddy)
+      [[ $# -ge 2 ]] || { echo "--caddy requires a path" >&2; exit 2; }
+      CADDY_PATH=$2
       shift 2
       ;;
     -h|--help)
@@ -66,14 +73,20 @@ done
 
 if [[ -z $NODE_PATH ]]; then NODE_PATH=$(command -v node); fi
 if [[ -z $MEILISEARCH_PATH ]]; then MEILISEARCH_PATH=$(command -v meilisearch || true); fi
+if [[ -z $CADDY_PATH ]]; then CADDY_PATH=$(command -v caddy || true); fi
 [[ -x $NODE_PATH ]] || { echo "Node.js executable was not found: $NODE_PATH" >&2; exit 1; }
 [[ -n $MEILISEARCH_PATH && -x $MEILISEARCH_PATH ]] || {
   echo "Meilisearch was not found. Pass --meilisearch PATH." >&2
   exit 1
 }
+[[ -n $CADDY_PATH && -x $CADDY_PATH ]] || {
+  echo "Caddy was not found. Install it or pass --caddy PATH." >&2
+  exit 1
+}
 
 NODE_PATH=$(readlink -f "$NODE_PATH")
 MEILISEARCH_PATH=$(readlink -f "$MEILISEARCH_PATH")
+CADDY_PATH=$(readlink -f "$CADDY_PATH")
 NPM_PATH=$(command -v npm)
 PG_BIN=$(pg_config --bindir)
 PG_SHARE=$(pg_config --sharedir)
@@ -198,6 +211,7 @@ mkdir -p \
   "$STAGING_ROOT/runtime/postgres/$PG_SHARE_REL" \
   "$STAGING_ROOT/runtime/redis" \
   "$STAGING_ROOT/runtime/meili" \
+  "$STAGING_ROOT/runtime/caddy" \
   "$STAGING_ROOT/runtime/ffmpeg" \
   "$STAGING_ROOT/runtime/lib"
 
@@ -210,6 +224,7 @@ ln -s "$PG_LIB_REL" "$STAGING_ROOT/runtime/postgres/lib"
 ln -s "$PG_SHARE_REL" "$STAGING_ROOT/runtime/postgres/share"
 cp -L "$REDIS_PATH" "$STAGING_ROOT/runtime/redis/redis-server"
 cp "$MEILISEARCH_PATH" "$STAGING_ROOT/runtime/meili/meilisearch"
+cp "$CADDY_PATH" "$STAGING_ROOT/runtime/caddy/caddy"
 cp -L "$FFMPEG_PATH" "$STAGING_ROOT/runtime/ffmpeg/ffmpeg"
 cp -L "$FFPROBE_PATH" "$STAGING_ROOT/runtime/ffmpeg/ffprobe"
 
@@ -217,6 +232,7 @@ chmod +x \
   "$STAGING_ROOT/runtime/node/node" \
   "$STAGING_ROOT/runtime/redis/redis-server" \
   "$STAGING_ROOT/runtime/meili/meilisearch" \
+  "$STAGING_ROOT/runtime/caddy/caddy" \
   "$STAGING_ROOT/runtime/ffmpeg/ffmpeg" \
   "$STAGING_ROOT/runtime/ffmpeg/ffprobe"
 
@@ -234,7 +250,7 @@ fi
 cp "$SCRIPT_ROOT/mvbar.sh" "$STAGING_ROOT/app/mvbar.sh"
 cp "$SCRIPT_ROOT/helper.cjs" "$STAGING_ROOT/app/helper.cjs"
 cp "$SCRIPT_ROOT/mvbar@.service" "$STAGING_ROOT/app/mvbar@.service"
-cp "$REPO_ROOT/windows/standalone/proxy.js" "$STAGING_ROOT/app/proxy.js"
+cp "$SCRIPT_ROOT/Caddyfile" "$STAGING_ROOT/app/Caddyfile"
 chmod +x "$STAGING_ROOT/app/mvbar.sh"
 
 mkdir -p "$STAGING_ROOT/licenses"
@@ -250,6 +266,7 @@ fi
 for license in \
   /usr/share/doc/postgresql-15/copyright \
   /usr/share/doc/redis-server/copyright \
+  /usr/share/doc/caddy/copyright \
   /usr/share/doc/ffmpeg/copyright; do
   if [[ -f $license ]]; then
     cp "$license" "$STAGING_ROOT/licenses/$(basename "$(dirname "$license")")-copyright.txt"
@@ -267,6 +284,7 @@ Node.js: $("$NODE_PATH" --version)
 PostgreSQL: $("$PG_BIN/postgres" --version)
 Redis: $("$REDIS_PATH" --version | head -n 1)
 Meilisearch: $("$MEILISEARCH_PATH" --version)
+Caddy: $("$CADDY_PATH" version)
 FFmpeg: $("$FFMPEG_PATH" -version | head -n 1)
 EOF
 

@@ -22,6 +22,11 @@ Copyright Meilisearch.
 License: MIT
 https://www.meilisearch.com/
 
+Caddy
+Copyright Matthew Holt and The Caddy Authors.
+License: Apache License 2.0
+https://caddyserver.com/
+
 FFmpeg
 Copyright FFmpeg contributors.
 License: LGPL/GPL according to the Debian build configuration
