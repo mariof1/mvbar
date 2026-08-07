@@ -24,6 +24,9 @@ infra/caddy/Caddyfile.lan
 /windows/standalone/out
 /windows/standalone/staging
 /windows/standalone/generated
+/linux/standalone/out
+/linux/standalone/staging
+/linux/standalone/generated
 
 # Local scripts (do not commit)
 /web/*airsonic*test*.js
