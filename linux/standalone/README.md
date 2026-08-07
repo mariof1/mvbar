@@ -103,15 +103,19 @@ are left unchanged.
 
 ## systemd
 
-For a dedicated server, copy the binary and the included template unit to
-stable locations. The instance name is the Linux account that owns MVBar:
+For a dedicated server, run the built-in installer as the Linux account that
+should own MVBar. It uses `sudo` for the privileged installation steps, stops
+any manually started MVBar instance, and enables and starts systemd:
 
 ```bash
-sudo install -m 0755 MVBar-Standalone-*-linux-x64 /usr/local/bin/mvbar
-sudo install -m 0644 linux/standalone/mvbar@.service /etc/systemd/system/mvbar@.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now mvbar@lanadmin.service
+./MVBar-Standalone-*-linux-x64 install-service
 ```
+
+Pass a Linux username only when installing for a different account, for
+example `./MVBar-Standalone-*-linux-x64 install-service lanadmin`. The bundled
+unit currently expects that account's home directory at `/home/USERNAME`.
+After editing `config.env`, restart with
+`sudo systemctl restart mvbar@USERNAME.service`.
 
 ## Limitations
 

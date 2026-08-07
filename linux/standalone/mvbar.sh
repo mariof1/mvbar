@@ -28,6 +28,7 @@ MEILISEARCH=$APP_ROOT/runtime/meili/meilisearch
 FFMPEG_BIN=$APP_ROOT/runtime/ffmpeg
 RUNTIME_LIB=$APP_ROOT/runtime/lib:$APP_ROOT/runtime/postgres/lib
 HELPER=$APP_ROOT/app/helper.cjs
+SERVICE_UNIT_SOURCE=$APP_ROOT/app/mvbar@.service
 
 PID_POSTGRES=
 PID_REDIS=
@@ -44,6 +45,15 @@ say() {
 fail() {
   printf 'MVBar: %s\n' "$*" >&2
   exit 1
+}
+
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+    return
+  fi
+  command -v sudo >/dev/null 2>&1 || fail "sudo is required to install the systemd service"
+  sudo "$@"
 }
 
 runtime() {
@@ -612,6 +622,66 @@ stop_background() {
   say "MVBar stopped."
 }
 
+install_service() {
+  service_user=${1:-${SUDO_USER:-$(id -un)}}
+  case "$service_user" in
+    ''|*[!A-Za-z0-9_.-]*) fail "Invalid service user: $service_user" ;;
+  esac
+
+  service_account=$(getent passwd "$service_user" 2>/dev/null || true)
+  [ -n "$service_account" ] || fail "Linux user does not exist: $service_user"
+  service_home=$(printf '%s\n' "$service_account" | awk -F: '{ print $6 }')
+  [ -n "$service_home" ] || fail "Linux user has no home directory: $service_user"
+  [ "$service_home" = "/home/$service_user" ] || \
+    fail "The bundled systemd unit currently requires /home/$service_user (found $service_home)"
+  if [ -z "${MVBAR_EXECUTABLE:-}" ] || [ ! -f "$MVBAR_EXECUTABLE" ]; then
+    fail "Cannot locate the standalone executable"
+  fi
+  [ -f "$SERVICE_UNIT_SOURCE" ] || fail "Bundled systemd unit is missing"
+
+  service_name="mvbar@$service_user.service"
+  service_home_root=$service_home/.local/share/mvbar
+
+  say "Installing MVBar as $service_name..."
+  run_as_root true
+  run_as_root install -o root -g root -m 0755 "$MVBAR_EXECUTABLE" /usr/local/bin/mvbar
+  run_as_root install -o root -g root -m 0644 \
+    "$SERVICE_UNIT_SOURCE" /etc/systemd/system/mvbar@.service
+  run_as_root systemctl daemon-reload
+  run_as_root systemctl stop "$service_name"
+
+  if [ "$(id -un)" = "$service_user" ] && [ "$HOME_ROOT" = "$service_home_root" ]; then
+    stop_background
+  else
+    run_as_root runuser -u "$service_user" -- \
+      env HOME="$service_home" MVBAR_HOME="$service_home_root" \
+      /usr/local/bin/mvbar stop
+  fi
+
+  run_as_root rm -f "$service_home_root/run/ready" "$service_home_root/run/error"
+  run_as_root systemctl enable --now "$service_name"
+
+  attempts=0
+  while [ "$attempts" -lt 300 ]; do
+    if [ -s "$service_home_root/run/ready" ] && \
+       run_as_root systemctl is-active --quiet "$service_name"; then
+      say "MVBar systemd service is installed and running."
+      say "Service: $service_name"
+      say "URL: $(cat "$service_home_root/run/ready")"
+      say "Restart after configuration changes with: sudo systemctl restart $service_name"
+      return
+    fi
+    if run_as_root systemctl is-failed --quiet "$service_name"; then
+      break
+    fi
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+
+  run_as_root systemctl status --no-pager "$service_name" >&2 || true
+  fail "The systemd service did not become ready"
+}
+
 status() {
   if pid_is_running; then
     say "MVBar is running (PID $(cat "$PID_PATH"))."
@@ -646,6 +716,7 @@ show_help() {
   say "  foreground            Run under a service manager"
   say "  stop                   Stop all MVBar services"
   say "  restart                Restart MVBar"
+  say "  install-service [USER] Install, enable, and start a systemd service"
   say "  status                 Show status, URL, data, and log locations"
   say "  logs [service]         Follow launcher or component logs"
   say "  credentials            Print the administrator credentials"
@@ -665,6 +736,7 @@ case "$command" in
     stop_background
     start_background
     ;;
+  install-service) install_service "${2:-}" ;;
   status) status ;;
   logs) show_logs "${2:-launcher}" ;;
   credentials)

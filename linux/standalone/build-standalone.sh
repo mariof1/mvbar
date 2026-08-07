@@ -233,6 +233,7 @@ fi
 
 cp "$SCRIPT_ROOT/mvbar.sh" "$STAGING_ROOT/app/mvbar.sh"
 cp "$SCRIPT_ROOT/helper.cjs" "$STAGING_ROOT/app/helper.cjs"
+cp "$SCRIPT_ROOT/mvbar@.service" "$STAGING_ROOT/app/mvbar@.service"
 cp "$REPO_ROOT/windows/standalone/proxy.js" "$STAGING_ROOT/app/proxy.js"
 chmod +x "$STAGING_ROOT/app/mvbar.sh"
 
