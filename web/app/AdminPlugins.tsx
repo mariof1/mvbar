@@ -420,7 +420,7 @@ export function AdminPlugins({ token }: { token: string }) {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
             <h2 className="text-xl font-semibold text-white">Sandboxed plugins</h2>
-            <p className="mt-2 text-sm leading-relaxed text-slate-300">Install Navidrome-compatible <span className="font-mono text-cyan-300">.ndp</span> WebAssembly packages or MVBar extensions. Plugins run outside the core process, start disabled, and receive only the permissions shown before enablement.</p>
+            <p className="mt-2 text-sm leading-relaxed text-slate-300">Install Navidrome-compatible <span className="font-mono text-cyan-300">.ndp</span> WebAssembly packages or MVBar extensions. Plugins run in isolated worker threads, start disabled, and receive only the permissions shown before enablement.</p>
           </div>
           <button onClick={() => void rescan()} disabled={rescanning} className="rounded-lg border border-slate-600 bg-slate-800/60 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700/60 disabled:opacity-50">{rescanning ? 'Scanning…' : 'Rescan folder'}</button>
         </div>

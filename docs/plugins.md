@@ -42,8 +42,8 @@ can list the AudioMuse host explicitly.
 
 Each call runs in a fresh worker-thread WebAssembly instance. MVBar applies a
 hard timeout, memory ceiling, concurrency limit, response-size limit, and
-redirect validation. Plugins cannot import Node.js modules or load code into
-the API process.
+redirect validation. Plugins cannot import Node.js modules or execute
+JavaScript in MVBar's main API thread.
 
 MVBar currently grants these manifest permissions:
 
