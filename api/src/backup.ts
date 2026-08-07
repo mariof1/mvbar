@@ -1,5 +1,5 @@
 import fp from 'fastify-plugin';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
 import { ZipArchive } from 'archiver';
 import * as unzipper from 'unzipper';
 import { to as copyTo } from 'pg-copy-streams';
@@ -12,15 +12,20 @@ import {
   mkdtemp,
   opendir,
   readFile,
+  readdir,
   realpath,
+  rename,
   rm,
+  writeFile,
 } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Transform } from 'node:stream';
 import { finished, pipeline } from 'node:stream/promises';
 import { createInterface } from 'node:readline';
 import { db, redis } from './db.js';
+import { broadcastToAdmins } from './websocket.js';
 
 const BACKUP_FORMAT = 'mvbar-portable-backup';
 const BACKUP_FORMAT_VERSION = 2;
@@ -32,6 +37,9 @@ const MAX_UPLOAD_BYTES = Math.max(
 ) * 1024 * 1024;
 const MAX_EXTRACTED_BYTES = MAX_UPLOAD_BYTES * 3;
 const INSERT_BATCH_SIZE = 500;
+const BACKUP_DIRECTORY = process.env.BACKUP_DIR ?? '/data/backups';
+const BACKUP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.mvbar-backup$/;
+const MAX_MANIFEST_BYTES = 1024 * 1024;
 
 type TableInfo = {
   name: string;
@@ -59,6 +67,24 @@ type BackupManifest = {
   caches: CacheManifest;
 };
 
+export type StoredBackup = {
+  name: string;
+  size: number;
+  createdAt: string;
+  storedAt: string;
+  includesCaches: boolean;
+  cacheFiles: number;
+  cacheBytes: number;
+  appVersion: string;
+  commit: string;
+};
+
+type BackupJob = {
+  id: string;
+  startedAt: string;
+  includeCaches: boolean;
+};
+
 type CacheCategory = {
   key: string;
   root: string;
@@ -71,6 +97,11 @@ type RestoreContext = {
 };
 
 let restoreInProgress = false;
+let backupInProgress: BackupJob | null = null;
+
+export function isSafeBackupName(name: string) {
+  return BACKUP_NAME_RE.test(name) && path.basename(name) === name;
+}
 
 function qident(value: string) {
   if (!IDENTIFIER_RE.test(value)) throw new Error(`Unsafe database identifier: ${value}`);
@@ -202,7 +233,7 @@ export function isSafeArchivePath(entryPath: string) {
   return normalized === entryPath && normalized !== '..' && !normalized.startsWith('../');
 }
 
-async function createBackupArchive(includeCaches: boolean, output: PassThrough) {
+async function createBackupArchive(includeCaches: boolean, output: PassThrough): Promise<BackupManifest> {
   const client = await db().connect();
   const archive = new ZipArchive({ zlib: { level: 6 } });
   archive.pipe(output);
@@ -263,9 +294,11 @@ async function createBackupArchive(includeCaches: boolean, output: PassThrough) 
     };
     archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
     await archive.finalize();
+    return manifest;
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     output.destroy(error as Error);
+    throw error;
   } finally {
     client.release();
   }
@@ -281,10 +314,7 @@ async function extractArchive(archivePath: string, targetRoot: string) {
     if (entry.type !== 'File' || !isSafeArchivePath(entryPath) || seen.has(entryPath)) {
       throw new Error(`Invalid archive entry: ${entry.path}`);
     }
-    const allowed = entryPath === 'manifest.json'
-      || /^database\/[a-z_][a-z0-9_]*\.jsonl$/.test(entryPath)
-      || /^cache\/[a-z0-9-]+\/.+/.test(entryPath);
-    if (!allowed) throw new Error(`Unsupported archive entry: ${entryPath}`);
+    if (!isAllowedArchivePath(entryPath)) throw new Error(`Unsupported archive entry: ${entryPath}`);
     seen.add(entryPath);
     extractedBytes += entry.uncompressedSize;
     if (extractedBytes > MAX_EXTRACTED_BYTES) throw new Error('Backup expands beyond the configured safety limit');
@@ -313,6 +343,14 @@ function validateManifest(value: unknown): asserts value is BackupManifest {
   if (manifest.format !== BACKUP_FORMAT || manifest.formatVersion !== BACKUP_FORMAT_VERSION) {
     throw new Error('Unsupported MVBar backup format');
   }
+  if (
+    typeof manifest.createdAt !== 'string'
+    || !Number.isFinite(Date.parse(manifest.createdAt))
+    || typeof manifest.app?.version !== 'string'
+    || typeof manifest.app?.commit !== 'string'
+  ) {
+    throw new Error('Backup application manifest is invalid');
+  }
   if (manifest.database?.format !== 'postgres-jsonl-v2' || !Array.isArray(manifest.database.tables)) {
     throw new Error('Backup database manifest is invalid');
   }
@@ -328,6 +366,162 @@ function validateManifest(value: unknown): asserts value is BackupManifest {
   }
   if (!manifest.caches || !Array.isArray(manifest.caches.categories)) {
     throw new Error('Backup cache manifest is invalid');
+  }
+}
+
+function isAllowedArchivePath(entryPath: string) {
+  return entryPath === 'manifest.json'
+    || /^database\/[a-z_][a-z0-9_]*\.jsonl$/.test(entryPath)
+    || /^cache\/[a-z0-9-]+\/.+/.test(entryPath);
+}
+
+function backupMetadataPath(name: string) {
+  return path.join(BACKUP_DIRECTORY, `${name}.metadata.json`);
+}
+
+function recordFromManifest(
+  name: string,
+  size: number,
+  storedAt: string,
+  manifest: BackupManifest,
+): StoredBackup {
+  return {
+    name,
+    size,
+    createdAt: manifest.createdAt,
+    storedAt,
+    includesCaches: manifest.caches.included,
+    cacheFiles: manifest.caches.categories.reduce((total, category) => total + category.files, 0),
+    cacheBytes: manifest.caches.categories.reduce((total, category) => total + category.bytes, 0),
+    appVersion: manifest.app.version,
+    commit: manifest.app.commit,
+  };
+}
+
+function isStoredBackup(value: unknown, expectedName: string): value is StoredBackup {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<StoredBackup>;
+  return record.name === expectedName
+    && typeof record.size === 'number'
+    && typeof record.createdAt === 'string'
+    && typeof record.storedAt === 'string'
+    && typeof record.includesCaches === 'boolean'
+    && typeof record.cacheFiles === 'number'
+    && typeof record.cacheBytes === 'number'
+    && typeof record.appVersion === 'string'
+    && typeof record.commit === 'string';
+}
+
+async function inspectBackupArchive(archivePath: string) {
+  const archive = await unzipper.Open.file(archivePath);
+  const entries = new Set<string>();
+  let manifestEntry: (typeof archive.files)[number] | undefined;
+  for (const entry of archive.files) {
+    const entryPath = entry.path.replace(/\/$/, '');
+    if (entry.type === 'Directory') continue;
+    if (
+      entry.type !== 'File'
+      || !isSafeArchivePath(entryPath)
+      || !isAllowedArchivePath(entryPath)
+      || entries.has(entryPath)
+    ) {
+      throw new Error(`Invalid archive entry: ${entry.path}`);
+    }
+    entries.add(entryPath);
+    if (entryPath === 'manifest.json') manifestEntry = entry;
+  }
+  if (!manifestEntry || manifestEntry.uncompressedSize > MAX_MANIFEST_BYTES) {
+    throw new Error('Backup manifest is missing or too large');
+  }
+  const manifest = JSON.parse((await manifestEntry.buffer()).toString('utf8')) as unknown;
+  validateManifest(manifest);
+  for (const table of manifest.database.tables) {
+    if (!entries.has(`database/${table.name}.jsonl`)) {
+      throw new Error(`Backup table is missing: ${table.name}`);
+    }
+  }
+  return manifest;
+}
+
+async function writeBackupMetadata(name: string, manifest: BackupManifest, storedAt = new Date().toISOString()) {
+  const archivePath = path.join(BACKUP_DIRECTORY, name);
+  const archiveStat = await lstat(archivePath);
+  if (!archiveStat.isFile() || archiveStat.isSymbolicLink()) throw new Error('Stored backup is not a regular file');
+  const record = recordFromManifest(name, archiveStat.size, storedAt, manifest);
+  const metadataPath = backupMetadataPath(name);
+  const temporaryPath = `${metadataPath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, JSON.stringify(record, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    await rm(metadataPath, { force: true });
+    await rename(temporaryPath, metadataPath);
+    return record;
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function getStoredBackup(name: string): Promise<StoredBackup> {
+  if (!isSafeBackupName(name)) throw new Error('Invalid backup name');
+  const archivePath = path.join(BACKUP_DIRECTORY, name);
+  const archiveStat = await lstat(archivePath);
+  if (!archiveStat.isFile() || archiveStat.isSymbolicLink()) throw new Error('Backup not found');
+  try {
+    const stored = JSON.parse(await readFile(backupMetadataPath(name), 'utf8')) as unknown;
+    if (isStoredBackup(stored, name)) {
+      return { ...stored, size: archiveStat.size };
+    }
+  } catch {
+    // Rebuild missing or invalid metadata from the portable archive.
+  }
+  const manifest = await inspectBackupArchive(archivePath);
+  return writeBackupMetadata(name, manifest, archiveStat.mtime.toISOString());
+}
+
+async function listStoredBackups() {
+  await mkdir(BACKUP_DIRECTORY, { recursive: true });
+  const entries = await readdir(BACKUP_DIRECTORY, { withFileTypes: true });
+  const backups = await Promise.all(entries
+    .filter((entry) => entry.isFile() && isSafeBackupName(entry.name))
+    .map(async (entry) => {
+      try {
+        return await getStoredBackup(entry.name);
+      } catch {
+        return null;
+      }
+    }));
+  return backups
+    .filter((backup): backup is StoredBackup => backup !== null)
+    .sort((left, right) => Date.parse(right.storedAt) - Date.parse(left.storedAt));
+}
+
+function newBackupName() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `mvbar-backup-${timestamp}-${randomUUID().slice(0, 8)}.mvbar-backup`;
+}
+
+async function createStoredBackup(includeCaches: boolean) {
+  await mkdir(BACKUP_DIRECTORY, { recursive: true });
+  const name = newBackupName();
+  const archivePath = path.join(BACKUP_DIRECTORY, name);
+  const temporaryPath = path.join(BACKUP_DIRECTORY, `.${randomUUID()}.tmp`);
+  const output = new PassThrough();
+  const writer = pipeline(output, createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600 }));
+  let archiveStored = false;
+  try {
+    const manifest = await createBackupArchive(includeCaches, output);
+    await writer;
+    await rename(temporaryPath, archivePath);
+    archiveStored = true;
+    return await writeBackupMetadata(name, manifest);
+  } catch (error) {
+    output.destroy();
+    await writer.catch(() => undefined);
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    if (archiveStored) {
+      await rm(archivePath, { force: true }).catch(() => undefined);
+      await rm(backupMetadataPath(name), { force: true }).catch(() => undefined);
+    }
+    throw error;
   }
 }
 
@@ -549,91 +743,223 @@ async function restoreDatabase(stagingRoot: string, manifest: BackupManifest, re
   }
 }
 
+async function restoreArchiveFile(archivePath: string, requestedCaches: boolean, log: FastifyBaseLogger) {
+  const stagingRoot = await mkdtemp(path.join(os.tmpdir(), 'mvbar-restore-'));
+  try {
+    const extractedRoot = path.join(stagingRoot, 'extracted');
+    await mkdir(extractedRoot);
+    const entries = await extractArchive(archivePath, extractedRoot);
+    if (!entries.has('manifest.json')) throw new Error('Backup manifest is missing');
+    const manifest = JSON.parse(await readFile(path.join(extractedRoot, 'manifest.json'), 'utf8')) as unknown;
+    validateManifest(manifest);
+    for (const table of manifest.database.tables) {
+      if (!entries.has(`database/${table.name}.jsonl`)) throw new Error(`Backup table is missing: ${table.name}`);
+    }
+    const restoreCaches = requestedCaches && manifest.caches.included;
+    const databaseResult = await restoreDatabase(extractedRoot, manifest, restoreCaches);
+    let cacheFiles = 0;
+    let cacheWarning: string | undefined;
+    if (restoreCaches) {
+      try {
+        cacheFiles = await restoreCacheFiles(extractedRoot, manifest);
+      } catch (error) {
+        cacheWarning = error instanceof Error ? error.message : 'Cache restore failed';
+        log.error({ err: error }, 'Database restored but optional cache restore failed');
+      }
+    }
+    let reindexQueued = false;
+    let reindexWarning: string | undefined;
+    try {
+      const listeners = await redis().publish(
+        'library:commands',
+        JSON.stringify({ command: 'rescan', by: 'portable-restore', force: true }),
+      );
+      reindexQueued = listeners > 0;
+      if (!reindexQueued) reindexWarning = 'Library worker is unavailable; run a full library scan to rebuild search';
+      await redis().publish(
+        'audiobook:commands',
+        JSON.stringify({ command: 'rescan', by: 'portable-restore' }),
+      );
+    } catch (error) {
+      reindexWarning = 'Could not queue a full library scan; run one from Admin → Library';
+      log.error({ err: error }, 'Database restored but search reconciliation could not be queued');
+    }
+    const warnings = [cacheWarning, reindexWarning].filter(Boolean);
+    return {
+      ok: true as const,
+      ...databaseResult,
+      cachesRestored: restoreCaches,
+      cacheFiles,
+      reindexQueued,
+      warning: warnings.length > 0 ? warnings.join(' ') : undefined,
+      sessionsInvalidated: true as const,
+    };
+  } finally {
+    await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export const backupPlugin: FastifyPluginAsync = fp(async (app) => {
-  app.get('/api/admin/backup', async (req, reply) => {
-    if (!req.user || req.user.role !== 'admin') return reply.code(403).send({ ok: false });
-    if (restoreInProgress) return reply.code(409).send({ ok: false, error: 'A restore is currently running' });
-    const includeCaches = (req.query as { includeCaches?: string }).includeCaches === 'true';
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const output = new PassThrough();
-    reply
-      .type('application/zip')
-      .header('Content-Disposition', `attachment; filename="mvbar-backup-${timestamp}.mvbar-backup"`)
-      .header('Cache-Control', 'no-store')
-      .send(output);
-    void createBackupArchive(includeCaches, output);
-    return reply;
+  app.get('/api/admin/backups', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    return { ok: true, backups: await listStoredBackups(), creating: backupInProgress };
   });
 
+  app.post('/api/admin/backups', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    if (restoreInProgress) return reply.code(409).send({ ok: false, error: 'A restore is currently running' });
+    if (backupInProgress) return reply.code(409).send({ ok: false, error: 'A backup is already running' });
+    const includeCaches = Boolean((req.body as { includeCaches?: boolean } | undefined)?.includeCaches);
+    const job: BackupJob = { id: randomUUID(), startedAt: new Date().toISOString(), includeCaches };
+    backupInProgress = job;
+    broadcastToAdmins('backup:started', { job });
+    void createStoredBackup(includeCaches)
+      .then((backup) => {
+        backupInProgress = null;
+        broadcastToAdmins('backup:created', { backup, source: 'created' });
+        app.log.info({ backup: backup.name, bytes: backup.size }, 'Server backup created');
+      })
+      .catch((error) => {
+        backupInProgress = null;
+        app.log.error({ err: error }, 'Server backup creation failed');
+        broadcastToAdmins('backup:error', {
+          operation: 'create',
+          error: error instanceof Error ? error.message : 'Backup creation failed',
+        });
+      });
+    return reply.code(202).send({ ok: true, job });
+  });
+
+  app.post('/api/admin/backups/upload', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    if (restoreInProgress) return reply.code(409).send({ ok: false, error: 'A restore is currently running' });
+    await mkdir(BACKUP_DIRECTORY, { recursive: true });
+    const temporaryPath = path.join(BACKUP_DIRECTORY, `.${randomUUID()}.upload`);
+    let archivePath: string | null = null;
+    try {
+      const upload = await req.file({ limits: { files: 1, fileSize: MAX_UPLOAD_BYTES } });
+      if (!upload) return reply.code(400).send({ ok: false, error: 'Backup file is required' });
+      await pipeline(upload.file, createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600 }));
+      if (upload.file.truncated) return reply.code(413).send({ ok: false, error: 'Backup exceeds the configured upload limit' });
+      const manifest = await inspectBackupArchive(temporaryPath);
+      const name = newBackupName();
+      archivePath = path.join(BACKUP_DIRECTORY, name);
+      await rename(temporaryPath, archivePath);
+      const backup = await writeBackupMetadata(name, manifest);
+      broadcastToAdmins('backup:created', { backup, source: 'uploaded' });
+      return reply.code(201).send({ ok: true, backup });
+    } catch (error) {
+      if (archivePath) await rm(archivePath, { force: true }).catch(() => undefined);
+      const message = error instanceof Error ? error.message : 'Backup upload failed';
+      return reply.code(400).send({ ok: false, error: message });
+    } finally {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
+  });
+
+  app.get('/api/admin/backups/:name/download', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    const { name } = req.params as { name: string };
+    try {
+      const backup = await getStoredBackup(name);
+      return reply
+        .type('application/zip')
+        .header('Content-Disposition', `attachment; filename="${backup.name}"`)
+        .header('Content-Length', backup.size)
+        .header('Cache-Control', 'no-store')
+        .send(createReadStream(path.join(BACKUP_DIRECTORY, backup.name)));
+    } catch {
+      return reply.code(404).send({ ok: false, error: 'Backup not found' });
+    }
+  });
+
+  app.delete('/api/admin/backups/:name', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    if (restoreInProgress) return reply.code(409).send({ ok: false, error: 'A restore is currently running' });
+    const { name } = req.params as { name: string };
+    try {
+      const backup = await getStoredBackup(name);
+      await rm(path.join(BACKUP_DIRECTORY, backup.name));
+      await rm(backupMetadataPath(backup.name), { force: true });
+      broadcastToAdmins('backup:deleted', { name: backup.name });
+      return { ok: true };
+    } catch {
+      return reply.code(404).send({ ok: false, error: 'Backup not found' });
+    }
+  });
+
+  app.post('/api/admin/backups/:name/restore', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    if (backupInProgress) return reply.code(409).send({ ok: false, error: 'A backup is currently running' });
+    if (restoreInProgress) return reply.code(409).send({ ok: false, error: 'A restore is already running' });
+    const { name } = req.params as { name: string };
+    const requestedCaches = (req.query as { restoreCaches?: string }).restoreCaches === 'true';
+    restoreInProgress = true;
+    try {
+      const backup = await getStoredBackup(name);
+      return await restoreArchiveFile(path.join(BACKUP_DIRECTORY, backup.name), requestedCaches, req.log);
+    } catch (error) {
+      req.log.error({ err: error }, 'Stored backup restore failed');
+      const message = error instanceof Error ? error.message : 'Restore failed';
+      return reply.code(400).send({ ok: false, error: message });
+    } finally {
+      restoreInProgress = false;
+    }
+  });
+
+  // Legacy direct-download endpoint now also persists the generated archive.
+  app.get('/api/admin/backup', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    if (restoreInProgress) return reply.code(409).send({ ok: false, error: 'A restore is currently running' });
+    if (backupInProgress) return reply.code(409).send({ ok: false, error: 'A backup is already running' });
+    const includeCaches = (req.query as { includeCaches?: string }).includeCaches === 'true';
+    const job: BackupJob = { id: randomUUID(), startedAt: new Date().toISOString(), includeCaches };
+    backupInProgress = job;
+    broadcastToAdmins('backup:started', { job });
+    try {
+      const backup = await createStoredBackup(includeCaches);
+      backupInProgress = null;
+      broadcastToAdmins('backup:created', { backup, source: 'created' });
+      return reply
+        .type('application/zip')
+        .header('Content-Disposition', `attachment; filename="${backup.name}"`)
+        .header('Content-Length', backup.size)
+        .header('Cache-Control', 'no-store')
+        .send(createReadStream(path.join(BACKUP_DIRECTORY, backup.name)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Backup creation failed';
+      broadcastToAdmins('backup:error', { operation: 'create', error: message });
+      return reply.code(500).send({ ok: false, error: message });
+    } finally {
+      backupInProgress = null;
+    }
+  });
+
+  // Keep uploaded restore support for transferring an archive from another installation.
   app.post('/api/admin/restore', async (req, reply) => {
-    if (!req.user || req.user.role !== 'admin') return reply.code(403).send({ ok: false });
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+    if (backupInProgress) return reply.code(409).send({ ok: false, error: 'A backup is currently running' });
     if (restoreInProgress) return reply.code(409).send({ ok: false, error: 'A restore is already running' });
     restoreInProgress = true;
-    let stagingRoot: string | null = null;
+    const stagingRoot = await mkdtemp(path.join(os.tmpdir(), 'mvbar-upload-'));
     try {
-      stagingRoot = await mkdtemp(path.join(os.tmpdir(), 'mvbar-restore-'));
       const upload = await req.file({ limits: { files: 1, fileSize: MAX_UPLOAD_BYTES } });
       if (!upload) return reply.code(400).send({ ok: false, error: 'Backup file is required' });
       const archivePath = path.join(stagingRoot, 'upload.mvbar-backup');
-      await pipeline(upload.file, createWriteStream(archivePath, { flags: 'wx' }));
+      await pipeline(upload.file, createWriteStream(archivePath, { flags: 'wx', mode: 0o600 }));
       if (upload.file.truncated) return reply.code(413).send({ ok: false, error: 'Backup exceeds the configured upload limit' });
-
-      const extractedRoot = path.join(stagingRoot, 'extracted');
-      await mkdir(extractedRoot);
-      const entries = await extractArchive(archivePath, extractedRoot);
-      if (!entries.has('manifest.json')) throw new Error('Backup manifest is missing');
-      const manifest = JSON.parse(await readFile(path.join(extractedRoot, 'manifest.json'), 'utf8')) as unknown;
-      validateManifest(manifest);
-      for (const table of manifest.database.tables) {
-        if (!entries.has(`database/${table.name}.jsonl`)) throw new Error(`Backup table is missing: ${table.name}`);
-      }
-      const requestedCaches = (req.query as { restoreCaches?: string }).restoreCaches === 'true';
-      const restoreCaches = requestedCaches && manifest.caches.included;
-      const databaseResult = await restoreDatabase(extractedRoot, manifest, restoreCaches);
-      let cacheFiles = 0;
-      let cacheWarning: string | undefined;
-      if (restoreCaches) {
-        try {
-          cacheFiles = await restoreCacheFiles(extractedRoot, manifest);
-        } catch (error) {
-          cacheWarning = error instanceof Error ? error.message : 'Cache restore failed';
-          req.log.error({ err: error }, 'Database restored but optional cache restore failed');
-        }
-      }
-      let reindexQueued = false;
-      let reindexWarning: string | undefined;
-      try {
-        const listeners = await redis().publish(
-          'library:commands',
-          JSON.stringify({ command: 'rescan', by: 'portable-restore', force: true }),
-        );
-        reindexQueued = listeners > 0;
-        if (!reindexQueued) reindexWarning = 'Library worker is unavailable; run a full library scan to rebuild search';
-        await redis().publish(
-          'audiobook:commands',
-          JSON.stringify({ command: 'rescan', by: 'portable-restore' }),
-        );
-      } catch (error) {
-        reindexWarning = 'Could not queue a full library scan; run one from Admin → Library';
-        req.log.error({ err: error }, 'Database restored but search reconciliation could not be queued');
-      }
-      const warnings = [cacheWarning, reindexWarning].filter(Boolean);
-      return {
-        ok: true,
-        ...databaseResult,
-        cachesRestored: restoreCaches,
-        cacheFiles,
-        reindexQueued,
-        warning: warnings.length > 0 ? warnings.join(' ') : undefined,
-        sessionsInvalidated: true,
-      };
+      return await restoreArchiveFile(
+        archivePath,
+        (req.query as { restoreCaches?: string }).restoreCaches === 'true',
+        req.log,
+      );
     } catch (error) {
       req.log.error({ err: error }, 'Portable backup restore failed');
       const message = error instanceof Error ? error.message : 'Restore failed';
       return reply.code(400).send({ ok: false, error: message });
     } finally {
       restoreInProgress = false;
-      if (stagingRoot) await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+      await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
     }
   });
 });

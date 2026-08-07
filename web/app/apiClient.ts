@@ -49,17 +49,51 @@ async function transferError(response: Response) {
   throw Object.assign(new Error(message), { status: response.status, data });
 }
 
-export async function downloadAdminBackup(token: string, includeCaches = false) {
+export type AdminBackup = {
+  name: string;
+  size: number;
+  createdAt: string;
+  storedAt: string;
+  includesCaches: boolean;
+  cacheFiles: number;
+  cacheBytes: number;
+  appVersion: string;
+  commit: string;
+};
+
+export type AdminBackupJob = {
+  id: string;
+  startedAt: string;
+  includeCaches: boolean;
+};
+
+export async function listAdminBackups(token: string) {
+  return (await apiFetch('/admin/backups', { method: 'GET' }, token)) as {
+    ok: true;
+    backups: AdminBackup[];
+    creating: AdminBackupJob | null;
+  };
+}
+
+export async function createAdminBackup(token: string, includeCaches = false) {
+  return (await apiFetch('/admin/backups', {
+    method: 'POST',
+    body: JSON.stringify({ includeCaches }),
+  }, token)) as { ok: true; job: AdminBackupJob };
+}
+
+export async function downloadAdminBackup(token: string, name: string) {
+  const url = `${API_BASE}/admin/backups/${encodeURIComponent(name)}/download`;
   if (token === 'cookie') {
     const anchor = document.createElement('a');
-    anchor.href = `${API_BASE}/admin/backup?includeCaches=${includeCaches}`;
+    anchor.href = url;
     anchor.style.display = 'none';
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    return { filename: 'MVBar backup', bytes: null };
+    return;
   }
-  const response = await fetch(`${API_BASE}/admin/backup?includeCaches=${includeCaches}`, {
+  const response = await fetch(url, {
     method: 'GET',
     headers: adminTransferHeaders(token),
     cache: 'no-store',
@@ -67,26 +101,23 @@ export async function downloadAdminBackup(token: string, includeCaches = false) 
   });
   if (!response.ok) await transferError(response);
   const blob = await response.blob();
-  const disposition = response.headers.get('content-disposition') || '';
-  const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `mvbar-backup-${new Date().toISOString()}.mvbar-backup`;
   const objectUrl = URL.createObjectURL(blob);
   try {
     const anchor = document.createElement('a');
     anchor.href = objectUrl;
-    anchor.download = filename;
+    anchor.download = name;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
-  return { filename, bytes: blob.size as number | null };
 }
 
-export async function restoreAdminBackup(token: string, file: File, restoreCaches = false) {
+export async function uploadAdminBackup(token: string, file: File) {
   const form = new FormData();
   form.append('backup', file, file.name);
-  const response = await fetch(`${API_BASE}/admin/restore?restoreCaches=${restoreCaches}`, {
+  const response = await fetch(`${API_BASE}/admin/backups/upload`, {
     method: 'POST',
     headers: adminTransferHeaders(token),
     body: form,
@@ -94,7 +125,21 @@ export async function restoreAdminBackup(token: string, file: File, restoreCache
     credentials: 'same-origin',
   });
   if (!response.ok) await transferError(response);
-  return (await response.json()) as {
+  return (await response.json()) as { ok: true; backup: AdminBackup };
+}
+
+export async function deleteAdminBackup(token: string, name: string) {
+  return (await apiFetch(`/admin/backups/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  }, token)) as { ok: true };
+}
+
+export async function restoreAdminBackup(token: string, name: string, restoreCaches = false) {
+  return (await apiFetch(
+    `/admin/backups/${encodeURIComponent(name)}/restore?restoreCaches=${restoreCaches}`,
+    { method: 'POST' },
+    token,
+  )) as {
     ok: true;
     tables: number;
     rows: number;

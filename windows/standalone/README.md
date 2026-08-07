@@ -45,6 +45,9 @@ Use **Settings** in the launcher or notification-area menu to change:
 Application data survives upgrades under `%LOCALAPPDATA%\MVBar\data`. Settings
 are stored in `%LOCALAPPDATA%\MVBar\config.env`.
 
+Server-managed portable backups are stored under `%LOCALAPPDATA%\MVBar\data\backups`
+by default. The location can be changed with `BACKUP_DIR` in `config.env`.
+
 The default music library uses the current user's `Music` folder. Audiobooks
 are optional and have no default folder. Multiple paths are comma separated
 in `config.env`.

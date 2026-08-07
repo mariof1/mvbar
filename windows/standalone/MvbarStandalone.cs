@@ -412,6 +412,16 @@ internal static class Program
             Directory.CreateDirectory(homeRoot);
             WriteConfig(configPath, config);
         }
+        else if (!config.ContainsKey("BACKUP_DIR") ||
+            String.IsNullOrWhiteSpace(config["BACKUP_DIR"]))
+        {
+            config["BACKUP_DIR"] = Path.Combine(dataRoot, "backups");
+            File.AppendAllText(
+                configPath,
+                Environment.NewLine + "# Server-managed backup storage" + Environment.NewLine +
+                    "BACKUP_DIR=" + config["BACKUP_DIR"] + Environment.NewLine,
+                Encoding.UTF8);
+        }
 
         config["_FIRST_RUN"] = firstRun ? "1" : "0";
         string credentialsPath = Path.Combine(homeRoot, "credentials.txt");
@@ -440,6 +450,7 @@ internal static class Program
         config["MEILI_MASTER_KEY"] = RandomHex(32);
         config["MUSIC_DIRS"] = music;
         config["AUDIOBOOK_DIRS"] = "";
+        config["BACKUP_DIR"] = Path.Combine(dataRoot, "backups");
         config["LISTEN_HOST"] = "127.0.0.1";
         config["PORT"] = "8080";
         return config;
@@ -453,7 +464,7 @@ internal static class Program
         string[] keys =
         {
             "ADMIN_EMAIL", "ADMIN_PASSWORD", "DATABASE_PASSWORD", "JWT_SECRET",
-            "MEILI_MASTER_KEY", "MUSIC_DIRS", "AUDIOBOOK_DIRS", "LISTEN_HOST", "PORT"
+            "MEILI_MASTER_KEY", "MUSIC_DIRS", "AUDIOBOOK_DIRS", "BACKUP_DIR", "LISTEN_HOST", "PORT"
         };
         foreach (string key in keys)
         {
@@ -595,6 +606,8 @@ internal static class Program
 
     private static void ConfigureEnvironment(Dictionary<string, string> config)
     {
+        string backupDirectory = Get(config, "BACKUP_DIR", Path.Combine(dataRoot, "backups"));
+        Directory.CreateDirectory(backupDirectory);
         Environment.SetEnvironmentVariable("NODE_ENV", "production");
         Environment.SetEnvironmentVariable("JWT_SECRET", Get(config, "JWT_SECRET", ""));
         Environment.SetEnvironmentVariable("ADMIN_EMAIL", Get(config, "ADMIN_EMAIL", "admin@local"));
@@ -602,6 +615,7 @@ internal static class Program
         Environment.SetEnvironmentVariable("MEILI_MASTER_KEY", Get(config, "MEILI_MASTER_KEY", ""));
         Environment.SetEnvironmentVariable("MUSIC_DIRS", Get(config, "MUSIC_DIRS", ""));
         Environment.SetEnvironmentVariable("AUDIOBOOK_DIRS", Get(config, "AUDIOBOOK_DIRS", ""));
+        Environment.SetEnvironmentVariable("BACKUP_DIR", backupDirectory);
         Environment.SetEnvironmentVariable("COOKIE_SECURE", "false");
         Environment.SetEnvironmentVariable("TRUST_PROXY", "true");
         Environment.SetEnvironmentVariable("LIBRARY_READ_ONLY", "1");
@@ -644,6 +658,7 @@ internal static class Program
         environment["PODCAST_ART_DIR"] = Path.Combine(dataRoot, "cache", "podcast-art");
         environment["AUDIOBOOK_ART_DIR"] = Path.Combine(dataRoot, "cache", "audiobook-art");
         environment["DEVICE_LOG_DIR"] = Path.Combine(dataRoot, "device-logs");
+        environment["BACKUP_DIR"] = Get(config, "BACKUP_DIR", Path.Combine(dataRoot, "backups"));
         environment["COOKIE_SECURE"] = "false";
         environment["TRUST_PROXY"] = "true";
         environment["LIBRARY_READ_ONLY"] = "1";
@@ -677,7 +692,8 @@ internal static class Program
             Path.Combine(dataRoot, "cache", "audiobook-art"),
             Path.Combine(dataRoot, "hls"),
             Path.Combine(dataRoot, "podcasts"),
-            Path.Combine(dataRoot, "device-logs")
+            Path.Combine(dataRoot, "device-logs"),
+            Path.Combine(dataRoot, "backups")
         };
         foreach (string directory in directories)
         {

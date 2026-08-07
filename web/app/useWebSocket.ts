@@ -5,6 +5,7 @@ import { create } from 'zustand';
 import { useFavorites } from './favoritesStore';
 import { useToastStore } from './Toast';
 import { useAuth } from './store';
+import type { AdminBackup, AdminBackupJob } from './apiClient';
 
 type LibraryUpdate = {
   type: 'library:update';
@@ -79,7 +80,13 @@ type AdminUserPendingUpdate = {
   data: { email?: string; status?: string };
 };
 
-type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | { type: 'connected' } | { type: 'ping' };
+export type BackupUpdate =
+  | { type: 'backup:started'; data: { job: AdminBackupJob } }
+  | { type: 'backup:created'; data: { backup: AdminBackup; source: 'created' | 'uploaded' } }
+  | { type: 'backup:deleted'; data: { name: string } }
+  | { type: 'backup:error'; data: { operation: string; error: string } };
+
+type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | BackupUpdate | { type: 'connected' } | { type: 'ping' };
 
 // Store for library update notifications
 interface LibraryUpdateStore {
@@ -150,6 +157,18 @@ export const useAdminPending = create<AdminPendingStore>((set) => ({
       set({ count: Array.isArray(data.users) ? data.users.length : 0 });
     } catch { /* ignore */ }
   },
+}));
+
+interface BackupUpdateStore {
+  lastUpdate: number;
+  lastEvent: BackupUpdate | null;
+  setEvent: (event: BackupUpdate) => void;
+}
+
+export const useBackupUpdates = create<BackupUpdateStore>((set) => ({
+  lastUpdate: 0,
+  lastEvent: null,
+  setEvent: (event) => set({ lastUpdate: Date.now(), lastEvent: event }),
 }));
 
 // Store for history update notifications
@@ -278,6 +297,25 @@ export function useWebSocket(isAdmin = false) {
             const auth = useAuth.getState();
             if (auth.user?.role === 'admin') {
               useAdminPending.getState().refresh(auth.token);
+            }
+          } else if (
+            msg.type === 'backup:started'
+            || msg.type === 'backup:created'
+            || msg.type === 'backup:deleted'
+            || msg.type === 'backup:error'
+          ) {
+            if (useAuth.getState().user?.role === 'admin') {
+              useBackupUpdates.getState().setEvent(msg);
+              if (msg.type === 'backup:created') {
+                const action = msg.data.source === 'uploaded' ? 'uploaded' : 'created';
+                useToastStore.getState().show(
+                  `Backup ${action} successfully: ${msg.data.backup.name}`,
+                  'success',
+                  'top-right',
+                );
+              } else if (msg.type === 'backup:error') {
+                useToastStore.getState().show(msg.data.error || 'Backup failed', 'error', 'top-right');
+              }
             }
           }
         } catch {

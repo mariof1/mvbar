@@ -162,7 +162,8 @@ ensure_config_schema() {
     "PODCAST_DIR=$DATA_ROOT/podcasts" \
     "PODCAST_ART_DIR=$DATA_ROOT/cache/podcast-art" \
     "AUDIOBOOK_ART_DIR=$DATA_ROOT/cache/audiobook-art" \
-    "DEVICE_LOG_DIR=$DATA_ROOT/device-logs"
+    "DEVICE_LOG_DIR=$DATA_ROOT/device-logs" \
+    "BACKUP_DIR=$DATA_ROOT/backups"
 }
 
 random_hex() {
@@ -257,6 +258,7 @@ load_config() {
   PODCAST_ART_DIR=$(config_get PODCAST_ART_DIR)
   AUDIOBOOK_ART_DIR=$(config_get AUDIOBOOK_ART_DIR)
   DEVICE_LOG_DIR=$(config_get DEVICE_LOG_DIR)
+  BACKUP_DIR=$(config_get BACKUP_DIR)
 
   [ -n "$ADMIN_EMAIL" ] || fail "ADMIN_EMAIL is empty in $CONFIG_PATH"
   [ -n "$ADMIN_PASSWORD" ] || fail "ADMIN_PASSWORD is empty in $CONFIG_PATH"
@@ -307,7 +309,8 @@ create_configured_directories() {
     "$PODCAST_DIR" \
     "$PODCAST_ART_DIR" \
     "$AUDIOBOOK_ART_DIR" \
-    "$DEVICE_LOG_DIR"; do
+    "$DEVICE_LOG_DIR" \
+    "$BACKUP_DIR"; do
     [ -n "$configured_directory" ] || fail "A generated-media path is empty in $CONFIG_PATH"
     mkdir -p "$configured_directory"
   done
@@ -392,7 +395,7 @@ export_application_environment() {
   export TEMPO_DETECT TEMPO_MODE TEMPO_METHOD TEMPO_MIN_CONF TEMPO_CONCURRENCY
   export TEMPO_BACKFILL_INTERVAL_MS TEMPO_BACKFILL_BATCH
   export LYRICS_DIR ART_DIR AVATARS_DIR HLS_DIR PODCAST_DIR PODCAST_ART_DIR
-  export AUDIOBOOK_ART_DIR DEVICE_LOG_DIR
+  export AUDIOBOOK_ART_DIR DEVICE_LOG_DIR BACKUP_DIR
   export NODE_ENV=production
   export APP_VERSION="standalone-$BUILD_ID"
   export GIT_COMMIT="$BUILD_ID"

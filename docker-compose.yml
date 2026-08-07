@@ -31,6 +31,7 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL:-}
       BACKUP_MAX_UPLOAD_MB: ${BACKUP_MAX_UPLOAD_MB:-20480}
+      BACKUP_DIR: /data/backups
 
       # worker
       MUSIC_DIRS: /music
@@ -64,6 +65,7 @@ services:
       - caddy_data:/data/caddy
       - caddy_config:/config/caddy
       - cache:/data/cache
+      - backups:/data/backups
       - device_logs:/data/device-logs
       - hls:/hls
       - podcasts:/podcasts
@@ -82,6 +84,7 @@ volumes:
   caddy_data:
   caddy_config:
   cache:
+  backups:
   device_logs:
   hls:
   podcasts:

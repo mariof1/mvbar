@@ -4,11 +4,12 @@ import React from 'react';
 import { create } from 'zustand';
 import { useEffect, useState, useCallback } from 'react';
 
-type ToastItem = { id: number; message: string; icon?: 'queue' | 'success' | 'error' };
+type ToastPosition = 'bottom-center' | 'top-right';
+type ToastItem = { id: number; message: string; icon?: 'queue' | 'success' | 'error'; position: ToastPosition };
 
 type ToastState = {
   toasts: ToastItem[];
-  show: (message: string, icon?: ToastItem['icon']) => void;
+  show: (message: string, icon?: ToastItem['icon'], position?: ToastPosition) => void;
   dismiss: (id: number) => void;
 };
 
@@ -16,9 +17,9 @@ let _nextId = 0;
 
 export const useToastStore = create<ToastState>((set) => ({
   toasts: [],
-  show: (message, icon) => {
+  show: (message, icon, position = 'bottom-center') => {
     const id = ++_nextId;
-    set((s) => ({ toasts: [...s.toasts, { id, message, icon }] }));
+    set((s) => ({ toasts: [...s.toasts, { id, message, icon, position }] }));
     setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 2400);
   },
   dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
@@ -84,11 +85,25 @@ export function ToastContainer() {
 
   if (toasts.length === 0) return null;
 
+  const bottomCenter = toasts.filter((toast) => toast.position === 'bottom-center');
+  const topRight = toasts.filter((toast) => toast.position === 'top-right');
+
   return (
-    <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[250] flex flex-col items-center gap-2 pointer-events-none">
-      {toasts.map((t) => (
-        <ToastSlice key={t.id} item={t} onDone={() => handleDone(t.id)} />
-      ))}
-    </div>
+    <>
+      {bottomCenter.length > 0 && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[250] flex flex-col items-center gap-2 pointer-events-none">
+          {bottomCenter.map((toast) => (
+            <ToastSlice key={toast.id} item={toast} onDone={() => handleDone(toast.id)} />
+          ))}
+        </div>
+      )}
+      {topRight.length > 0 && (
+        <div className="fixed right-4 top-4 z-[250] flex max-w-[calc(100vw-2rem)] flex-col items-end gap-2 pointer-events-none sm:right-6 sm:top-6">
+          {topRight.map((toast) => (
+            <ToastSlice key={toast.id} item={toast} onDone={() => handleDone(toast.id)} />
+          ))}
+        </div>
+      )}
+    </>
   );
 }

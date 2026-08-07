@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSafeArchivePath, sortTablesByDependencies } from '../dist/backup.js';
+import { isSafeArchivePath, isSafeBackupName, sortTablesByDependencies } from '../dist/backup.js';
 
 test('portable backup paths reject traversal and platform-specific absolute paths', () => {
   assert.equal(isSafeArchivePath('database/users.jsonl'), true);
@@ -23,4 +23,12 @@ test('portable restore orders referenced tables before dependent tables', () => 
   assert.ok(order.indexOf('users') < order.indexOf('playlists'));
   assert.ok(order.indexOf('playlists') < order.indexOf('playlist_items'));
   assert.ok(order.indexOf('tracks') < order.indexOf('playlist_items'));
+});
+
+test('server backup names cannot escape the configured backup directory', () => {
+  assert.equal(isSafeBackupName('mvbar-backup-2026-08-07T18-00-00-000Z.mvbar-backup'), true);
+  assert.equal(isSafeBackupName('../mvbar-backup.mvbar-backup'), false);
+  assert.equal(isSafeBackupName('folder/mvbar-backup.mvbar-backup'), false);
+  assert.equal(isSafeBackupName('folder\\mvbar-backup.mvbar-backup'), false);
+  assert.equal(isSafeBackupName('mvbar-backup.zip'), false);
 });

@@ -85,7 +85,7 @@ They are grouped as follows:
   `BACKUP_MAX_UPLOAD_MB`, `UV_THREADPOOL_SIZE`, `LOG_LEVEL`, `DEBUG`, `TZ`;
 - persistent generated-data paths: `LYRICS_DIR`, `ART_DIR`, `AVATARS_DIR`,
   `HLS_DIR`, `PODCAST_DIR`, `PODCAST_ART_DIR`, `AUDIOBOOK_ART_DIR`,
-  `DEVICE_LOG_DIR`.
+  `DEVICE_LOG_DIR`, `BACKUP_DIR`.
 
 `DATABASE_PASSWORD` and `MEILI_MASTER_KEY` also remain available in the file.
 Internal connection URLs, private service ports, API/web bind addresses, and

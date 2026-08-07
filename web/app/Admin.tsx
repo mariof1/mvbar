@@ -16,16 +16,22 @@ import {
   listLibraries,
   setUserLibraries,
   getScanProgress,
+  createAdminBackup,
+  deleteAdminBackup,
   downloadAdminBackup,
+  listAdminBackups,
   restoreAdminBackup,
+  uploadAdminBackup,
+  type AdminBackup,
+  type AdminBackupJob,
   type ScanProgress,
 } from './apiClient';
 import { useAuth } from './store';
 import { showConfirm } from './ConfirmModal';
-import { useScanProgress, useLibraryUpdates, useAdminPending } from './useWebSocket';
+import { useScanProgress, useLibraryUpdates, useAdminPending, useBackupUpdates } from './useWebSocket';
 import { AdminUserAudit } from './AdminUserAudit';
 
-type Tab = 'library' | 'users' | 'user-audit' | 'settings' | 'backup' | 'device-logs' | 'notifications';
+type Tab = 'library' | 'users' | 'user-audit' | 'settings' | 'device-logs' | 'notifications';
 
 export function Admin() {
   const token = useAuth((s) => s.token);
@@ -70,11 +76,6 @@ export function Admin() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           )},
-          { id: 'backup' as Tab, label: 'Backup', icon: (
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 4v12m0 0l-4-4m4 4l4-4" />
-            </svg>
-          )},
           { id: 'device-logs' as Tab, label: 'Device Logs', icon: (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
@@ -105,8 +106,7 @@ export function Admin() {
       {activeTab === 'library' && <LibraryTab token={token} clear={clear} />}
       {activeTab === 'users' && <UsersTab token={token} clear={clear} currentUserId={user?.id} />}
       {activeTab === 'user-audit' && <AdminUserAudit token={token} clear={clear} />}
-      {activeTab === 'settings' && <SettingsTab token={token} />}
-      {activeTab === 'backup' && <BackupTab token={token} clear={clear} />}
+      {activeTab === 'settings' && <SettingsTab token={token} clear={clear} />}
       {activeTab === 'device-logs' && <DeviceLogsTab token={token} />}
       {activeTab === 'notifications' && <NotificationsTab token={token} />}
     </div>
@@ -1253,15 +1253,20 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
   );
 }
 
-// ============ Backup Tab ============
-function BackupTab({ token, clear }: { token: string; clear: () => void }) {
+// ============ Backup Settings ============
+function BackupSettings({ token, clear }: { token: string; clear: () => void }) {
   const [includeCaches, setIncludeCaches] = useState(false);
   const [restoreCaches, setRestoreCaches] = useState(false);
-  const [backupFile, setBackupFile] = useState<File | null>(null);
-  const [exporting, setExporting] = useState(false);
-  const [restoring, setRestoring] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [backups, setBackups] = useState<AdminBackup[]>([]);
+  const [creating, setCreating] = useState<AdminBackupJob | null>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const backupLastUpdate = useBackupUpdates((state) => state.lastUpdate);
 
   function formatBytes(bytes: number) {
     if (bytes < 1024) return `${bytes} B`;
@@ -1275,40 +1280,104 @@ function BackupTab({ token, clear }: { token: string; clear: () => void }) {
     return `${value.toFixed(value >= 10 ? 1 : 2)} ${unit}`;
   }
 
-  async function exportBackup() {
-    setExporting(true);
-    setError(null);
-    setMessage(null);
+  function formatDate(value: string) {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString() : value;
+  }
+
+  const loadBackups = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
     try {
-      const result = await downloadAdminBackup(token, includeCaches);
-      setMessage(result.bytes === null
-        ? 'Backup download started. Your browser will save the server-generated archive.'
-        : `Downloaded ${result.filename} (${formatBytes(result.bytes)}).`);
+      const result = await listAdminBackups(token);
+      setBackups(result.backups);
+      setCreating(result.creating);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load backups');
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void loadBackups(backupLastUpdate === 0);
+  }, [backupLastUpdate, loadBackups]);
+
+  useEffect(() => {
+    if (!creating) return;
+    const timer = window.setInterval(() => void loadBackups(false), 3000);
+    return () => window.clearInterval(timer);
+  }, [creating, loadBackups]);
+
+  async function startBackup() {
+    setError(null);
+    try {
+      const result = await createAdminBackup(token, includeCaches);
+      setCreating(result.job);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Backup failed');
-    } finally {
-      setExporting(false);
     }
   }
 
-  async function restoreBackup() {
-    if (!backupFile) {
-      setError('Choose an MVBar backup file first.');
-      return;
+  async function uploadBackup() {
+    if (!uploadFile) return;
+    setUploading(true);
+    setError(null);
+    try {
+      await uploadAdminBackup(token, uploadFile);
+      setUploadFile(null);
+      await loadBackups(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backup upload failed');
+    } finally {
+      setUploading(false);
     }
+  }
+
+  async function downloadBackup(backup: AdminBackup) {
+    setDownloading(backup.name);
+    setError(null);
+    try {
+      await downloadAdminBackup(token, backup.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backup download failed');
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  async function deleteBackup(backup: AdminBackup) {
+    const confirmed = await showConfirm({
+      title: 'Delete server backup?',
+      message: `Delete ${backup.name} from this MVBar server? Download it first if you need to keep a copy.`,
+      confirmLabel: 'Delete backup',
+      danger: true,
+    });
+    if (!confirmed) return;
+    setDeleting(backup.name);
+    setError(null);
+    try {
+      await deleteAdminBackup(token, backup.name);
+      setBackups((current) => current.filter((item) => item.name !== backup.name));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backup deletion failed');
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  async function restoreBackup(backup: AdminBackup) {
     const confirmed = await showConfirm({
       title: 'Replace the MVBar database?',
-      message: `This restores ${backupFile.name}, replacing the current database. Library roots will be mapped to this server's configured folders. ${restoreCaches ? 'Included cache files will also be copied.' : 'Cache files will not be restored.'} Everyone will be signed out.`,
+      message: `This restores ${backup.name}, replacing the current database. Library roots will be mapped to this server's configured folders. ${restoreCaches && backup.includesCaches ? 'Included cache files will also be copied.' : 'Cache files will not be restored.'} Everyone will be signed out.`,
       confirmLabel: 'Restore backup',
       danger: true,
     });
     if (!confirmed) return;
 
-    setRestoring(true);
+    setRestoring(backup.name);
     setError(null);
-    setMessage(null);
     try {
-      const result = await restoreAdminBackup(token, backupFile, restoreCaches);
+      const result = await restoreAdminBackup(token, backup.name, restoreCaches);
       await showConfirm({
         title: 'Restore complete',
         message: `Restored ${result.rows.toLocaleString()} database rows across ${result.tables} tables${result.cachesRestored ? ` and ${result.cacheFiles.toLocaleString()} cache files` : ''}.${result.reindexQueued ? ' A full library scan was queued to rebuild search.' : ''}${result.warning ? ` Warning: ${result.warning}.` : ''} Sign in with an administrator account from the restored backup.`,
@@ -1319,30 +1388,36 @@ function BackupTab({ token, clear }: { token: string; clear: () => void }) {
       window.location.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Restore failed');
-      setRestoring(false);
+      setRestoring(null);
     }
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold text-white">Portable backup and restore</h2>
-        <p className="text-sm text-slate-400 mt-1">
-          Move MVBar data between Docker, Windows standalone, and Linux standalone installations.
-        </p>
+    <section className="space-y-5 rounded-xl border border-slate-700/30 bg-slate-800/30 p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-white">Backup and restore</h3>
+          <p className="mt-1 text-sm text-slate-400">
+            Backups are created and retained by this server, and remain portable across Docker, Windows, and Linux.
+          </p>
+        </div>
+        <button
+          onClick={() => void loadBackups(true)}
+          disabled={loading}
+          className="shrink-0 rounded-lg bg-slate-700 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-600 disabled:opacity-50"
+        >
+          Refresh list
+        </button>
       </div>
 
       {error && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>
       )}
-      {message && (
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">{message}</div>
-      )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-5 space-y-5">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="space-y-4 rounded-xl border border-slate-700/50 bg-slate-900/30 p-5">
           <div>
-            <h3 className="font-semibold text-white">Create backup</h3>
+            <h4 className="font-semibold text-white">Create server backup</h4>
             <p className="text-sm text-slate-400 mt-1">
               The database is always included: users, settings, playlists, listening data, podcasts, and the library catalog.
             </p>
@@ -1368,72 +1443,132 @@ function BackupTab({ token, clear }: { token: string; clear: () => void }) {
           </div>
 
           <button
-            onClick={exportBackup}
-            disabled={exporting || restoring}
+            onClick={startBackup}
+            disabled={Boolean(creating || restoring || uploading)}
             className="w-full rounded-lg bg-cyan-600 px-4 py-2.5 font-medium text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {exporting ? 'Creating backup…' : 'Download backup'}
+            {creating ? 'Backup running on server…' : 'Create backup'}
           </button>
-        </section>
+          {creating && (
+            <div className="flex items-center gap-3 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-cyan-300 border-t-transparent" />
+              Started {formatDate(creating.startedAt)}{creating.includeCaches ? ' with caches' : ''}. You may leave this page.
+            </div>
+          )}
+        </div>
 
-        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-5 space-y-5">
+        <div className="space-y-4 rounded-xl border border-slate-700/50 bg-slate-900/30 p-5">
           <div>
-            <h3 className="font-semibold text-white">Restore backup</h3>
+            <h4 className="font-semibold text-white">Upload portable backup</h4>
             <p className="text-sm text-slate-400 mt-1">
-              Database tables are restored transactionally. Current library roots are kept by mapping the restored catalog onto this installation’s configured folders.
+              Add an archive from another MVBar installation to this server. It will appear in the backup list after validation.
             </p>
           </div>
 
           <label className="block rounded-xl border border-dashed border-slate-600 bg-slate-900/30 p-4 cursor-pointer hover:border-cyan-500/60 transition-colors">
             <span className="block text-sm font-medium text-slate-200">Choose .mvbar-backup file</span>
             <span className="block text-xs text-slate-500 mt-1 truncate">
-              {backupFile ? `${backupFile.name} · ${formatBytes(backupFile.size)}` : 'No file selected'}
+              {uploadFile ? `${uploadFile.name} · ${formatBytes(uploadFile.size)}` : 'No file selected'}
             </span>
             <input
               type="file"
               accept=".mvbar-backup,application/zip"
               onChange={(event) => {
-                setBackupFile(event.target.files?.[0] ?? null);
+                setUploadFile(event.target.files?.[0] ?? null);
                 setError(null);
               }}
               className="sr-only"
             />
           </label>
 
-          <label className="flex items-start gap-3 rounded-xl border border-slate-700/50 bg-slate-900/30 p-4 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={restoreCaches}
-              onChange={(event) => setRestoreCaches(event.target.checked)}
-              className="mt-0.5 h-4 w-4 accent-cyan-500"
-            />
-            <span>
-              <span className="block text-sm font-medium text-slate-200">Restore caches if present</span>
-              <span className="block text-xs text-slate-500 mt-1">
-                Disabled by default. Files are mapped to this installation’s cache folders and overwrite matching files.
-              </span>
-            </span>
-          </label>
-
-          <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-200/80">
-            Restore replaces the current database and signs out every user. The archive must contain at least one administrator.
-          </div>
-
           <button
-            onClick={restoreBackup}
-            disabled={!backupFile || restoring || exporting}
-            className="w-full rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 font-medium text-red-300 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={uploadBackup}
+            disabled={!uploadFile || uploading || Boolean(creating || restoring)}
+            className="w-full rounded-lg bg-slate-700 px-4 py-2.5 font-medium text-white transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {restoring ? 'Restoring…' : 'Restore backup'}
+            {uploading ? 'Uploading and validating…' : 'Upload to server'}
           </button>
-        </section>
+        </div>
       </div>
-    </div>
+
+      <label className="flex items-start gap-3 rounded-xl border border-slate-700/50 bg-slate-900/30 p-4 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={restoreCaches}
+          onChange={(event) => setRestoreCaches(event.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-cyan-500"
+        />
+        <span>
+          <span className="block text-sm font-medium text-slate-200">Restore caches when available</span>
+          <span className="block text-xs text-slate-500 mt-1">
+            Disabled by default. This applies when Restore is selected below; database data is always restored.
+          </span>
+        </span>
+      </label>
+
+      <div className="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900/30">
+        <div className="border-b border-slate-700/50 px-4 py-3">
+          <h4 className="font-semibold text-white">Backups available on this server</h4>
+          <p className="mt-1 text-xs text-slate-500">New backups appear automatically when the server finishes creating them.</p>
+        </div>
+        {loading ? (
+          <div className="flex items-center justify-center gap-3 px-4 py-10 text-sm text-slate-400">
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-400 border-t-transparent" />
+            Loading backups…
+          </div>
+        ) : backups.length === 0 ? (
+          <div className="px-4 py-10 text-center text-sm text-slate-500">No server backups yet.</div>
+        ) : (
+          <div className="divide-y divide-slate-700/50">
+            {backups.map((backup) => (
+              <div key={backup.name} className="flex flex-col gap-3 px-4 py-4 xl:flex-row xl:items-center">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-100" title={backup.name}>{backup.name}</p>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                    <span>{formatDate(backup.createdAt)}</span>
+                    <span>{formatBytes(backup.size)}</span>
+                    <span>{backup.includesCaches ? `Caches included (${formatBytes(backup.cacheBytes)})` : 'Database only'}</span>
+                    <span>MVBar {backup.appVersion}</span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => void downloadBackup(backup)}
+                    disabled={downloading === backup.name || Boolean(restoring || deleting)}
+                    className="rounded-lg bg-slate-700 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-600 disabled:opacity-50"
+                  >
+                    {downloading === backup.name ? 'Downloading…' : 'Download'}
+                  </button>
+                  <button
+                    onClick={() => void restoreBackup(backup)}
+                    disabled={Boolean(creating || restoring || deleting || uploading)}
+                    className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 transition-colors hover:bg-amber-500/20 disabled:opacity-50"
+                  >
+                    {restoring === backup.name ? 'Restoring…' : 'Restore'}
+                  </button>
+                  <button
+                    onClick={() => void deleteBackup(backup)}
+                    disabled={deleting === backup.name || Boolean(restoring)}
+                    className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300 transition-colors hover:bg-red-500/20 disabled:opacity-50"
+                  >
+                    {deleting === backup.name ? 'Deleting…' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-200/80">
+        Restore replaces the current database and signs out every user. Current library roots are mapped onto this installation, and the archive must contain at least one administrator.
+      </div>
+    </section>
   );
 }
 
 // ============ Settings Tab ============
-function SettingsTab({ token }: { token: string }) {
+function SettingsTab({ token, clear }: { token: string; clear: () => void }) {
   const [bypassIPs, setBypassIPs] = useState<string[]>([]);
   const [myIP, setMyIP] = useState<string>('');
   const [newIP, setNewIP] = useState('');
@@ -1489,6 +1624,8 @@ function SettingsTab({ token }: { token: string }) {
 
   return (
     <div className="space-y-6">
+      <BackupSettings token={token} clear={clear} />
+
       {/* Rate Limit Bypass */}
       <div className="p-6 bg-slate-800/30 border border-slate-700/30 rounded-xl">
         <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
