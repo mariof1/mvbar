@@ -77,19 +77,11 @@ function stripHtml(value?: string | null) {
 }
 
 function podcastArtUrl(podcast: Pick<PodcastHit, 'id' | 'image_url' | 'image_path'>) {
-  return podcast.image_path ? `/api/podcast-art/${podcast.image_path}` : podcast.image_url || `/api/podcasts/${podcast.id}/art`;
+  return `/api/podcasts/${podcast.id}/art`;
 }
 
 function episodeArtUrl(episode: PodcastEpisodeHit) {
-  return episode.image_path
-    ? `/api/podcast-art/${episode.image_path}`
-    : episode.podcast_image_path
-      ? `/api/podcast-art/${episode.podcast_image_path}`
-      : episode.image_url
-        ? episode.image_url
-        : episode.podcast_image_url
-          ? episode.podcast_image_url
-          : `/api/podcasts/episodes/${episode.id}/art`;
+  return `/api/podcasts/episodes/${episode.id}/art`;
 }
 
 function ArtistArt({ name, art_path, art_hash }: { name: string; art_path: string | null; art_hash: string | null }) {

@@ -573,19 +573,11 @@ function PodcastArtwork({ src, alt, className }: { src?: string | null; alt: str
 }
 
 function podcastArtUrl(podcast: Podcast): string {
-  return podcast.image_path ? `/api/podcast-art/${podcast.image_path}` : `/api/podcasts/${podcast.id}/art`;
+  return `/api/podcasts/${podcast.id}/art`;
 }
 
 function episodeArtUrl(episode: Episode): string {
-  return episode.image_path
-    ? `/api/podcast-art/${episode.image_path}`
-    : episode.podcast_image_path
-      ? `/api/podcast-art/${episode.podcast_image_path}`
-      : episode.image_url
-        ? episode.image_url
-        : episode.podcast_image_url
-          ? episode.podcast_image_url
-          : `/api/podcasts/episodes/${episode.id}/art`;
+  return `/api/podcasts/episodes/${episode.id}/art`;
 }
 
 function episodeProgressPercent(episode: Episode): number {
@@ -1289,11 +1281,7 @@ export function PodcastPlayer({
   useEffect(() => {
     if (!episode || !('mediaSession' in navigator)) return;
     
-    const imageUrl = episode.image_path
-      ? `/api/podcast-art/${episode.image_path}`
-      : episode.podcast_image_path
-        ? `/api/podcast-art/${episode.podcast_image_path}`
-        : `/api/podcasts/episodes/${episode.id}/art`;
+    const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
     
     navigator.mediaSession.metadata = new MediaMetadata({
       title: episode.title,
@@ -1388,11 +1376,7 @@ export function PodcastPlayer({
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  const imageUrl = episode.image_path
-    ? `/api/podcast-art/${episode.image_path}`
-    : episode.podcast_image_path
-      ? `/api/podcast-art/${episode.podcast_image_path}`
-      : `/api/podcasts/episodes/${episode.id}/art`;
+  const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
 
   return (
     <>
