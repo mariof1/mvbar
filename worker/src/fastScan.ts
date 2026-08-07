@@ -1,11 +1,10 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import Redis from 'ioredis';
 import { db, audit } from './db.js';
 import { readTags } from './metadata.js';
-import { writeArt } from './art.js';
+import { writeMusicArt } from './art.js';
 import { getTrackIndexStatus, indexAllTracks, indexChangedTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
 import { asciiFold } from './tagRules.js';
@@ -707,15 +706,10 @@ async function scanArtistArtwork(musicDir: string): Promise<number> {
         if (!artFile) return null;
 
         const data = await readFile(path.join(artistDir, artFile));
-        const hash = createHash('sha1').update(data).digest('hex');
-        const ext = path.extname(artFile).toLowerCase();
-        const relPath = `artists/${hash.slice(0, 2)}/${hash}${ext}`;
-        const absPath = path.join(ART_DIR, relPath);
-        await mkdir(path.dirname(absPath), { recursive: true });
-        await writeFile(absPath, data);
+        const art = await writeMusicArt(ART_DIR, data);
         await db().query(
           'UPDATE artists SET art_path = $1, art_hash = $2 WHERE id = $3',
-          [relPath, hash, artist.id]
+          [art.relPath, art.hash, artist.id]
         );
         return artist.name;
       } catch {
@@ -1022,7 +1016,7 @@ export async function runFastScan(
           let artHash: string | null = null;
           if (tags.artData && tags.artMime) {
             try {
-              const w = await writeArt(ART_DIR, tags.artData, tags.artMime);
+              const w = await writeMusicArt(ART_DIR, tags.artData);
               artPath = w.relPath;
               artMime = w.mime;
               artHash = w.hash;

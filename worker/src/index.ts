@@ -13,6 +13,7 @@ import { runTempoBackfillBatch } from './tempoBackfill.js';
 import { refreshAllPodcasts, startPodcastRefresh } from './podcastRefresh.js';
 import { scanAudiobooks } from './audiobookScanner.js';
 import { ensureTracksIndex, getTrackIndexStatus, indexAllTracks } from './indexer.js';
+import { reconcileMusicArtwork } from './musicArtReconciliation.js';
 import logger from './logger.js';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
@@ -129,6 +130,7 @@ try {
 let scanInProgress = false;
 let cancelRequested = false;
 let pendingRescanForce: boolean | null = null;
+let musicArtReconciliationInProgress = true;
 
 // Listen for rescan/cancel commands from API (must be active during long scans)
 const subscriber = new Redis(REDIS_URL);
@@ -167,6 +169,11 @@ subscriber.on('message', async (channel, message) => {
 
 async function periodicRescan(force: boolean = false) {
   if (!useFastScan) return;
+  if (musicArtReconciliationInProgress) {
+    pendingRescanForce = pendingRescanForce === true || force;
+    logger.info('scan', `Library scan queued until music artwork reconciliation finishes${force ? ' (FORCE FULL)' : ''}`);
+    return;
+  }
   if (scanInProgress) {
     logger.info('scan', 'Scan already in progress, skipping');
     return;
@@ -231,8 +238,24 @@ async function periodicRescan(force: boolean = false) {
   }
 }
 
-// Kick off an initial scan on startup
-setTimeout(() => periodicRescan(false), 0);
+// Reconcile the existing artwork cache before the initial scan so artist-art
+// discovery cannot race with transactional path replacement.
+const musicArtworkReconciliation = reconcileMusicArtwork()
+  .catch((error) => {
+    logger.warn('music-art', `Startup artwork reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+  })
+  .finally(() => {
+    musicArtReconciliationInProgress = false;
+  });
+
+// Kick off the initial scan as soon as the one-time reconciliation is done.
+setTimeout(() => {
+  void musicArtworkReconciliation.then(() => {
+    const initialForce = pendingRescanForce ?? false;
+    pendingRescanForce = null;
+    return periodicRescan(initialForce);
+  });
+}, 0);
 
 // Schedule periodic rescans
 logger.info('worker', `Scheduling periodic library scan every ${rescanIntervalMs / 1000}s`);
