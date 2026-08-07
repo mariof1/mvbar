@@ -23,7 +23,7 @@ import { createInterface } from 'node:readline';
 import { db, redis } from './db.js';
 
 const BACKUP_FORMAT = 'mvbar-portable-backup';
-const BACKUP_FORMAT_VERSION = 1;
+const BACKUP_FORMAT_VERSION = 2;
 const IDENTIFIER_RE = /^[a-z_][a-z0-9_]*$/;
 const DEFAULT_MAX_UPLOAD_MB = 20 * 1024;
 const MAX_UPLOAD_BYTES = Math.max(
@@ -53,7 +53,7 @@ type BackupManifest = {
     commit: string;
   };
   database: {
-    format: 'postgres-jsonl-v1';
+    format: 'postgres-jsonl-v2';
     tables: TableInfo[];
   };
   caches: CacheManifest;
@@ -215,8 +215,20 @@ async function createBackupArchive(includeCaches: boolean, output: PassThrough) 
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
     const tables = await getTableInfo(client);
     for (const table of sortTablesByDependencies(tables)) {
+      // CSV mode avoids COPY text's backslash escaping. JSON never contains
+      // these control-byte delimiters literally, so every output row is JSONL.
       const stream = client.query(
-        copyTo(`COPY (SELECT row_to_json(source_row)::text FROM public.${qident(table)} AS source_row) TO STDOUT`),
+        copyTo(`
+          COPY (
+            SELECT row_to_json(source_row)::text
+            FROM public.${qident(table)} AS source_row
+          ) TO STDOUT WITH (
+            FORMAT csv,
+            DELIMITER E'\\x01',
+            QUOTE E'\\x02',
+            ESCAPE E'\\x02'
+          )
+        `),
       );
       archive.append(stream, { name: `database/${table}.jsonl` });
       await finished(stream);
@@ -246,7 +258,7 @@ async function createBackupArchive(includeCaches: boolean, output: PassThrough) 
         version: process.env.APP_VERSION ?? '0.0.0-dev',
         commit: process.env.GIT_COMMIT ?? 'unknown',
       },
-      database: { format: 'postgres-jsonl-v1', tables },
+      database: { format: 'postgres-jsonl-v2', tables },
       caches: cacheManifest,
     };
     archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
@@ -301,7 +313,7 @@ function validateManifest(value: unknown): asserts value is BackupManifest {
   if (manifest.format !== BACKUP_FORMAT || manifest.formatVersion !== BACKUP_FORMAT_VERSION) {
     throw new Error('Unsupported MVBar backup format');
   }
-  if (manifest.database?.format !== 'postgres-jsonl-v1' || !Array.isArray(manifest.database.tables)) {
+  if (manifest.database?.format !== 'postgres-jsonl-v2' || !Array.isArray(manifest.database.tables)) {
     throw new Error('Backup database manifest is invalid');
   }
   for (const table of manifest.database.tables) {
