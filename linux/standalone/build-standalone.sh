@@ -294,9 +294,13 @@ with open(output_path, "ab") as output:
 PY
 
 chmod +x "$OUTPUT_PATH"
-sha256sum "$OUTPUT_PATH" > "$OUTPUT_PATH.sha256"
+(
+  cd "$OUTPUT_DIRECTORY"
+  sha256sum "$OUTPUT_NAME" > "$OUTPUT_NAME.sha256"
+)
 
-SIZE=$(du -h "$OUTPUT_PATH" | awk '{print $1}')
+SIZE_BYTES=$(stat -c '%s' "$OUTPUT_PATH")
+SIZE=$(awk -v bytes="$SIZE_BYTES" 'BEGIN { printf "%.1f MiB", bytes / 1048576 }')
 HASH=$(cut -d ' ' -f 1 "$OUTPUT_PATH.sha256")
 echo
 echo "MVBar standalone build complete."
