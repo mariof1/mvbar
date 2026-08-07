@@ -10,7 +10,7 @@ import {
   retireRemovedMusicLibraries,
 } from './libraryReconciliation.js';
 import { runTempoBackfillBatch } from './tempoBackfill.js';
-import { startPodcastRefresh } from './podcastRefresh.js';
+import { refreshAllPodcasts, startPodcastRefresh } from './podcastRefresh.js';
 import { scanAudiobooks } from './audiobookScanner.js';
 import { ensureTracksIndex, getTrackIndexStatus, indexAllTracks } from './indexer.js';
 import logger from './logger.js';
@@ -132,14 +132,21 @@ let pendingRescanForce: boolean | null = null;
 
 // Listen for rescan/cancel commands from API (must be active during long scans)
 const subscriber = new Redis(REDIS_URL);
-subscriber.subscribe('library:commands', (err) => {
+subscriber.subscribe('library:commands', 'podcast:commands', (err) => {
   if (err) logger.error('worker', `Failed to subscribe to commands: ${err.message}`);
-  else logger.info('worker', 'Listening for rescan commands');
+  else logger.info('worker', 'Listening for library and podcast commands');
 });
 
 subscriber.on('message', async (channel, message) => {
   try {
     const cmd = JSON.parse(message);
+    if (channel === 'podcast:commands') {
+      if (cmd.command === 'refresh') {
+        logger.info('podcast', `Manual refresh triggered by ${cmd.by || 'unknown'}`);
+        void refreshAllPodcasts();
+      }
+      return;
+    }
     if (cmd.command === 'rescan') {
       const force = cmd.force === true;
       if (scanInProgress) {

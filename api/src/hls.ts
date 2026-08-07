@@ -38,7 +38,27 @@ async function getLatestDoneJob(trackId: number, cacheKey: string) {
     "select id, out_dir from transcode_jobs where track_id=$1 and state='done' and cache_key=$2 order by id desc limit 1",
     [trackId, cacheKey]
   );
-  return r.rows[0] ?? null;
+  const job = r.rows[0] ?? null;
+  if (!job) return null;
+
+  // A database-only restore can contain a completed job from another server
+  // without its HLS files. Treat that row as stale so the request endpoint can
+  // enqueue a fresh transcode instead of returning a manifest that will 404.
+  try {
+    const manifest = safeJoin(HLS_DIR, path.join(cacheKey, 'index.m3u8'));
+    const manifestStat = await stat(manifest);
+    if (manifestStat.isFile()) return job;
+  } catch {
+    // Reconcile the stale row below.
+  }
+
+  await db().query(
+    `update transcode_jobs
+     set state='failed', finished_at=now(), error=$2
+     where id=$1 and state='done'`,
+    [job.id, 'HLS cache files are missing; the track will be transcoded again']
+  );
+  return null;
 }
 
 async function getLatestJob(trackId: number, cacheKey: string) {
@@ -74,7 +94,7 @@ export const hlsPlugin: FastifyPluginAsync = fp(async (app) => {
     const cacheKey = cacheKeyForTrack(t);
     const done = await getLatestDoneJob(id, cacheKey);
     if (done) {
-      return { ok: true, state: 'done', jobId: done.id, ready: true, manifestUrl: `/api/hls/${id}/index.m3u8` };
+      return { ok: true, state: 'done', jobId: done.id, ready: true, manifestUrl: `/api/hls/${id}` };
     }
 
     const existing = await getLatestJob(id, cacheKey);
@@ -108,7 +128,7 @@ export const hlsPlugin: FastifyPluginAsync = fp(async (app) => {
       jobId: job.id,
       ready,
       error: job.error ?? null,
-      manifestUrl: ready ? `/api/hls/${id}/index.m3u8` : null
+      manifestUrl: ready ? `/api/hls/${id}` : null
     };
   });
 

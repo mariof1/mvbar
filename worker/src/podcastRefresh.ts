@@ -15,6 +15,18 @@ interface Podcast {
   image_path: string | null;
 }
 
+let refreshInProgress = false;
+
+async function cachedImageExists(relativePath: string | null): Promise<boolean> {
+  if (!relativePath) return false;
+  try {
+    const imageStat = await stat(path.join(PODCAST_ART_DIR, relativePath));
+    return imageStat.isFile();
+  } catch {
+    return false;
+  }
+}
+
 // Download and cache an image, return the cached path
 async function cacheImage(imageUrl: string, prefix: string): Promise<string | null> {
   if (!imageUrl) return null;
@@ -86,7 +98,7 @@ async function refreshPodcast(podcast: Podcast): Promise<{ newEpisodes: number; 
     if (!channel) throw new Error('Invalid RSS feed');
     
     // Cache podcast image if not already cached
-    if (podcast.image_url && !podcast.image_path) {
+    if (podcast.image_url && !(await cachedImageExists(podcast.image_path))) {
       const imagePath = await cacheImage(podcast.image_url, 'podcasts');
       if (imagePath) {
         await db().query('UPDATE podcasts SET image_path = $1 WHERE id = $2', [imagePath, podcast.id]);
@@ -126,7 +138,7 @@ async function refreshPodcast(podcast: Podcast): Promise<{ newEpisodes: number; 
         const episode = result.rows[0];
         
         // Cache episode image if has custom image and not cached
-        if (episodeImageUrl && !episode.image_path) {
+        if (episodeImageUrl && !(await cachedImageExists(episode.image_path))) {
           const imagePath = await cacheImage(episodeImageUrl, 'episodes');
           if (imagePath) {
             await db().query('UPDATE podcast_episodes SET image_path = $1 WHERE id = $2', [imagePath, episode.id]);
@@ -166,6 +178,11 @@ function parseDuration(duration: string | number | undefined): number | null {
 
 // Refresh all podcasts that have at least one subscriber
 async function refreshAllPodcasts(): Promise<void> {
+  if (refreshInProgress) {
+    logger.info('podcast', 'Podcast refresh already in progress');
+    return;
+  }
+  refreshInProgress = true;
   logger.info('podcast', 'Starting automatic podcast refresh...');
   
   try {
@@ -193,6 +210,8 @@ async function refreshAllPodcasts(): Promise<void> {
     logger.success('podcast', `Refreshed ${podcasts.rows.length} podcasts: ${totalNewEpisodes} episodes processed, ${totalImagesCached} images cached`);
   } catch (e) {
     logger.error('podcast', `Podcast refresh failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    refreshInProgress = false;
   }
 }
 

@@ -904,8 +904,9 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       // If we have cached image, redirect to canonical URL so browser caches once per hash
       if (row.image_path) {
         try {
-          safeJoinPodcastArt(row.image_path); // validate path
-          return reply.redirect(`/api/podcast-art/${row.image_path}`, 302);
+          const cachedPath = safeJoinPodcastArt(row.image_path);
+          const cachedStat = await stat(cachedPath);
+          if (cachedStat.isFile()) return reply.redirect(`/api/podcast-art/${row.image_path}`, 302);
         } catch {
           // Fall through to redirect
         }
@@ -940,16 +941,19 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     const row = r.rows[0];
     if (!row) return reply.code(404).send({ ok: false });
     
-    // Try episode image first, then podcast image
-    const imagePath = row.image_path || row.podcast_image_path;
+    // Try episode image first, then podcast image. A restored database may
+    // reference files that were intentionally omitted from a database-only
+    // backup, so verify each candidate before redirecting to the cache route.
+    const imagePaths = [row.image_path, row.podcast_image_path].filter((value): value is string => Boolean(value));
     const imageUrl = row.image_url || row.podcast_image_url;
     
-    if (imagePath) {
+    for (const imagePath of imagePaths) {
       try {
-        safeJoinPodcastArt(imagePath); // validate path
-        return reply.redirect(`/api/podcast-art/${imagePath}`, 302);
+        const cachedPath = safeJoinPodcastArt(imagePath);
+        const cachedStat = await stat(cachedPath);
+        if (cachedStat.isFile()) return reply.redirect(`/api/podcast-art/${imagePath}`, 302);
       } catch {
-        // Fall through to redirect
+        // Try the next cached candidate, then fall back to its external URL.
       }
     }
     

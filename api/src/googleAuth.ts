@@ -294,6 +294,9 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
     '/api/avatars/:filename',
     async (request, reply) => {
       const { filename } = request.params;
+      if (path.basename(filename) !== filename) {
+        return reply.status(404).send({ error: 'Avatar not found' });
+      }
       const filepath = path.join(AVATARS_DIR, filename);
 
       try {
@@ -785,15 +788,44 @@ export async function syncGoogleAvatars(logger?: { info: (...args: any[]) => voi
   log.info('Avatar sync: complete');
 }
 
+export async function reconcileMissingAvatars(
+  logger?: { info: (...args: any[]) => void; error: (...args: any[]) => void },
+): Promise<void> {
+  const log = logger || console;
+  try {
+    const result = await db().query<{ id: string; avatar_path: string }>(
+      'SELECT id, avatar_path FROM users WHERE avatar_path IS NOT NULL',
+    );
+    let cleared = 0;
+    for (const user of result.rows) {
+      const filename = user.avatar_path;
+      const isSafeFilename = path.basename(filename) === filename;
+      try {
+        if (!isSafeFilename) throw new Error('Unsafe avatar path');
+        const avatarStat = await stat(path.join(AVATARS_DIR, filename));
+        if (avatarStat.isFile()) continue;
+      } catch {
+        await db().query('UPDATE users SET avatar_path = NULL WHERE id = $1', [user.id]);
+        cleared += 1;
+      }
+    }
+    if (cleared > 0) log.info(`Avatar cache reconciliation: cleared ${cleared} missing references`);
+  } catch (err: any) {
+    log.error(`Avatar cache reconciliation failed: ${err.message}`);
+  }
+}
+
 // Start avatar sync scheduler (runs daily)
 let syncInterval: NodeJS.Timeout | null = null;
 
 export function startAvatarSyncScheduler(logger?: { info: (...args: any[]) => void; error: (...args: any[]) => void }): void {
+  const log = logger || console;
+  void reconcileMissingAvatars(log);
+
   if (!isGoogleOAuthEnabled()) {
     return;
   }
 
-  const log = logger || console;
   const SYNC_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
   // Run initial sync after 5 minutes (let server stabilize)

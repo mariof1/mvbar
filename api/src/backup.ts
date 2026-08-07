@@ -90,7 +90,7 @@ type CacheCategory = {
   root: string;
 };
 
-type RestoreContext = {
+export type RestoreContext = {
   restoreCaches: boolean;
   libraryMapping: Map<string, string>;
   podcastRoot: string;
@@ -566,7 +566,7 @@ async function readLibraryMapping(librariesPath: string) {
   return mapping;
 }
 
-function transformRestoreRow(table: string, row: Record<string, unknown>, context: RestoreContext) {
+export function transformRestoreRow(table: string, row: Record<string, unknown>, context: RestoreContext) {
   if (table === 'libraries' && typeof row.mount_path === 'string') {
     const mapped = context.libraryMapping.get(row.mount_path);
     if (mapped) {
@@ -577,9 +577,34 @@ function transformRestoreRow(table: string, row: Record<string, unknown>, contex
       row.enabled = false;
     }
   }
+
+  // A database-only backup intentionally contains no files from cache-backed
+  // storage. Do not restore references which would make the destination think
+  // those files exist. Background scanners and refresh jobs will recreate the
+  // derived files which can be reproduced; user-uploaded avatars remain unset.
+  if (!context.restoreCaches) {
+    if (table === 'tracks') {
+      row.art_path = null;
+      row.art_mime = null;
+      row.art_hash = null;
+      row.lyrics_path = null;
+    } else if (table === 'artists') {
+      row.art_path = null;
+      row.art_hash = null;
+    } else if (table === 'users') {
+      row.avatar_path = null;
+    } else if (table === 'podcasts' || table === 'podcast_episodes') {
+      row.image_path = null;
+    } else if (table === 'audiobooks') {
+      row.cover_path = null;
+    }
+  }
+
   if (table === 'podcast_episodes' && typeof row.downloaded_path === 'string') {
     if (context.restoreCaches) {
-      const filename = path.basename(row.downloaded_path);
+      // Backup paths can come from either Windows or POSIX. Normalize both
+      // separators before selecting the portable filename.
+      const filename = path.posix.basename(row.downloaded_path.replaceAll('\\', '/'));
       row.downloaded_path = path.join(context.podcastRoot, String(row.podcast_id), filename);
     } else {
       row.downloaded_path = null;
@@ -726,6 +751,17 @@ async function restoreDatabase(stagingRoot: string, manifest: BackupManifest, re
       );
     }
     await resetSequences(client, importable);
+
+    // These tables contain derived cache state rather than user data. Keeping
+    // their rows without the corresponding files makes HLS jobs appear ready
+    // and leaves external metadata caches tied to the source installation.
+    if (!restoreCaches && targetByName.has('transcode_jobs')) {
+      await client.query('DELETE FROM transcode_jobs');
+    }
+    if (!restoreCaches && targetByName.has('lastfm_cache')) {
+      await client.query('DELETE FROM lastfm_cache');
+    }
+
     await client.query('UPDATE users SET session_version = session_version + 1');
     if (targetByName.has('audit_events')) {
       await client.query(
@@ -780,10 +816,22 @@ async function restoreArchiveFile(archivePath: string, requestedCaches: boolean,
         'audiobook:commands',
         JSON.stringify({ command: 'rescan', by: 'portable-restore' }),
       );
+      await redis().publish(
+        'podcast:commands',
+        JSON.stringify({ command: 'refresh', by: 'portable-restore' }),
+      );
     } catch (error) {
       reindexWarning = 'Could not queue a full library scan; run one from Admin → Library';
       log.error({ err: error }, 'Database restored but search reconciliation could not be queued');
     }
+
+    // Google-only users must sign in again after session invalidation. Start an
+    // avatar refresh immediately as well, so accounts whose portable refresh
+    // tokens are valid for this server do not need to wait for the daily job.
+    void import('./googleAuth.js')
+      .then(({ syncGoogleAvatars }) => syncGoogleAvatars(log))
+      .catch((error) => log.error({ err: error }, 'Post-restore avatar refresh failed'));
+
     const warnings = [cacheWarning, reindexWarning].filter(Boolean);
     return {
       ok: true as const,
