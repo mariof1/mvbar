@@ -22,6 +22,7 @@ URL_PATH=$HOME_ROOT/runtime.url
 
 NODE=$APP_ROOT/runtime/node/node
 PG_BIN=$APP_ROOT/runtime/postgres/bin
+PG_SHARE=$APP_ROOT/runtime/postgres/share
 REDIS_SERVER=$APP_ROOT/runtime/redis/redis-server
 MEILISEARCH=$APP_ROOT/runtime/meili/meilisearch
 FFMPEG_BIN=$APP_ROOT/runtime/ffmpeg
@@ -326,6 +327,7 @@ initialize_postgres() {
   say "Initializing PostgreSQL..."
   chmod 700 "$DATA_ROOT/postgres"
   runtime "$PG_BIN/initdb" \
+    -L "$PG_SHARE" \
     --pgdata "$DATA_ROOT/postgres" \
     --username postgres \
     --auth trust \

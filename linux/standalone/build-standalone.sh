@@ -78,6 +78,9 @@ NPM_PATH=$(command -v npm)
 PG_BIN=$(pg_config --bindir)
 PG_SHARE=$(pg_config --sharedir)
 PG_LIB=$(pg_config --pkglibdir)
+PG_BIN_REL=${PG_BIN#/}
+PG_SHARE_REL=${PG_SHARE#/}
+PG_LIB_REL=${PG_LIB#/}
 REDIS_PATH=$(command -v redis-server || true)
 FFMPEG_PATH=$(command -v ffmpeg || true)
 FFPROBE_PATH=$(command -v ffprobe || true)
@@ -190,18 +193,21 @@ mkdir -p "$OUTPUT_DIRECTORY"
 echo "Staging Linux runtimes..."
 mkdir -p \
   "$STAGING_ROOT/runtime/node" \
-  "$STAGING_ROOT/runtime/postgres/bin" \
-  "$STAGING_ROOT/runtime/postgres/lib" \
-  "$STAGING_ROOT/runtime/postgres/share" \
+  "$STAGING_ROOT/runtime/postgres/$PG_BIN_REL" \
+  "$STAGING_ROOT/runtime/postgres/$PG_LIB_REL" \
+  "$STAGING_ROOT/runtime/postgres/$PG_SHARE_REL" \
   "$STAGING_ROOT/runtime/redis" \
   "$STAGING_ROOT/runtime/meili" \
   "$STAGING_ROOT/runtime/ffmpeg" \
   "$STAGING_ROOT/runtime/lib"
 
 cp "$NODE_PATH" "$STAGING_ROOT/runtime/node/node"
-copy_tree "$PG_BIN" "$STAGING_ROOT/runtime/postgres/bin"
-copy_tree "$PG_LIB" "$STAGING_ROOT/runtime/postgres/lib"
-copy_tree "$PG_SHARE" "$STAGING_ROOT/runtime/postgres/share"
+copy_tree "$PG_BIN" "$STAGING_ROOT/runtime/postgres/$PG_BIN_REL"
+copy_tree "$PG_LIB" "$STAGING_ROOT/runtime/postgres/$PG_LIB_REL"
+copy_tree "$PG_SHARE" "$STAGING_ROOT/runtime/postgres/$PG_SHARE_REL"
+ln -s "$PG_BIN_REL" "$STAGING_ROOT/runtime/postgres/bin"
+ln -s "$PG_LIB_REL" "$STAGING_ROOT/runtime/postgres/lib"
+ln -s "$PG_SHARE_REL" "$STAGING_ROOT/runtime/postgres/share"
 cp -L "$REDIS_PATH" "$STAGING_ROOT/runtime/redis/redis-server"
 cp "$MEILISEARCH_PATH" "$STAGING_ROOT/runtime/meili/meilisearch"
 cp -L "$FFMPEG_PATH" "$STAGING_ROOT/runtime/ffmpeg/ffmpeg"
