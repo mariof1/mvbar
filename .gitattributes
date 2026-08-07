@@ -1,0 +1,4 @@
+linux/standalone/*.sh text eol=lf
+linux/standalone/*.c text eol=lf
+linux/standalone/*.cjs text eol=lf
+linux/standalone/*.service text eol=lf
