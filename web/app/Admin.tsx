@@ -16,6 +16,8 @@ import {
   listLibraries,
   setUserLibraries,
   getScanProgress,
+  downloadAdminBackup,
+  restoreAdminBackup,
   type ScanProgress,
 } from './apiClient';
 import { useAuth } from './store';
@@ -23,7 +25,7 @@ import { showConfirm } from './ConfirmModal';
 import { useScanProgress, useLibraryUpdates, useAdminPending } from './useWebSocket';
 import { AdminUserAudit } from './AdminUserAudit';
 
-type Tab = 'library' | 'users' | 'user-audit' | 'settings' | 'device-logs' | 'notifications';
+type Tab = 'library' | 'users' | 'user-audit' | 'settings' | 'backup' | 'device-logs' | 'notifications';
 
 export function Admin() {
   const token = useAuth((s) => s.token);
@@ -68,6 +70,11 @@ export function Admin() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           )},
+          { id: 'backup' as Tab, label: 'Backup', icon: (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 4v12m0 0l-4-4m4 4l4-4" />
+            </svg>
+          )},
           { id: 'device-logs' as Tab, label: 'Device Logs', icon: (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
@@ -99,6 +106,7 @@ export function Admin() {
       {activeTab === 'users' && <UsersTab token={token} clear={clear} currentUserId={user?.id} />}
       {activeTab === 'user-audit' && <AdminUserAudit token={token} clear={clear} />}
       {activeTab === 'settings' && <SettingsTab token={token} />}
+      {activeTab === 'backup' && <BackupTab token={token} clear={clear} />}
       {activeTab === 'device-logs' && <DeviceLogsTab token={token} />}
       {activeTab === 'notifications' && <NotificationsTab token={token} />}
     </div>
@@ -1240,6 +1248,185 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ Backup Tab ============
+function BackupTab({ token, clear }: { token: string; clear: () => void }) {
+  const [includeCaches, setIncludeCaches] = useState(false);
+  const [restoreCaches, setRestoreCaches] = useState(false);
+  const [backupFile, setBackupFile] = useState<File | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function formatBytes(bytes: number) {
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let value = bytes / 1024;
+    let unit = units[0];
+    for (let index = 1; index < units.length && value >= 1024; index += 1) {
+      value /= 1024;
+      unit = units[index];
+    }
+    return `${value.toFixed(value >= 10 ? 1 : 2)} ${unit}`;
+  }
+
+  async function exportBackup() {
+    setExporting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await downloadAdminBackup(token, includeCaches);
+      setMessage(result.bytes === null
+        ? 'Backup download started. Your browser will save the server-generated archive.'
+        : `Downloaded ${result.filename} (${formatBytes(result.bytes)}).`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backup failed');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function restoreBackup() {
+    if (!backupFile) {
+      setError('Choose an MVBar backup file first.');
+      return;
+    }
+    const confirmed = await showConfirm({
+      title: 'Replace the MVBar database?',
+      message: `This restores ${backupFile.name}, replacing the current database. Library roots will be mapped to this server's configured folders. ${restoreCaches ? 'Included cache files will also be copied.' : 'Cache files will not be restored.'} Everyone will be signed out.`,
+      confirmLabel: 'Restore backup',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    setRestoring(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await restoreAdminBackup(token, backupFile, restoreCaches);
+      await showConfirm({
+        title: 'Restore complete',
+        message: `Restored ${result.rows.toLocaleString()} database rows across ${result.tables} tables${result.cachesRestored ? ` and ${result.cacheFiles.toLocaleString()} cache files` : ''}.${result.reindexQueued ? ' A full library scan was queued to rebuild search.' : ''}${result.warning ? ` Warning: ${result.warning}.` : ''} Sign in with an administrator account from the restored backup.`,
+        confirmLabel: 'Go to sign in',
+        cancelLabel: '',
+      });
+      clear();
+      window.location.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Restore failed');
+      setRestoring(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold text-white">Portable backup and restore</h2>
+        <p className="text-sm text-slate-400 mt-1">
+          Move MVBar data between Docker, Windows standalone, and Linux standalone installations.
+        </p>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>
+      )}
+      {message && (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">{message}</div>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-5 space-y-5">
+          <div>
+            <h3 className="font-semibold text-white">Create backup</h3>
+            <p className="text-sm text-slate-400 mt-1">
+              The database is always included: users, settings, playlists, listening data, podcasts, and the library catalog.
+            </p>
+          </div>
+
+          <label className="flex items-start gap-3 rounded-xl border border-slate-700/50 bg-slate-900/30 p-4 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={includeCaches}
+              onChange={(event) => setIncludeCaches(event.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-cyan-500"
+            />
+            <span>
+              <span className="block text-sm font-medium text-slate-200">Include generated and downloaded caches</span>
+              <span className="block text-xs text-slate-500 mt-1">
+                Optional and disabled by default. Includes artwork, lyrics, avatars, HLS, and downloaded podcast files; it can make the backup much larger.
+              </span>
+            </span>
+          </label>
+
+          <div className="rounded-xl bg-slate-900/40 px-4 py-3 text-xs text-slate-500">
+            Not included: music/audiobook source files, config.env, deployment secrets, Redis sessions, or the Meilisearch index.
+          </div>
+
+          <button
+            onClick={exportBackup}
+            disabled={exporting || restoring}
+            className="w-full rounded-lg bg-cyan-600 px-4 py-2.5 font-medium text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {exporting ? 'Creating backup…' : 'Download backup'}
+          </button>
+        </section>
+
+        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-5 space-y-5">
+          <div>
+            <h3 className="font-semibold text-white">Restore backup</h3>
+            <p className="text-sm text-slate-400 mt-1">
+              Database tables are restored transactionally. Current library roots are kept by mapping the restored catalog onto this installation’s configured folders.
+            </p>
+          </div>
+
+          <label className="block rounded-xl border border-dashed border-slate-600 bg-slate-900/30 p-4 cursor-pointer hover:border-cyan-500/60 transition-colors">
+            <span className="block text-sm font-medium text-slate-200">Choose .mvbar-backup file</span>
+            <span className="block text-xs text-slate-500 mt-1 truncate">
+              {backupFile ? `${backupFile.name} · ${formatBytes(backupFile.size)}` : 'No file selected'}
+            </span>
+            <input
+              type="file"
+              accept=".mvbar-backup,application/zip"
+              onChange={(event) => {
+                setBackupFile(event.target.files?.[0] ?? null);
+                setError(null);
+              }}
+              className="sr-only"
+            />
+          </label>
+
+          <label className="flex items-start gap-3 rounded-xl border border-slate-700/50 bg-slate-900/30 p-4 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={restoreCaches}
+              onChange={(event) => setRestoreCaches(event.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-cyan-500"
+            />
+            <span>
+              <span className="block text-sm font-medium text-slate-200">Restore caches if present</span>
+              <span className="block text-xs text-slate-500 mt-1">
+                Disabled by default. Files are mapped to this installation’s cache folders and overwrite matching files.
+              </span>
+            </span>
+          </label>
+
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-200/80">
+            Restore replaces the current database and signs out every user. The archive must contain at least one administrator.
+          </div>
+
+          <button
+            onClick={restoreBackup}
+            disabled={!backupFile || restoring || exporting}
+            className="w-full rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 font-medium text-red-300 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {restoring ? 'Restoring…' : 'Restore backup'}
+          </button>
+        </section>
       </div>
     </div>
   );

@@ -121,13 +121,14 @@ ensure_config_schema() {
 
   append_config_section "HTTP, cookies, proxy handling, and timezone" \
     "COOKIE_NAME=mvbar_token" \
-    "COOKIE_SECURE=false" \
+    "COOKIE_SECURE=auto" \
     "TRUST_PROXY=true" \
     "TZ=Europe/London"
 
   append_config_section "Database, search, and logging" \
     "DB_POOL_SIZE=30" \
     "MEILI_TASK_TIMEOUT_MS=300000" \
+    "BACKUP_MAX_UPLOAD_MB=20480" \
     "LOG_LEVEL=info" \
     "DEBUG="
 
@@ -227,6 +228,7 @@ load_config() {
   export TZ
   DB_POOL_SIZE=$(config_get DB_POOL_SIZE)
   MEILI_TASK_TIMEOUT_MS=$(config_get MEILI_TASK_TIMEOUT_MS)
+  BACKUP_MAX_UPLOAD_MB=$(config_get BACKUP_MAX_UPLOAD_MB)
   LOG_LEVEL=$(config_get LOG_LEVEL)
   DEBUG=$(config_get DEBUG)
   LIBRARY_READ_ONLY=$(config_get LIBRARY_READ_ONLY)
@@ -269,6 +271,10 @@ load_config() {
   if [ "$CONFIGURED_PORT" -lt 1 ] || [ "$CONFIGURED_PORT" -gt 65535 ]; then
     fail "PORT must be between 1 and 65535 in $CONFIG_PATH"
   fi
+  case "$BACKUP_MAX_UPLOAD_MB" in
+    ''|*[!0-9]*) fail "BACKUP_MAX_UPLOAD_MB must be a positive integer in $CONFIG_PATH" ;;
+  esac
+  [ "$BACKUP_MAX_UPLOAD_MB" -gt 0 ] || fail "BACKUP_MAX_UPLOAD_MB must be greater than zero in $CONFIG_PATH"
 }
 
 create_directories() {
@@ -379,7 +385,7 @@ export_application_environment() {
   export MEILI_MASTER_KEY JWT_SECRET ADMIN_EMAIL ADMIN_PASSWORD MUSIC_DIRS AUDIOBOOK_DIRS
   export LASTFM_API_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_CALLBACK_URL
   export COOKIE_NAME COOKIE_SECURE TRUST_PROXY TZ
-  export DB_POOL_SIZE MEILI_TASK_TIMEOUT_MS LOG_LEVEL DEBUG
+  export DB_POOL_SIZE MEILI_TASK_TIMEOUT_MS BACKUP_MAX_UPLOAD_MB LOG_LEVEL DEBUG
   export LIBRARY_READ_ONLY FAST_SCAN UV_THREADPOOL_SIZE SCAN_CONCURRENCY
   export ARTIST_ART_CONCURRENCY SCAN_MAX_QUEUE SCAN_REFRESH_META METADATA_TIMEOUT_MS
   export RESCAN_INTERVAL_MS AUDIOBOOK_RESCAN_INTERVAL_MS PODCAST_REFRESH_INTERVAL_MS
@@ -404,6 +410,7 @@ start_services() {
     -D "$DATA_ROOT/postgres" \
     -p "$PG_PORT" \
     -h 127.0.0.1 \
+    -c dynamic_shared_memory_type=mmap \
     -k "$RUN_ROOT/postgres" > "$LOG_ROOT/postgres.log" 2>&1 &
   PID_POSTGRES=$!
   wait_tcp "$PG_PORT" 60

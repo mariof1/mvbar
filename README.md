@@ -142,6 +142,17 @@ curl -fsS http://localhost/api/health
 
 ### Backup / restore
 
+Administrators can create and restore portable `.mvbar-backup` archives from
+**Admin → Backup**. Database-only is the default and is portable between Docker,
+Windows standalone, and Linux standalone. Generated artwork, lyrics, avatars,
+HLS output, and podcast downloads can be included explicitly; Redis sessions,
+the Meilisearch index, deployment secrets, and source media files are never
+included. Backup files contain sensitive account data and should be stored
+securely.
+
+The deployment-level Docker volume scripts remain available for full container
+snapshots:
+
 ```bash
 ./scripts/backup.sh
 ./scripts/restore.sh ./backups/<timestamp>

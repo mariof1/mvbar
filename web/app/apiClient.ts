@@ -29,6 +29,84 @@ export async function apiFetch(path: string, init: RequestInit = {}, token?: str
   return data;
 }
 
+function adminTransferHeaders(token: string) {
+  const headers = new Headers();
+  if (token && token !== 'cookie') headers.set('authorization', `Bearer ${token}`);
+  headers.set('x-mvbar-client', 'web');
+  headers.set('x-mvbar-version', '0.1.0');
+  return headers;
+}
+
+async function transferError(response: Response) {
+  const text = await response.text();
+  let data: any = text;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    // Keep the server's plain-text error.
+  }
+  const message = data?.error || data?.message || `Request failed (${response.status})`;
+  throw Object.assign(new Error(message), { status: response.status, data });
+}
+
+export async function downloadAdminBackup(token: string, includeCaches = false) {
+  if (token === 'cookie') {
+    const anchor = document.createElement('a');
+    anchor.href = `${API_BASE}/admin/backup?includeCaches=${includeCaches}`;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    return { filename: 'MVBar backup', bytes: null };
+  }
+  const response = await fetch(`${API_BASE}/admin/backup?includeCaches=${includeCaches}`, {
+    method: 'GET',
+    headers: adminTransferHeaders(token),
+    cache: 'no-store',
+    credentials: 'same-origin',
+  });
+  if (!response.ok) await transferError(response);
+  const blob = await response.blob();
+  const disposition = response.headers.get('content-disposition') || '';
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `mvbar-backup-${new Date().toISOString()}.mvbar-backup`;
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+  return { filename, bytes: blob.size as number | null };
+}
+
+export async function restoreAdminBackup(token: string, file: File, restoreCaches = false) {
+  const form = new FormData();
+  form.append('backup', file, file.name);
+  const response = await fetch(`${API_BASE}/admin/restore?restoreCaches=${restoreCaches}`, {
+    method: 'POST',
+    headers: adminTransferHeaders(token),
+    body: form,
+    cache: 'no-store',
+    credentials: 'same-origin',
+  });
+  if (!response.ok) await transferError(response);
+  return (await response.json()) as {
+    ok: true;
+    tables: number;
+    rows: number;
+    librariesRemapped: number;
+    cachesRestored: boolean;
+    cacheFiles: number;
+    reindexQueued: boolean;
+    warning?: string;
+    sessionsInvalidated: true;
+  };
+}
+
 export async function login(email: string, password: string) {
   return (await apiFetch('/auth/login', {
     method: 'POST',
