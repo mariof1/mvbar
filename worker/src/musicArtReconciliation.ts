@@ -103,6 +103,7 @@ async function processWithConcurrency<T>(
 export async function reconcileMusicArtwork(): Promise<{
   migrated: number;
   recovered: number;
+  cleared: number;
   failed: number;
 }> {
   const references = await db().query<ArtworkReference>(
@@ -113,14 +114,14 @@ export async function reconcileMusicArtwork(): Promise<{
        SELECT art_path FROM artists WHERE art_path IS NOT NULL
      ) artwork`,
   );
-  if (references.rows.length === 0) return { migrated: 0, recovered: 0, failed: 0 };
+  if (references.rows.length === 0) return { migrated: 0, recovered: 0, cleared: 0, failed: 0 };
 
   // A database-only portable restore may have neither cache nor mounted media.
   // Avoid thousands of doomed recovery attempts on a metadata-only host.
   const cacheHasFiles = await directoryContainsFile(path.resolve(ART_DIR));
   if (!cacheHasFiles && !(await hasAvailableMusicSource())) {
     logger.info('music-art', 'Music artwork cache is empty and no music source is mounted; reconciliation skipped');
-    return { migrated: 0, recovered: 0, failed: 0 };
+    return { migrated: 0, recovered: 0, cleared: 0, failed: 0 };
   }
 
   const candidates: ArtworkReference[] = [];
@@ -129,7 +130,7 @@ export async function reconcileMusicArtwork(): Promise<{
       candidates.push(reference);
     }
   }
-  if (candidates.length === 0) return { migrated: 0, recovered: 0, failed: 0 };
+  if (candidates.length === 0) return { migrated: 0, recovered: 0, cleared: 0, failed: 0 };
 
   logger.info(
     'music-art',
@@ -139,6 +140,7 @@ export async function reconcileMusicArtwork(): Promise<{
   let attempted = 0;
   let migrated = 0;
   let recovered = 0;
+  let cleared = 0;
   let failed = 0;
   await processWithConcurrency(candidates, RECONCILIATION_CONCURRENCY, async (reference) => {
     let oldFileExists = false;
@@ -157,7 +159,28 @@ export async function reconcileMusicArtwork(): Promise<{
         source = await recoverEmbeddedArtwork(reference.art_path);
         if (source) recovered += 1;
       }
-      if (!source) throw new Error('cached file and source media artwork are unavailable');
+      if (!source) {
+        const client = await db().connect();
+        try {
+          await client.query('BEGIN');
+          await client.query(
+            'UPDATE tracks SET art_path = NULL, art_mime = NULL, art_hash = NULL WHERE art_path = $1',
+            [reference.art_path],
+          );
+          await client.query(
+            'UPDATE artists SET art_path = NULL, art_hash = NULL WHERE art_path = $1',
+            [reference.art_path],
+          );
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
+        cleared += 1;
+        return;
+      }
 
       const normalized = await writeMusicArt(ART_DIR, source);
       const client = await db().connect();
@@ -206,7 +229,7 @@ export async function reconcileMusicArtwork(): Promise<{
   }
   logger.success(
     'music-art',
-    `Music artwork reconciliation complete: ${migrated} normalized, ${recovered} recovered from media, ${failed} failed`,
+    `Music artwork reconciliation complete: ${migrated} normalized, ${recovered} recovered from media, ${cleared} broken references cleared, ${failed} failed`,
   );
-  return { migrated, recovered, failed };
+  return { migrated, recovered, cleared, failed };
 }
