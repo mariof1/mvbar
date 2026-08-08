@@ -1,0 +1,71 @@
+{
+  "id": "mvbar.missing-music",
+  "name": "Missing Music",
+  "author": "MVBar",
+  "version": "1.0.0",
+  "description": "Find albums and tracks missing from an MVBar library with MusicBrainz and hand approved requests to an external request service.",
+  "homepage": "https://github.com/mariof1/mvbar",
+  "config": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "providerBaseUrl": {
+          "type": "string",
+          "title": "Request provider URL",
+          "description": "Base URL of the external service that accepts and tracks requests. MVBar does not download media."
+        },
+        "providerApiToken": {
+          "type": "string",
+          "title": "Request provider API token",
+          "description": "Optional bearer token sent only to the configured request-provider origin.",
+          "format": "password"
+        },
+        "allowPrivateProvider": {
+          "type": "boolean",
+          "title": "Allow a private-network provider",
+          "description": "Explicitly permit an HTTP(S) provider on localhost or a private IP range.",
+          "default": false
+        },
+        "requireAdminApproval": {
+          "type": "boolean",
+          "title": "Require administrator approval",
+          "description": "Keep new user requests pending until an administrator approves them.",
+          "default": true
+        },
+        "musicBrainzContact": {
+          "type": "string",
+          "title": "MusicBrainz contact",
+          "description": "Contact email or URL included in the MusicBrainz User-Agent."
+        },
+        "releaseGroupTypes": {
+          "type": "string",
+          "title": "Release types",
+          "description": "Comma-separated MusicBrainz release-group types to compare.",
+          "default": "Album,EP"
+        }
+      }
+    }
+  },
+  "permissions": {
+    "config": {
+      "reason": "Read the administrator-supplied request-provider and MusicBrainz settings."
+    },
+    "kvstore": {
+      "reason": "Cache MusicBrainz catalog responses to respect its public API rate limit.",
+      "maxSize": "32 MB"
+    },
+    "catalog": {
+      "reason": "Read MusicBrainz identifiers and titles from enabled MVBar music libraries for comparison."
+    },
+    "requests": {
+      "reason": "Store request state and hand approved metadata-only requests to the configured external service."
+    }
+  },
+  "mvbar": {
+    "extension": {
+      "type": "missing-music",
+      "version": 1
+    }
+  }
+}

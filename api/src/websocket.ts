@@ -36,10 +36,10 @@ export function broadcastToUser(userId: string, type: string, data: any): void {
 }
 
 // Broadcast to all admin users
-export function broadcastToAdmins(type: string, data: any): void {
+export function broadcastToAdmins(type: string, data: any, exceptUserId?: string): void {
   const payload = JSON.stringify({ type, data });
   for (const [socket, info] of clients) {
-    if (socket.readyState === 1 && info.isAdmin) {
+    if (socket.readyState === 1 && info.isAdmin && info.userId !== exceptUserId) {
       socket.send(payload);
     }
   }

@@ -873,6 +873,40 @@ export async function initDb() {
   `);
   await pool.query('create index if not exists plugin_runs_plugin_created_idx on plugin_runs(plugin_id, created_at desc)');
 
+  await pool.query(`
+    create table if not exists plugin_media_requests (
+      id text primary key,
+      plugin_id text not null references plugins(id) on delete cascade,
+      user_id text not null references users(id) on delete cascade,
+      item_type text not null check (item_type in ('album', 'track')),
+      artist text not null,
+      title text not null,
+      album text,
+      musicbrainz_artist_id text,
+      musicbrainz_release_group_id text,
+      musicbrainz_release_id text,
+      musicbrainz_recording_id text,
+      status text not null check (status in (
+        'requested', 'approved', 'submitted', 'completed', 'failed', 'rejected', 'cancelled'
+      )),
+      provider_request_id text,
+      provider_error text,
+      metadata jsonb not null default '{}'::jsonb,
+      approved_by text references users(id) on delete set null,
+      approved_at timestamptz,
+      submitted_at timestamptz,
+      completed_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+  `);
+  await pool.query(
+    'create index if not exists plugin_media_requests_plugin_status_idx on plugin_media_requests(plugin_id, status, updated_at)'
+  );
+  await pool.query(
+    'create index if not exists plugin_media_requests_user_created_idx on plugin_media_requests(user_id, created_at desc)'
+  );
+
   // ========================================================================
   // USER PREFERENCES
   // ========================================================================

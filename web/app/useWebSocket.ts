@@ -90,7 +90,21 @@ export type PluginUpdate =
   | { type: 'plugin:changed'; data: { event: string; id?: string; name?: string; at: string } }
   | { type: 'plugin:error'; data: { operation: string; id?: string; actionId?: string; error: string } };
 
-type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | BackupUpdate | PluginUpdate | { type: 'connected' } | { type: 'ping' };
+export type MissingMusicUpdate = {
+  type: 'missing-music:update';
+  data: {
+    event: string;
+    requestId: string;
+    userId: string;
+    status: string;
+    artist: string;
+    title: string;
+    message?: string;
+    at: string;
+  };
+};
+
+type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | BackupUpdate | PluginUpdate | MissingMusicUpdate | { type: 'connected' } | { type: 'ping' };
 
 // Store for library update notifications
 interface LibraryUpdateStore {
@@ -182,6 +196,18 @@ interface PluginUpdateStore {
 }
 
 export const usePluginUpdates = create<PluginUpdateStore>((set) => ({
+  lastUpdate: 0,
+  lastEvent: null,
+  setEvent: (event) => set({ lastUpdate: Date.now(), lastEvent: event }),
+}));
+
+interface MissingMusicUpdateStore {
+  lastUpdate: number;
+  lastEvent: MissingMusicUpdate | null;
+  setEvent: (event: MissingMusicUpdate) => void;
+}
+
+export const useMissingMusicUpdates = create<MissingMusicUpdateStore>((set) => ({
   lastUpdate: 0,
   lastEvent: null,
   setEvent: (event) => set({ lastUpdate: Date.now(), lastEvent: event }),
@@ -343,6 +369,14 @@ export function useWebSocket(isAdmin = false) {
                 useToastStore.getState().show(msg.data.error || 'Plugin operation failed', 'error', 'top-right');
               }
             }
+          } else if (msg.type === 'missing-music:update') {
+            useMissingMusicUpdates.getState().setEvent(msg);
+            const failed = msg.data.status === 'failed' || msg.data.status === 'rejected';
+            useToastStore.getState().show(
+              msg.data.message || `${msg.data.title}: ${msg.data.status}`,
+              failed ? 'error' : 'success',
+              'top-right',
+            );
           }
         } catch {
           // Ignore malformed messages

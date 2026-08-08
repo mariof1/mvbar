@@ -59,6 +59,10 @@ export type NdpManifest = {
   };
   mvbar?: {
     actions?: PluginAction[];
+    extension?: {
+      type: string;
+      version?: number;
+    };
   };
   [key: string]: unknown;
 };

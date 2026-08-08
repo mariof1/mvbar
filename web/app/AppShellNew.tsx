@@ -21,6 +21,7 @@ import { Podcasts, PodcastPlayer } from './Podcasts';
 import { Audiobooks, AudiobookPlayer } from './Audiobooks';
 import { Settings } from './Settings';
 import { RecentlyAdded } from './RecentlyAdded';
+import { MissingMusic } from './MissingMusic';
 import { useAuth } from './store';
 import { useFavorites } from './favoritesStore';
 import { usePlayer, type QueueTrack } from './playerStore';
@@ -29,7 +30,7 @@ import { useRouter, useRoute, initRouter, getTabFromRoute, type Route } from './
 import { NavigationHeader } from './NavigationHeader';
 import { usePreferences } from './preferencesStore';
 import { getHlsStatus, logout, recordPlay, recordSkip, requestHlsTranscode, scrobbleToListenBrainz, nowPlayingListenBrainz, prefetchLyrics, listPlaylists, addTrackToPlaylist, apiFetch } from './apiClient';
-import { useWebSocket, useAdminPending } from './useWebSocket';
+import { useWebSocket, useAdminPending, usePluginUpdates } from './useWebSocket';
 
 // Icons as simple SVG components
 const Icons = {
@@ -1182,6 +1183,7 @@ function MobileSidebar(props: {
   hasMusicPlayer: boolean;
   hasPodcastPlayer: boolean;
   hasAudiobookPlayer: boolean;
+  missingMusicEnabled: boolean;
 }) {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const touchStartedInsideRef = useRef(false);
@@ -1300,6 +1302,7 @@ function MobileSidebar(props: {
             <NavItem icon={<Icons.Clock />} label="History" active={props.tab === 'history'} onClick={() => handleNavClick('history')} />
             <NavItem icon={<Icons.Podcast />} label="Podcasts" active={props.tab === 'podcasts'} onClick={() => handleNavClick('podcasts')} />
             <NavItem icon={<Icons.Audiobook />} label="Audiobooks" active={props.tab === 'audiobooks'} onClick={() => handleNavClick('audiobooks')} />
+            {props.missingMusicEnabled && <NavItem icon={<Icons.Search />} label="Missing Music" active={props.tab === 'missing-music'} onClick={() => handleNavClick('missing-music')} />}
             <NavItem icon={<Icons.Settings />} label="Settings" active={props.tab === 'settings'} onClick={() => handleNavClick('settings')} />
           </nav>
 
@@ -1336,7 +1339,7 @@ function MobileSidebar(props: {
   );
 }
 
-function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boolean; user: { email: string; role: string; avatar_path?: string | null } | null; onLogout: () => void }) {
+function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boolean; missingMusicEnabled: boolean; user: { email: string; role: string; avatar_path?: string | null } | null; onLogout: () => void }) {
   return (
     <aside className="hidden lg:flex flex-col w-64 h-screen fixed left-0 top-0 bg-black/50 border-r border-white/10 p-4">
       {/* Logo */}
@@ -1362,6 +1365,7 @@ function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boo
         <NavItem icon={<Icons.Clock />} label="History" active={props.tab === 'history'} onClick={() => props.setTab('history')} />
         <NavItem icon={<Icons.Podcast />} label="Podcasts" active={props.tab === 'podcasts'} onClick={() => props.setTab('podcasts')} />
         <NavItem icon={<Icons.Audiobook />} label="Audiobooks" active={props.tab === 'audiobooks'} onClick={() => props.setTab('audiobooks')} />
+        {props.missingMusicEnabled && <NavItem icon={<Icons.Search />} label="Missing Music" active={props.tab === 'missing-music'} onClick={() => props.setTab('missing-music')} />}
       </nav>
 
       <div className="mt-auto">
@@ -1405,6 +1409,7 @@ export function AppShellNew() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [missingMusicEnabled, setMissingMusicEnabled] = useState(false);
   const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
   const nowPlaying = isOpen ? queue[index] ?? null : null;
 
@@ -1412,6 +1417,17 @@ export function AppShellNew() {
   const user = useAuth((s) => s.user);
   const clearAuth = useAuth((s) => s.clear);
   const isAdmin = user?.role === 'admin';
+  const pluginUpdate = usePluginUpdates((state) => state.lastUpdate);
+
+  useEffect(() => {
+    if (!token) {
+      setMissingMusicEnabled(false);
+      return;
+    }
+    void apiFetch('/plugins/missing-music/status', {}, token)
+      .then((result: any) => setMissingMusicEnabled(Boolean(result.enabled)))
+      .catch(() => setMissingMusicEnabled(false));
+  }, [token, pluginUpdate]);
 
   // Podcast player state
   const podcastEpisode = useUi((s) => s.podcastEpisode);
@@ -1467,6 +1483,7 @@ export function AppShellNew() {
       case 'history': navigate({ type: 'history' }); break;
       case 'podcasts': navigate({ type: 'podcasts' }); break;
       case 'audiobooks': navigate({ type: 'audiobooks' }); break;
+      case 'missing-music': navigate({ type: 'missing-music' }); break;
       case 'settings': navigate({ type: 'settings' }); break;
       case 'admin': navigate({ type: 'admin' }); break;
       default: navigate({ type: 'for-you' });
@@ -1691,7 +1708,7 @@ export function AppShellNew() {
       <AutoLogin />
       
       {/* Sidebar - Desktop */}
-      <Sidebar tab={tab} setTab={setTab} isAdmin={isAdmin} user={user} onLogout={handleSignOut} />
+      <Sidebar tab={tab} setTab={setTab} isAdmin={isAdmin} missingMusicEnabled={missingMusicEnabled} user={user} onLogout={handleSignOut} />
       
       {/* Mobile Sidebar */}
       <MobileSidebar 
@@ -1705,6 +1722,7 @@ export function AppShellNew() {
         hasMusicPlayer={!!(isOpen && nowPlaying)}
         hasPodcastPlayer={!!podcastEpisode}
         hasAudiobookPlayer={!!audiobookChapter}
+        missingMusicEnabled={missingMusicEnabled}
       />
 
       {/* Sticky Mobile Header */}
@@ -1729,6 +1747,7 @@ export function AppShellNew() {
             {tab === 'history' && 'Recently Played'}
             {tab === 'podcasts' && 'Podcasts'}
             {tab === 'audiobooks' && 'Audiobooks'}
+            {tab === 'missing-music' && 'Missing Music'}
             {tab === 'settings' && 'Settings'}
             {tab === 'admin' && 'Admin'}
           </h2>
@@ -1777,6 +1796,7 @@ export function AppShellNew() {
                 {tab === 'history' && 'Recently Played'}
                 {tab === 'podcasts' && 'Podcasts'}
                 {tab === 'audiobooks' && 'Audiobooks'}
+                {tab === 'missing-music' && 'Missing Music'}
                 {tab === 'settings' && 'Settings'}
                 {tab === 'admin' && 'Admin'}
               </h2>
@@ -1853,6 +1873,14 @@ export function AppShellNew() {
             {tab === 'podcasts' && <Podcasts />}
 
             {tab === 'audiobooks' && <Audiobooks />}
+
+            {tab === 'missing-music' && missingMusicEnabled && <MissingMusic />}
+
+            {tab === 'missing-music' && !missingMusicEnabled && (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-8 text-center text-white/50">
+                Missing Music is not installed and enabled.
+              </div>
+            )}
 
             {tab === 'for-you' && <Recommendations />}
 

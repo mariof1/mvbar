@@ -158,6 +158,29 @@ example-tools.ndp
 └── plugin.wasm
 ```
 
+## First-party Missing Music request plugin
+
+The repository includes `plugins/missing-music`, a removable request-only
+extension. It compares MusicBrainz album and recording identifiers with the
+enabled MVBar libraries, presents missing albums or tracks to users, and stores
+an approval queue in plugin-owned database rows.
+
+Approved requests can be handed to an administrator-configured external HTTP
+service. MVBar sends metadata and MusicBrainz identifiers only. The extension
+has no download, media storage, import, or streaming path; delivery stays
+outside the plugin. Removing the package cascades its request rows and
+MusicBrainz cache.
+
+Build the installable package with:
+
+```bash
+cd api
+npm run build:missing-music-plugin
+```
+
+The output is `plugins/missing-music/dist/mvbar-missing-music.ndp`. See
+`plugins/missing-music/README.md` for the provider API contract.
+
 ## Backups
 
 Database backups retain plugin manifests, configuration, enablement approval,

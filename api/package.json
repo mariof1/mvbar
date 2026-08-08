@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:missing-music-plugin": "node scripts/build-missing-music-plugin.mjs",
     "test": "npm run build && node --test test/*.test.mjs",
     "start": "node dist/index.js",
     "dev": "node --watch --loader ts-node/esm src/index.ts",

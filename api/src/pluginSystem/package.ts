@@ -123,6 +123,15 @@ function validateManifest(value: unknown): NdpManifest {
     if (!Array.isArray(actions) || actions.length > 32) throw new Error('mvbar.actions must be an array of at most 32 actions');
     actions.forEach(validateAction);
   }
+  if (manifest.mvbar?.extension !== undefined) {
+    const extension = objectRecord(manifest.mvbar.extension);
+    if (!extension || typeof extension.type !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(extension.type)) {
+      throw new Error('mvbar.extension.type is invalid');
+    }
+    if (extension.version !== undefined && (!Number.isInteger(extension.version) || Number(extension.version) < 1)) {
+      throw new Error('mvbar.extension.version must be a positive integer');
+    }
+  }
   const hosts = manifest.permissions?.http?.requiredHosts;
   if (hosts !== undefined) {
     if (!Array.isArray(hosts) || hosts.length > 64 || hosts.some((host) => typeof host !== 'string' || host.length > 253)) {

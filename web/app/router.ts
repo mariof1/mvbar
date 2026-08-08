@@ -32,6 +32,7 @@ export type Route =
   | { type: 'podcast'; podcastId: number }
   | { type: 'audiobooks' }
   | { type: 'audiobook'; audiobookId: number }
+  | { type: 'missing-music' }
   | { type: 'settings' }
   | { type: 'admin' };
 
@@ -73,6 +74,7 @@ function routeToHash(route: Route): string {
     case 'podcast': return `#/podcast/${route.podcastId}`;
     case 'audiobooks': return '#/audiobooks';
     case 'audiobook': return `#/audiobook/${route.audiobookId}`;
+    case 'missing-music': return '#/missing-music';
     case 'settings': return '#/settings';
     case 'admin': return '#/admin';
     default: return '#/for-you';
@@ -93,6 +95,7 @@ function hashToRoute(hash: string): Route {
   if (path === 'history') return { type: 'history' };
   if (path === 'settings') return { type: 'settings' };
   if (path === 'admin') return { type: 'admin' };
+  if (path === 'missing-music') return { type: 'missing-music' };
   
   // Browse routes
   if (parts[0] === 'browse') {
@@ -341,6 +344,7 @@ export function getTabFromRoute(route: Route): string {
     case 'audiobooks':
     case 'audiobook':
       return 'audiobooks';
+    case 'missing-music': return 'missing-music';
     case 'settings': return 'settings';
     case 'admin': return 'admin';
     default: return 'for-you';

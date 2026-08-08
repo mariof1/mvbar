@@ -14,6 +14,7 @@ import {
 } from './registry.js';
 import { callPluginExport, effectivePluginConfig, inspectPlugin } from './runtime.js';
 import type { JsonSchemaProperty, NdpManifest, PluginAction, PluginDbRow } from './types.js';
+import { MISSING_MUSIC_PLUGIN_ID, validateMissingMusicConfig } from './missingMusic.js';
 
 function requireAdmin(req: FastifyRequest, reply: FastifyReply) {
   if (!req.user) {
@@ -70,13 +71,17 @@ function permissionSummary(manifest: NdpManifest) {
       detail = `Maximum storage: ${value.maxSize}`;
     } else if (key === 'storage') {
       detail = 'Read/write access to this plugin’s isolated data directory';
+    } else if (key === 'catalog') {
+      detail = 'Read-only access to MusicBrainz identifiers and titles in the enabled music libraries';
+    } else if (key === 'requests') {
+      detail = 'Create request records and hand approved requests to the configured external service';
     }
     return {
       key,
       reason: typeof value.reason === 'string' ? value.reason : null,
       detail: detail ?? null,
       broad: key === 'http' && Array.isArray(value.requiredHosts) && value.requiredHosts.includes('*'),
-      supported: ['config', 'http', 'kvstore', 'storage'].includes(key),
+      supported: ['config', 'http', 'kvstore', 'storage', 'catalog', 'requests'].includes(key),
     };
   });
 }
@@ -222,6 +227,7 @@ export const pluginsAdminPlugin: FastifyPluginAsync = fp(async (app) => {
         row.config ?? {},
         secretConfigKeys(row.manifest)
       );
+      if (id === MISSING_MUSIC_PLUGIN_ID) await validateMissingMusicConfig(config);
       await db().query('update plugins set config=$2, updated_at=now(), last_error=null where id=$1', [id, config]);
       await audit('plugin_config_updated', { by: req.user!.userId, pluginId: id, keys: Object.keys(config) });
       await notifyChange('configured', id, row.name);

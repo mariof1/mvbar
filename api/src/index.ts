@@ -33,6 +33,7 @@ import logger from './logger.js';
 import { initializePluginSystem } from './pluginSystem/registry.js';
 import { pluginUploadLimitBytes } from './pluginSystem/package.js';
 import { pluginsAdminPlugin } from './pluginSystem/routes.js';
+import { missingMusicPlugin, startMissingMusicScheduler } from './pluginSystem/missingMusic.js';
 
 // Use pino-pretty for human-readable logs
 const app = Fastify({
@@ -135,6 +136,7 @@ await app.register(recommendationsPlugin);
 await app.register(hlsPlugin);
 await app.register(websocketPlugin);
 await app.register(pluginsAdminPlugin);
+await app.register(missingMusicPlugin);
 await app.register(smartPlaylistsPlugin);
 await app.register(listenbrainzPlugin);
 await app.register(subsonicPlugin);
@@ -149,3 +151,4 @@ await app.listen({ port: config.port, host });
 
 // Start avatar sync scheduler for Google users
 startAvatarSyncScheduler(app.log);
+startMissingMusicScheduler();
