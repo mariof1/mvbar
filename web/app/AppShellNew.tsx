@@ -1410,7 +1410,7 @@ export function AppShellNew() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [missingMusicEnabled, setMissingMusicEnabled] = useState(false);
-  const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
+  const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, addManyToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
   const nowPlaying = isOpen ? queue[index] ?? null : null;
 
   const token = useAuth((s) => s.token);
@@ -1626,17 +1626,16 @@ export function AppShellNew() {
       const lastTrack = queue[queue.length - 1];
       fetchSimilarTracks(lastTrack.id, queue).then(similarTracks => {
         if (similarTracks.length > 0) {
-          // Add to queue without changing current playback
-          const newQueue = [...queue, ...similarTracks];
-          // Use addToQueue for each track to avoid disrupting playback
-          similarTracks.forEach(t => addToQueue(t));
+          // Add the recommendations as one operation so the user gets one
+          // compact summary notification instead of one toast per track.
+          addManyToQueue(similarTracks);
         }
         fetchingMoreRef.current = false;
       }).catch(() => {
         fetchingMoreRef.current = false;
       });
     }
-  }, [index, queue, preferences.auto_continue, nowPlaying, fetchSimilarTracks, addToQueue]);
+  }, [index, queue, preferences.auto_continue, nowPlaying, fetchSimilarTracks, addManyToQueue]);
 
   // Handle track ending based on play mode
   const handlePlayModeEnded = async () => {
