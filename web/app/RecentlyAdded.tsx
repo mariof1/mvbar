@@ -73,8 +73,7 @@ export function RecentlyAdded({
 
   // Live updates
   const libraryLastUpdate = useLibraryUpdates((s) => s.lastUpdate);
-  const libraryLastEvent = useLibraryUpdates((s) => s.lastEvent);
-  const lastRefreshRef = useRef<number>(0);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadAlbums = useCallback(async () => {
     if (!token) return;
@@ -92,21 +91,18 @@ export function RecentlyAdded({
     loadAlbums();
   }, [loadAlbums]);
 
-  // Live updates: refresh when new tracks are added
+  // Debounce the burst of scan events, retaining the final refresh instead of
+  // dropping it. Scan completion and WebSocket reconnection also arrive here.
   useEffect(() => {
     if (!libraryLastUpdate || !token) return;
-    
-    // Throttle to once per 2 seconds during scans
-    const now = Date.now();
-    if (now - lastRefreshRef.current < 2000) return;
-    lastRefreshRef.current = now;
-    
-    // Only refresh on track_added events to show new albums
-    if (libraryLastEvent?.event === 'track_added') {
-      loadAlbums();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [libraryLastUpdate]);
+
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => void loadAlbums(), 750);
+
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
+  }, [libraryLastUpdate, loadAlbums, token]);
 
   const loadAlbumTracks = useCallback(async (album: Album) => {
     if (!token) return;

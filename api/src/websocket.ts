@@ -64,9 +64,14 @@ export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
     if (channel === 'library:updates') {
       try {
         const data = JSON.parse(message);
-      // Route scan progress/complete events to admins only
+      // Scan progress is admin-only, but completion also invalidates library
+      // views for every connected user. This provides one reliable refresh
+      // after the burst of per-track events produced by a scan.
       if (data.event === 'scan:progress' || data.event === 'scan:complete') {
         broadcastToAdmins('scan:progress', data);
+        if (data.event === 'scan:complete') {
+          broadcast('library:update', data);
+        }
       } else {
         // Broadcast regular library updates to all connected WebSocket clients
         broadcast('library:update', data);

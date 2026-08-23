@@ -10,7 +10,7 @@ import type { AdminBackup, AdminBackupJob } from './apiClient';
 type LibraryUpdate = {
   type: 'library:update';
   data: {
-    event: 'track_added' | 'track_updated' | 'track_removed';
+    event: 'track_added' | 'track_updated' | 'track_removed' | 'scan:complete' | 'reconnected';
     path?: string;
     title?: string;
     artist?: string;
@@ -262,7 +262,7 @@ export const useScanProgress = create<ScanProgressStore>((set) => ({
     currentFile: data.currentFile ?? '',
     error: data.error ?? '',
     failedFiles: data.failedFiles ?? 0,
-    scanning: data.status === 'scanning',
+    scanning: data.status === 'scanning' || data.status === 'indexing',
   }),
 }));
 
@@ -280,8 +280,12 @@ export function useWebSocket(isAdmin = false) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const reconnectAttempts = useRef(0);
+  const activeRef = useRef(false);
 
   const connect = useCallback(() => {
+    if (!activeRef.current) return;
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) return;
+
     // Determine WebSocket URL based on current location
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/api/ws`;
@@ -293,6 +297,10 @@ export function useWebSocket(isAdmin = false) {
 
       ws.onopen = () => {
         reconnectAttempts.current = 0;
+        useLibraryUpdates.setState({
+          lastUpdate: Date.now(),
+          lastEvent: { event: 'reconnected', ts: Date.now() },
+        });
       };
 
       ws.onmessage = (event) => {
@@ -384,8 +392,9 @@ export function useWebSocket(isAdmin = false) {
       };
 
       ws.onclose = () => {
-        wsRef.current = null;
-        globalWs = null;
+        if (wsRef.current === ws) wsRef.current = null;
+        if (globalWs === ws) globalWs = null;
+        if (!activeRef.current) return;
         
         // Exponential backoff for reconnection
         const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
@@ -403,15 +412,33 @@ export function useWebSocket(isAdmin = false) {
   }, []);
 
   useEffect(() => {
+    activeRef.current = true;
     connect();
 
+    const reconnectNow = () => {
+      if (!activeRef.current || document.visibilityState === 'hidden') return;
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = undefined;
+      if (wsRef.current && wsRef.current.readyState !== WebSocket.OPEN) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      connect();
+    };
+    window.addEventListener('online', reconnectNow);
+    document.addEventListener('visibilitychange', reconnectNow);
+
     return () => {
+      activeRef.current = false;
+      window.removeEventListener('online', reconnectNow);
+      document.removeEventListener('visibilitychange', reconnectNow);
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
       if (wsRef.current) {
         wsRef.current.close();
-        globalWs = null;
+        if (globalWs === wsRef.current) globalWs = null;
+        wsRef.current = null;
       }
     };
   }, [connect]);
