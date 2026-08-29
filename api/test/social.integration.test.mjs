@@ -10,6 +10,7 @@ test('friend requests and track sharing enforce friendship and library access', 
   process.env.DATABASE_URL = databaseUrl;
   await initDb();
 
+  await db().query("delete from users where id in ('social_a','social_b','social_c')");
   await db().query(`
     insert into users(id, email, role, approval_status)
     values
@@ -19,6 +20,7 @@ test('friend requests and track sharing enforce friendship and library access', 
   `);
   const library = await db().query("select id from libraries where mount_path='/music'");
   const libraryId = Number(library.rows[0].id);
+  await db().query("delete from tracks where library_id=$1 and path='/music/shared.flac'", [libraryId]);
   await db().query(
     `insert into user_libraries(user_id, library_id) values ('social_a',$1),('social_b',$1)`,
     [libraryId],

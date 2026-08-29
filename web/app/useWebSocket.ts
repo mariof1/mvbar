@@ -7,6 +7,7 @@ import { useToastStore } from './Toast';
 import { useAuth } from './store';
 import type { AdminBackup, AdminBackupJob } from './apiClient';
 import { useSocialUpdates } from './socialStore';
+import { systemSocialNotificationsEnabled } from './pushNotifications';
 
 type LibraryUpdate = {
   type: 'library:update';
@@ -364,7 +365,9 @@ export function useWebSocket(isAdmin = false) {
             const auth = useAuth.getState();
             useSocialUpdates.getState().trigger();
             void useSocialUpdates.getState().refresh(auth.token);
-            if (social.type === 'social:friend_request') {
+            if (systemSocialNotificationsEnabled()) {
+              // The service worker displays these events as system notifications.
+            } else if (social.type === 'social:friend_request') {
               useToastStore.getState().show(`${social.data.user.email} sent you a friend request`, 'queue');
             } else if (social.type === 'social:friend_accepted') {
               useToastStore.getState().show(`${social.data.user.email} accepted your friend request`, 'success');

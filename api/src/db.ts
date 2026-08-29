@@ -869,6 +869,40 @@ export async function initDb() {
     'create index if not exists track_shares_recipient_unread_idx on track_shares(recipient_id, created_at desc) where read_at is null'
   );
 
+  await pool.query(`
+    create table if not exists web_push_subscriptions (
+      id bigserial primary key,
+      user_id text not null references users(id) on delete cascade,
+      session_version integer not null default 0,
+      endpoint text not null unique,
+      p256dh text not null,
+      auth text not null,
+      expiration_time bigint,
+      user_agent text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      last_success_at timestamptz,
+      last_failure_at timestamptz,
+      failure_count integer not null default 0
+    );
+  `);
+  await pool.query(
+    'alter table web_push_subscriptions add column if not exists session_version integer not null default 0'
+  );
+  await pool.query(
+    'create index if not exists web_push_subscriptions_user_idx on web_push_subscriptions(user_id, updated_at desc)'
+  );
+
+  await pool.query(`
+    create table if not exists web_push_configuration (
+      singleton boolean primary key default true check (singleton),
+      public_key text not null,
+      private_key text not null,
+      subject text not null,
+      created_at timestamptz not null default now()
+    );
+  `);
+
   // ========================================================================
   // SANDBOXED PLUGINS
   // ========================================================================

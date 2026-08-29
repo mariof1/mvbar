@@ -34,6 +34,7 @@ import { usePreferences } from './preferencesStore';
 import { getHlsStatus, logout, recordPlay, recordSkip, requestHlsTranscode, scrobbleToListenBrainz, nowPlayingListenBrainz, prefetchLyrics, listPlaylists, addTrackToPlaylist, apiFetch } from './apiClient';
 import { useWebSocket, useAdminPending, usePluginUpdates } from './useWebSocket';
 import { useSocialUpdates } from './socialStore';
+import { preparePushNotifications, unsubscribeCurrentPushDevice } from './pushNotifications';
 
 // Icons as simple SVG components
 const Icons = {
@@ -1560,7 +1561,12 @@ export function AppShellNew() {
     void refreshSocial(token);
   }, [token, refreshSocial]);
 
+  useEffect(() => {
+    if (token) void preparePushNotifications(token).catch(() => undefined);
+  }, [token]);
+
   const handleSignOut = async () => {
+    try { await unsubscribeCurrentPushDevice(token); } catch {}
     try { await logout(token ?? undefined); } catch {}
     finally { 
       resetPlayer();

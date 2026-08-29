@@ -4,6 +4,7 @@ import type { PoolClient } from 'pg';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import { audit, db } from './db.js';
 import { broadcastToUser } from './websocket.js';
+import { sendWebPushToUser } from './pushNotifications.js';
 
 type PublicUserRow = {
   id: string;
@@ -244,6 +245,12 @@ export const socialPlugin: FastifyPluginAsync = fp(async (app) => {
       };
       broadcastToUser(userId, 'social:friend_request', request);
       await audit('friend_request_sent', { by: req.user.userId, to: userId, relationshipId: request.relationshipId });
+      void sendWebPushToUser(userId, {
+        title: 'New friend request',
+        body: `${request.user.email || 'Someone'} sent you a friend request.`,
+        tag: `friend-request-${request.relationshipId}`,
+        url: '/#/social',
+      });
       return reply.code(201).send({ ok: true, request });
     } catch (error: any) {
       if (error?.code === '23505') {
@@ -273,6 +280,12 @@ export const socialPlugin: FastifyPluginAsync = fp(async (app) => {
       user: user ? publicUser(user) : { id: req.user.userId, email: '', avatarPath: null },
     });
     await audit('friend_request_accepted', { by: req.user.userId, from: requesterId, relationshipId });
+    void sendWebPushToUser(requesterId, {
+      title: 'Friend request accepted',
+      body: `${user?.email || 'Someone'} accepted your friend request.`,
+      tag: `friend-accepted-${relationshipId}`,
+      url: '/#/social',
+    });
     return { ok: true };
   });
 
@@ -409,6 +422,12 @@ export const socialPlugin: FastifyPluginAsync = fp(async (app) => {
           album: track.album,
         },
         message,
+      });
+      void sendWebPushToUser(share.recipientId, {
+        title: 'Song shared with you',
+        body: `${sender?.email || 'A friend'} shared “${track.title || 'a song'}” with you.`,
+        tag: `track-share-${share.id}`,
+        url: '/#/social',
       });
     }
     await audit('track_shared', { by: req.user.userId, trackId, recipientIds });

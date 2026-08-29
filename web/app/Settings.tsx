@@ -15,8 +15,10 @@ import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { usePreferences } from './preferencesStore';
 import { showConfirm } from './ConfirmModal';
+import { PushNotificationSettings } from './PushNotificationSettings';
+import { unsubscribeCurrentPushDevice } from './pushNotifications';
 
-type Tab = 'account' | 'playback' | 'integrations' | 'about';
+type Tab = 'account' | 'playback' | 'notifications' | 'integrations' | 'about';
 
 interface UserProfile {
   id: string;
@@ -297,6 +299,11 @@ export function Settings() {
       label: 'Playback',
       icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
     },
+    {
+      id: 'notifications',
+      label: 'Notifications',
+      icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75V9a6 6 0 00-12 0v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>
+    },
     { 
       id: 'integrations', 
       label: 'Integrations',
@@ -536,6 +543,7 @@ export function Settings() {
             <section className="bg-slate-800/50 rounded-xl p-6">
               <button
                 onClick={async () => {
+                  try { await unsubscribeCurrentPushDevice(token); } catch {}
                   try { await logout(token); } catch {}
                   resetPlayer();
                   clear();
@@ -578,6 +586,8 @@ export function Settings() {
             </section>
           </>
         )}
+
+        {activeTab === 'notifications' && <PushNotificationSettings token={token} />}
 
         {activeTab === 'integrations' && (
           <>

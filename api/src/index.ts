@@ -27,6 +27,7 @@ import { deviceLogsPlugin } from './deviceLogs.js';
 import { telegramPlugin } from './telegram.js';
 import { userAuditPlugin } from './userAudit.js';
 import { socialPlugin } from './social.js';
+import { initializeWebPush, pushNotificationsPlugin } from './pushNotifications.js';
 import googleAuthPlugin, { startAvatarSyncScheduler } from './googleAuth.js';
 import { backupPlugin } from './backup.js';
 import { initDb } from './db.js';
@@ -91,6 +92,7 @@ function sanitizeUrlForLog(url: string) {
 }
 
 await initDb();
+await initializeWebPush();
 await initializePluginSystem();
 logger.success('api', `Server starting on port ${config.port}`);
 
@@ -121,6 +123,7 @@ app.get('/api/version', async () => ({
 
 await app.register(authPlugin);
 await app.register(userAuditPlugin);
+await app.register(pushNotificationsPlugin);
 await app.register(socialPlugin);
 await app.register(backupPlugin);
 await app.register(googleAuthPlugin);
