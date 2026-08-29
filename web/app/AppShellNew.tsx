@@ -9,7 +9,7 @@ import { UserManagementPanel } from './UserManagementPanel';
 import { LibraryManagementPanel } from './LibraryManagementPanel';
 import { Admin } from './Admin';
 import { SearchModal } from './SearchModal';
-import { ToastContainer } from './Toast';
+import { ToastContainer, useToastStore } from './Toast';
 import { ConfirmModal } from './ConfirmModal';
 import { Tracks } from './Tracks';
 import { Playlists } from './Playlists';
@@ -404,8 +404,10 @@ function PlayerBar(props: {
   const queueRef = useRef<HTMLDivElement>(null);
   const activeQueueItemRef = useRef<HTMLDivElement>(null);
   const playedSentRef = useRef(false);
+  const lastNotifiedTrackRef = useRef<number | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const [preferHls, setPreferHls] = useState(true);
+  const showToast = useToastStore((s) => s.show);
   const mediaSessionActionsRef = useRef({
     onPrev: props.onPrev,
     onNext: props.onNext,
@@ -424,6 +426,15 @@ function PlayerBar(props: {
     setArtOk(true);
     playedSentRef.current = false;
   }, [props.nowPlaying.id]);
+
+  useEffect(() => {
+    if (lastNotifiedTrackRef.current === props.nowPlaying.id) return;
+    lastNotifiedTrackRef.current = props.nowPlaying.id;
+
+    const title = props.nowPlaying.title || 'Unknown Track';
+    const artist = props.nowPlaying.artist;
+    showToast(`Now playing: ${title}${artist ? ` — ${artist}` : ''}`, 'playing');
+  }, [props.nowPlaying.id, props.nowPlaying.title, props.nowPlaying.artist, showToast]);
 
   // Publish metadata independently from stream startup. This lets installed
   // desktop PWAs expose the current track even while playback is buffering.

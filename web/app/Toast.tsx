@@ -5,7 +5,7 @@ import { create } from 'zustand';
 import { useEffect, useState, useCallback } from 'react';
 
 type ToastPosition = 'top-right';
-type ToastItem = { id: number; message: string; icon?: 'queue' | 'success' | 'error'; position: ToastPosition };
+type ToastItem = { id: number; message: string; icon?: 'playing' | 'queue' | 'success' | 'error'; position: ToastPosition };
 
 type ToastState = {
   toasts: ToastItem[];
@@ -28,6 +28,12 @@ export const useToastStore = create<ToastState>((set) => ({
 }));
 
 const icons: Record<string, React.ReactElement> = {
+  playing: (
+    <svg className="w-5 h-5 text-cyan-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M9 18V5l11-2v13M9 9l11-2M9 18a3 3 0 11-6 0 3 3 0 016 0zm11-2a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  ),
   queue: (
     <svg className="w-5 h-5 text-cyan-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
