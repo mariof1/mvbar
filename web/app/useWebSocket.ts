@@ -6,6 +6,7 @@ import { useFavorites } from './favoritesStore';
 import { useToastStore } from './Toast';
 import { useAuth } from './store';
 import type { AdminBackup, AdminBackupJob } from './apiClient';
+import { useSocialUpdates } from './socialStore';
 
 type LibraryUpdate = {
   type: 'library:update';
@@ -80,6 +81,16 @@ type AdminUserPendingUpdate = {
   data: { email?: string; status?: string };
 };
 
+type SocialUpdate =
+  | { type: 'social:friend_request'; data: { relationshipId: number; user: { id: string; email: string } } }
+  | { type: 'social:friend_accepted'; data: { relationshipId: number; user: { id: string; email: string } } }
+  | { type: 'social:friend_request_removed'; data: { relationshipId: number } }
+  | { type: 'social:friend_removed'; data: { userId: string } }
+  | { type: 'social:track_shared'; data: { shareId: number; sender: { id: string; email: string }; track: { id: number; title: string | null } } }
+  | { type: 'social:share_read'; data: { shareId: number } }
+  | { type: 'social:shares_read_all'; data: Record<string, never> }
+  | { type: 'social:share_removed'; data: { shareId: number } };
+
 export type BackupUpdate =
   | { type: 'backup:started'; data: { job: AdminBackupJob } }
   | { type: 'backup:created'; data: { backup: AdminBackup; source: 'created' | 'uploaded' } }
@@ -104,7 +115,7 @@ export type MissingMusicUpdate = {
   };
 };
 
-type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | BackupUpdate | PluginUpdate | MissingMusicUpdate | { type: 'connected' } | { type: 'ping' };
+type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | BackupUpdate | PluginUpdate | MissingMusicUpdate | SocialUpdate | { type: 'connected' } | { type: 'ping' };
 
 // Store for library update notifications
 interface LibraryUpdateStore {
@@ -347,6 +358,21 @@ export function useWebSocket(isAdmin = false) {
             const auth = useAuth.getState();
             if (auth.user?.role === 'admin') {
               useAdminPending.getState().refresh(auth.token);
+            }
+          } else if (msg.type.startsWith('social:')) {
+            const social = msg as SocialUpdate;
+            const auth = useAuth.getState();
+            useSocialUpdates.getState().trigger();
+            void useSocialUpdates.getState().refresh(auth.token);
+            if (social.type === 'social:friend_request') {
+              useToastStore.getState().show(`${social.data.user.email} sent you a friend request`, 'queue');
+            } else if (social.type === 'social:friend_accepted') {
+              useToastStore.getState().show(`${social.data.user.email} accepted your friend request`, 'success');
+            } else if (social.type === 'social:track_shared') {
+              useToastStore.getState().show(
+                `${social.data.sender.email} shared “${social.data.track.title || 'a song'}” with you`,
+                'playing',
+              );
             }
           } else if (
             msg.type === 'backup:started'

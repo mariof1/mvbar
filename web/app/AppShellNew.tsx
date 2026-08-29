@@ -21,6 +21,8 @@ import { Podcasts, PodcastPlayer } from './Podcasts';
 import { Audiobooks, AudiobookPlayer } from './Audiobooks';
 import { Settings } from './Settings';
 import { RecentlyAdded } from './RecentlyAdded';
+import { Social } from './Social';
+import { ShareTrackDialog } from './ShareTrackDialog';
 import { MissingMusic } from './MissingMusic';
 import { useAuth } from './store';
 import { useFavorites } from './favoritesStore';
@@ -31,6 +33,7 @@ import { NavigationHeader } from './NavigationHeader';
 import { usePreferences } from './preferencesStore';
 import { getHlsStatus, logout, recordPlay, recordSkip, requestHlsTranscode, scrobbleToListenBrainz, nowPlayingListenBrainz, prefetchLyrics, listPlaylists, addTrackToPlaylist, apiFetch } from './apiClient';
 import { useWebSocket, useAdminPending, usePluginUpdates } from './useWebSocket';
+import { useSocialUpdates } from './socialStore';
 
 // Icons as simple SVG components
 const Icons = {
@@ -57,6 +60,16 @@ const Icons = {
   Heart: () => (
     <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" />
+    </svg>
+  ),
+  Social: () => (
+    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.742-.479 3 3 0 00-4.682-2.72m.94 3.198v.001c0 .732-.411 1.406-1.068 1.73A10.964 10.964 0 0112 21c-1.77 0-3.443-.417-4.925-1.158A1.928 1.928 0 016 18.12v-.002a4.5 4.5 0 018.5-2.063M15 7.5a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+    </svg>
+  ),
+  Share: () => (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.273.283.6.283.943s-.103.67-.283.943m0-1.886 9.566-5.064m-9.566 7.25 9.566 5.064m0-12.314a2.25 2.25 0 103.934-2.186 2.25 2.25 0 00-3.934 2.186zm0 12.314a2.25 2.25 0 103.934 2.186 2.25 2.25 0 00-3.934-2.186z" />
     </svg>
   ),
   Clock: () => (
@@ -380,6 +393,7 @@ function PlayerBar(props: {
   isFavorite: boolean;
   onToggleFavorite: () => void;
   onAddToPlaylist: () => void;
+  onShare: () => void;
   showLyrics: boolean;
   onToggleLyrics: () => void;
   onTimeUpdate?: (time: number) => void;
@@ -815,7 +829,7 @@ function PlayerBar(props: {
             </div>
 
             {/* Secondary Controls */}
-            <div className="flex items-center justify-center gap-4 mb-6 px-8">
+            <div className="flex flex-wrap items-center justify-center gap-3 mb-6 px-4 sm:px-8">
               <button
                 onClick={(e) => { e.stopPropagation(); props.onToggleFavorite(); }}
                 className={`flex items-center gap-2 px-4 py-2 rounded-full border ${props.isFavorite ? 'border-pink-500 text-pink-500' : 'border-white/30 text-white/70'}`}
@@ -829,6 +843,13 @@ function PlayerBar(props: {
               >
                 <Icons.Plus />
                 <span className="text-sm">Add to Playlist</span>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); props.onShare(); }}
+                className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/30 text-white/70"
+              >
+                <Icons.Share />
+                <span className="text-sm">Share</span>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); props.onClose(); }}
@@ -985,6 +1006,13 @@ function PlayerBar(props: {
                 title="Add to playlist"
               >
                 <Icons.Plus />
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); props.onShare(); }}
+                className="p-2 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition"
+                title="Share with a friend"
+              >
+                <Icons.Share />
               </button>
             </div>
 
@@ -1202,6 +1230,7 @@ function NavItem(props: {
   active: boolean; 
   onClick: () => void;
   mobile?: boolean;
+  badge?: number;
 }) {
   if (props.mobile) {
     return (
@@ -1211,7 +1240,10 @@ function NavItem(props: {
           props.active ? 'text-white' : 'text-white/50 hover:text-white/80'
         }`}
       >
-        <div className={props.active ? 'text-cyan-500' : ''}>{props.icon}</div>
+        <div className={`relative ${props.active ? 'text-cyan-500' : ''}`}>
+          {props.icon}
+          {!!props.badge && <span className="absolute -right-2 -top-1 h-4 min-w-4 rounded-full bg-red-500 px-1 text-[9px] font-bold leading-4 text-white">{props.badge > 99 ? '99+' : props.badge}</span>}
+        </div>
         <span className="text-xs">{props.label}</span>
       </button>
     );
@@ -1227,7 +1259,8 @@ function NavItem(props: {
       }`}
     >
       <div className={props.active ? 'text-cyan-500' : ''}>{props.icon}</div>
-      <span className="font-medium">{props.label}</span>
+      <span className="flex-1 text-left font-medium">{props.label}</span>
+      {!!props.badge && <span className="min-w-5 rounded-full bg-red-500 px-1.5 py-0.5 text-center text-[10px] font-bold text-white">{props.badge > 99 ? '99+' : props.badge}</span>}
     </button>
   );
 }
@@ -1244,6 +1277,7 @@ function MobileSidebar(props: {
   hasPodcastPlayer: boolean;
   hasAudiobookPlayer: boolean;
   missingMusicEnabled: boolean;
+  socialBadge: number;
 }) {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const touchStartedInsideRef = useRef(false);
@@ -1359,6 +1393,7 @@ function MobileSidebar(props: {
             <NavItem icon={<Icons.Library />} label="Recently Added" active={props.tab === 'library' || props.tab === 'recently-added'} onClick={() => handleNavClick('recently-added')} />
             <NavItem icon={<Icons.Playlist />} label="Playlists" active={props.tab === 'playlists'} onClick={() => handleNavClick('playlists')} />
             <NavItem icon={<Icons.Heart />} label="Favorites" active={props.tab === 'favorites'} onClick={() => handleNavClick('favorites')} />
+            <NavItem icon={<Icons.Social />} label="Friends & Sharing" active={props.tab === 'social'} onClick={() => handleNavClick('social')} badge={props.socialBadge} />
             <NavItem icon={<Icons.Clock />} label="History" active={props.tab === 'history'} onClick={() => handleNavClick('history')} />
             <NavItem icon={<Icons.Podcast />} label="Podcasts" active={props.tab === 'podcasts'} onClick={() => handleNavClick('podcasts')} />
             <NavItem icon={<Icons.Audiobook />} label="Audiobooks" active={props.tab === 'audiobooks'} onClick={() => handleNavClick('audiobooks')} />
@@ -1399,7 +1434,7 @@ function MobileSidebar(props: {
   );
 }
 
-function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boolean; missingMusicEnabled: boolean; user: { email: string; role: string; avatar_path?: string | null } | null; onLogout: () => void }) {
+function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boolean; missingMusicEnabled: boolean; socialBadge: number; user: { email: string; role: string; avatar_path?: string | null } | null; onLogout: () => void }) {
   return (
     <aside className="hidden lg:flex flex-col w-64 h-screen fixed left-0 top-0 bg-black/50 border-r border-white/10 p-4">
       {/* Logo */}
@@ -1422,6 +1457,7 @@ function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boo
         <NavItem icon={<Icons.Library />} label="Recently Added" active={props.tab === 'library' || props.tab === 'recently-added'} onClick={() => props.setTab('recently-added')} />
         <NavItem icon={<Icons.Playlist />} label="Playlists" active={props.tab === 'playlists'} onClick={() => props.setTab('playlists')} />
         <NavItem icon={<Icons.Heart />} label="Favorites" active={props.tab === 'favorites'} onClick={() => props.setTab('favorites')} />
+        <NavItem icon={<Icons.Social />} label="Friends & Sharing" active={props.tab === 'social'} onClick={() => props.setTab('social')} badge={props.socialBadge} />
         <NavItem icon={<Icons.Clock />} label="History" active={props.tab === 'history'} onClick={() => props.setTab('history')} />
         <NavItem icon={<Icons.Podcast />} label="Podcasts" active={props.tab === 'podcasts'} onClick={() => props.setTab('podcasts')} />
         <NavItem icon={<Icons.Audiobook />} label="Audiobooks" active={props.tab === 'audiobooks'} onClick={() => props.setTab('audiobooks')} />
@@ -1469,6 +1505,7 @@ export function AppShellNew() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [trackToShare, setTrackToShare] = useState<QueueTrack | null>(null);
   const [missingMusicEnabled, setMissingMusicEnabled] = useState(false);
   const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, addManyToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
   const nowPlaying = isOpen ? queue[index] ?? null : null;
@@ -1478,6 +1515,10 @@ export function AppShellNew() {
   const clearAuth = useAuth((s) => s.clear);
   const isAdmin = user?.role === 'admin';
   const pluginUpdate = usePluginUpdates((state) => state.lastUpdate);
+  const unreadShares = useSocialUpdates((state) => state.unreadShares);
+  const incomingRequests = useSocialUpdates((state) => state.incomingRequests);
+  const refreshSocial = useSocialUpdates((state) => state.refresh);
+  const socialBadge = unreadShares + incomingRequests;
 
   useEffect(() => {
     if (!token) {
@@ -1515,6 +1556,10 @@ export function AppShellNew() {
     if (token) loadPreferences(token);
   }, [token, loadPreferences]);
 
+  useEffect(() => {
+    void refreshSocial(token);
+  }, [token, refreshSocial]);
+
   const handleSignOut = async () => {
     try { await logout(token ?? undefined); } catch {}
     finally { 
@@ -1540,6 +1585,7 @@ export function AppShellNew() {
       case 'browse': navigate({ type: 'browse' }); break;
       case 'playlists': navigate({ type: 'playlists' }); break;
       case 'favorites': navigate({ type: 'favorites' }); break;
+      case 'social': navigate({ type: 'social' }); break;
       case 'history': navigate({ type: 'history' }); break;
       case 'podcasts': navigate({ type: 'podcasts' }); break;
       case 'audiobooks': navigate({ type: 'audiobooks' }); break;
@@ -1767,7 +1813,7 @@ export function AppShellNew() {
       <AutoLogin />
       
       {/* Sidebar - Desktop */}
-      <Sidebar tab={tab} setTab={setTab} isAdmin={isAdmin} missingMusicEnabled={missingMusicEnabled} user={user} onLogout={handleSignOut} />
+      <Sidebar tab={tab} setTab={setTab} isAdmin={isAdmin} missingMusicEnabled={missingMusicEnabled} socialBadge={socialBadge} user={user} onLogout={handleSignOut} />
       
       {/* Mobile Sidebar */}
       <MobileSidebar 
@@ -1782,6 +1828,7 @@ export function AppShellNew() {
         hasPodcastPlayer={!!podcastEpisode}
         hasAudiobookPlayer={!!audiobookChapter}
         missingMusicEnabled={missingMusicEnabled}
+        socialBadge={socialBadge}
       />
 
       {/* Sticky Mobile Header */}
@@ -1803,6 +1850,7 @@ export function AppShellNew() {
             {(tab === 'recently-added') && 'Recently Added'}
             {tab === 'playlists' && 'Playlists'}
             {tab === 'favorites' && 'Favorites'}
+            {tab === 'social' && 'Friends & Sharing'}
             {tab === 'history' && 'Recently Played'}
             {tab === 'podcasts' && 'Podcasts'}
             {tab === 'audiobooks' && 'Audiobooks'}
@@ -1852,6 +1900,7 @@ export function AppShellNew() {
                 {(tab === 'library' || tab === 'recently-added') && 'Recently Added'}
                 {tab === 'playlists' && 'Playlists'}
                 {tab === 'favorites' && 'Favorites'}
+                {tab === 'social' && 'Friends & Sharing'}
                 {tab === 'history' && 'Recently Played'}
                 {tab === 'podcasts' && 'Podcasts'}
                 {tab === 'audiobooks' && 'Audiobooks'}
@@ -1922,6 +1971,8 @@ export function AppShellNew() {
               />
             )}
 
+            {tab === 'social' && <Social />}
+
             {tab === 'history' && (
               <History
                 onPlay={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
@@ -1964,6 +2015,7 @@ export function AppShellNew() {
           isFavorite={isFavorite}
           onToggleFavorite={toggleFavorite}
           onAddToPlaylist={openPlaylistModal}
+          onShare={() => setTrackToShare(nowPlaying)}
           showLyrics={showLyrics}
           onToggleLyrics={() => setShowLyrics((v) => !v)}
           onTimeUpdate={setPlayerCurrentTime}
@@ -1988,6 +2040,8 @@ export function AppShellNew() {
           onPlayModeEnded={handlePlayModeEnded}
         />
       )}
+
+      <ShareTrackDialog track={trackToShare} onClose={() => setTrackToShare(null)} />
 
       {/* Add to Playlist Modal */}
       {showPlaylistModal && (

@@ -26,6 +26,7 @@ import { preferencesPlugin } from './preferences.js';
 import { deviceLogsPlugin } from './deviceLogs.js';
 import { telegramPlugin } from './telegram.js';
 import { userAuditPlugin } from './userAudit.js';
+import { socialPlugin } from './social.js';
 import googleAuthPlugin, { startAvatarSyncScheduler } from './googleAuth.js';
 import { backupPlugin } from './backup.js';
 import { initDb } from './db.js';
@@ -120,6 +121,7 @@ app.get('/api/version', async () => ({
 
 await app.register(authPlugin);
 await app.register(userAuditPlugin);
+await app.register(socialPlugin);
 await app.register(backupPlugin);
 await app.register(googleAuthPlugin);
 await app.register(libraryPlugin);

@@ -821,6 +821,55 @@ export async function initDb() {
   );
 
   // ========================================================================
+  // FRIENDS AND TRACK SHARING
+  // ========================================================================
+
+  await pool.query(`
+    create table if not exists friendships (
+      id bigserial primary key,
+      requester_id text not null references users(id) on delete cascade,
+      addressee_id text not null references users(id) on delete cascade,
+      status text not null default 'pending' check (status in ('pending', 'accepted')),
+      created_at timestamptz not null default now(),
+      responded_at timestamptz,
+      check (requester_id <> addressee_id),
+      unique (requester_id, addressee_id)
+    );
+  `);
+  await pool.query(`
+    create unique index if not exists friendships_unique_pair_idx
+    on friendships (least(requester_id, addressee_id), greatest(requester_id, addressee_id))
+  `);
+  await pool.query(
+    "create index if not exists friendships_addressee_pending_idx on friendships(addressee_id, created_at desc) where status = 'pending'"
+  );
+  await pool.query(`
+    create index if not exists friendships_members_accepted_idx
+    on friendships(requester_id, addressee_id) where status = 'accepted'
+  `);
+
+  await pool.query(`
+    create table if not exists track_shares (
+      id bigserial primary key,
+      sender_id text not null references users(id) on delete cascade,
+      recipient_id text not null references users(id) on delete cascade,
+      track_id bigint not null references tracks(id) on delete cascade,
+      message text,
+      created_at timestamptz not null default now(),
+      read_at timestamptz,
+      check (sender_id <> recipient_id),
+      check (message is null or char_length(message) <= 500),
+      unique (sender_id, recipient_id, track_id)
+    );
+  `);
+  await pool.query(
+    'create index if not exists track_shares_recipient_created_idx on track_shares(recipient_id, created_at desc)'
+  );
+  await pool.query(
+    'create index if not exists track_shares_recipient_unread_idx on track_shares(recipient_id, created_at desc) where read_at is null'
+  );
+
+  // ========================================================================
   // SANDBOXED PLUGINS
   // ========================================================================
 

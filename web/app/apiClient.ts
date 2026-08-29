@@ -617,6 +617,114 @@ export async function listFavorites(token: string, limit = 100, offset = 0) {
   };
 }
 
+export type SocialUser = {
+  id: string;
+  email: string;
+  avatarPath: string | null;
+};
+
+export type SocialRelationship = {
+  relationshipId: number;
+  user: SocialUser;
+  createdAt: string;
+  respondedAt: string | null;
+};
+
+export type SocialSummary = {
+  ok: true;
+  friends: SocialRelationship[];
+  incoming: SocialRelationship[];
+  outgoing: SocialRelationship[];
+  unreadShares: number;
+};
+
+export type TrackShare = {
+  id: number;
+  track: {
+    id: number;
+    title: string | null;
+    artist: string | null;
+    album: string | null;
+    durationMs: number | null;
+    artPath: string | null;
+    artHash: string | null;
+  };
+  sender: SocialUser;
+  message: string | null;
+  createdAt: string;
+  readAt: string | null;
+};
+
+export async function getSocialSummary(token: string) {
+  return (await apiFetch('/social/summary', { method: 'GET' }, token)) as SocialSummary;
+}
+
+export async function searchSocialUsers(token: string, query: string) {
+  return (await apiFetch(`/social/users?q=${encodeURIComponent(query)}`, { method: 'GET' }, token)) as {
+    ok: true;
+    users: Array<SocialUser & {
+      relationshipId: number | null;
+      relationship: 'none' | 'incoming' | 'outgoing' | 'friend';
+    }>;
+  };
+}
+
+export async function sendFriendRequest(token: string, userId: string) {
+  return (await apiFetch('/social/friend-requests', {
+    method: 'POST',
+    body: JSON.stringify({ userId }),
+  }, token)) as { ok: true; request: SocialRelationship };
+}
+
+export async function acceptFriendRequest(token: string, relationshipId: number) {
+  return (await apiFetch(`/social/friend-requests/${relationshipId}/accept`, { method: 'POST' }, token)) as { ok: true };
+}
+
+export async function removeFriendRequest(token: string, relationshipId: number) {
+  return (await apiFetch(`/social/friend-requests/${relationshipId}`, { method: 'DELETE' }, token)) as { ok: true };
+}
+
+export async function removeFriend(token: string, userId: string) {
+  return (await apiFetch(`/social/friends/${encodeURIComponent(userId)}`, { method: 'DELETE' }, token)) as { ok: true };
+}
+
+export async function getShareTargets(token: string, trackId: number) {
+  return (await apiFetch(`/social/share-targets/${trackId}`, { method: 'GET' }, token)) as {
+    ok: true;
+    friends: Array<SocialUser & { canAccess: boolean }>;
+  };
+}
+
+export async function shareTrack(token: string, trackId: number, recipientIds: string[], message?: string) {
+  return (await apiFetch('/social/shares', {
+    method: 'POST',
+    body: JSON.stringify({ trackId, recipientIds, message }),
+  }, token)) as { ok: true; shared: number };
+}
+
+export async function listTrackShares(token: string, limit = 50, offset = 0) {
+  return (await apiFetch(`/social/shares?limit=${limit}&offset=${offset}`, { method: 'GET' }, token)) as {
+    ok: true;
+    shares: TrackShare[];
+    total: number;
+    unread: number;
+    limit: number;
+    offset: number;
+  };
+}
+
+export async function markTrackShareRead(token: string, shareId: number) {
+  return (await apiFetch(`/social/shares/${shareId}/read`, { method: 'POST' }, token)) as { ok: true };
+}
+
+export async function markAllTrackSharesRead(token: string) {
+  return (await apiFetch('/social/shares/read-all', { method: 'POST' }, token)) as { ok: true; updated: number };
+}
+
+export async function deleteTrackShare(token: string, shareId: number) {
+  return (await apiFetch(`/social/shares/${shareId}`, { method: 'DELETE' }, token)) as { ok: true };
+}
+
 export async function browseArtists(token: string, limit = 50, offset = 0, sort: 'az' | 'tracks_desc' | 'albums_desc' = 'az', q?: string) {
   const url = `/browse/artists?limit=${limit}&offset=${offset}&sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
   return (await apiFetch(url, { method: 'GET' }, token)) as {

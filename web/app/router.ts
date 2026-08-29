@@ -27,6 +27,7 @@ export type Route =
   | { type: 'playlists'; sub?: 'regular' | 'smart' }
   | { type: 'playlist'; playlistId: string }
   | { type: 'favorites' }
+  | { type: 'social' }
   | { type: 'history' }
   | { type: 'podcasts'; sub?: 'subscriptions' | 'new' }
   | { type: 'podcast'; podcastId: number }
@@ -69,6 +70,7 @@ function routeToHash(route: Route): string {
     case 'playlists': return route.sub ? `#/playlists/${route.sub}` : '#/playlists';
     case 'playlist': return `#/playlist/${route.playlistId}`;
     case 'favorites': return '#/favorites';
+    case 'social': return '#/social';
     case 'history': return '#/history';
     case 'podcasts': return route.sub ? `#/podcasts/${route.sub}` : '#/podcasts';
     case 'podcast': return `#/podcast/${route.podcastId}`;
@@ -92,6 +94,7 @@ function hashToRoute(hash: string): Route {
   if (path === 'for-you') return { type: 'for-you' };
   if (path === 'recently-added') return { type: 'recently-added' };
   if (path === 'favorites') return { type: 'favorites' };
+  if (path === 'social') return { type: 'social' };
   if (path === 'history') return { type: 'history' };
   if (path === 'settings') return { type: 'settings' };
   if (path === 'admin') return { type: 'admin' };
@@ -337,6 +340,7 @@ export function getTabFromRoute(route: Route): string {
     case 'playlist':
       return 'playlists';
     case 'favorites': return 'favorites';
+    case 'social': return 'social';
     case 'history': return 'history';
     case 'podcasts':
     case 'podcast':
