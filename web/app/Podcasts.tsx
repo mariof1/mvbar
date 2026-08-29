@@ -1168,6 +1168,8 @@ export function PodcastPlayer({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [expanded, setExpanded] = useState(false);
   const lastBroadcastRef = useRef(0);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   
   // Listen for podcast progress updates from other devices
   const lastProgress = usePodcastProgress((s) => s.lastProgress);
@@ -1279,66 +1281,65 @@ export function PodcastPlayer({
   
   // Media Session API integration
   useEffect(() => {
-    if (!episode || !('mediaSession' in navigator)) return;
-    
-    const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
-    
-    navigator.mediaSession.metadata = new MediaMetadata({
+    if (!episode || !('mediaSession' in navigator) || !('MediaMetadata' in window)) return;
+
+    const metadata = new MediaMetadata({
       title: episode.title,
       artist: episode.podcast_title || 'Podcast',
       album: episode.podcast_title || 'Podcast',
-      artwork: [{ src: imageUrl, sizes: '512x512', type: 'image/jpeg' }],
+      artwork: [
+        { src: `/api/podcasts/episodes/${episode.id}/art`, type: 'image/jpeg' },
+        { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+      ],
     });
-    
-    navigator.mediaSession.setActionHandler('play', () => {
-      audio?.play();
-    });
-    
-    navigator.mediaSession.setActionHandler('pause', () => {
-      audio?.pause();
-    });
-    
-    navigator.mediaSession.setActionHandler('seekbackward', () => {
-      if (audio) audio.currentTime = Math.max(0, audio.currentTime - 15);
-    });
-    
-    navigator.mediaSession.setActionHandler('seekforward', () => {
-      if (audio) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 15);
-    });
-    
-    navigator.mediaSession.setActionHandler('seekto', (details) => {
-      if (audio && details.seekTime !== undefined) {
-        audio.currentTime = details.seekTime;
-      }
-    });
-    
-    navigator.mediaSession.setActionHandler('stop', () => {
-      onClose();
-    });
-    
+    navigator.mediaSession.metadata = metadata;
+
+    const actionHandlers: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
+      ['play', () => { audio?.play().catch(() => {}); }],
+      ['pause', () => { audio?.pause(); }],
+      ['seekbackward', (details) => {
+        if (audio) audio.currentTime = Math.max(0, audio.currentTime - (details.seekOffset || 15));
+      }],
+      ['seekforward', (details) => {
+        if (audio) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (details.seekOffset || 15));
+      }],
+      ['seekto', (details) => {
+        if (audio && details.seekTime !== undefined) audio.currentTime = details.seekTime;
+      }],
+      ['stop', () => {
+        audio?.pause();
+        onCloseRef.current();
+      }],
+    ];
+    for (const [action, handler] of actionHandlers) {
+      try { navigator.mediaSession.setActionHandler(action, handler); } catch {}
+    }
+
     return () => {
-      navigator.mediaSession.metadata = null;
-      navigator.mediaSession.setActionHandler('play', null);
-      navigator.mediaSession.setActionHandler('pause', null);
-      navigator.mediaSession.setActionHandler('seekbackward', null);
-      navigator.mediaSession.setActionHandler('seekforward', null);
-      navigator.mediaSession.setActionHandler('seekto', null);
-      navigator.mediaSession.setActionHandler('stop', null);
+      if (navigator.mediaSession.metadata === metadata) navigator.mediaSession.metadata = null;
+      for (const [action] of actionHandlers) {
+        try { navigator.mediaSession.setActionHandler(action, null); } catch {}
+      }
+      navigator.mediaSession.playbackState = 'none';
+      try { navigator.mediaSession.setPositionState(); } catch {}
     };
-  }, [episode, audio, onClose]);
+  }, [episode, audio]);
   
   // Update Media Session playback state and position
   useEffect(() => {
     if (!('mediaSession' in navigator) || !audio) return;
     
-    navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
-    
-    if (duration > 0) {
-      navigator.mediaSession.setPositionState({
-        duration: duration,
-        playbackRate: playbackRate,
-        position: currentTime,
-      });
+    try {
+      navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+      if (Number.isFinite(duration) && duration > 0) {
+        navigator.mediaSession.setPositionState({
+          duration,
+          playbackRate: playbackRate > 0 ? playbackRate : 1,
+          position: Math.max(0, Math.min(Number.isFinite(currentTime) ? currentTime : 0, duration)),
+        });
+      }
+    } catch {
+      // Browsers expose different subsets of the Media Session API.
     }
   }, [playing, currentTime, duration, playbackRate, audio]);
 

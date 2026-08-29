@@ -406,11 +406,47 @@ function PlayerBar(props: {
   const playedSentRef = useRef(false);
   const hlsRef = useRef<Hls | null>(null);
   const [preferHls, setPreferHls] = useState(true);
+  const mediaSessionActionsRef = useRef({
+    onPrev: props.onPrev,
+    onNext: props.onNext,
+    onClose: props.onClose,
+  });
+  mediaSessionActionsRef.current = {
+    onPrev: props.onPrev,
+    onNext: props.onNext,
+    onClose: props.onClose,
+  };
+
+  const canGoPrevious = props.hasPrev || props.playMode !== 'normal';
+  const canGoNext = props.hasNext || props.playMode !== 'normal';
 
   useEffect(() => {
     setArtOk(true);
     playedSentRef.current = false;
   }, [props.nowPlaying.id]);
+
+  // Publish metadata independently from stream startup. This lets installed
+  // desktop PWAs expose the current track even while playback is buffering.
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !('MediaMetadata' in window)) return;
+
+    const metadata = new MediaMetadata({
+      title: props.nowPlaying.title || 'Unknown Track',
+      artist: props.nowPlaying.artist || 'Unknown Artist',
+      album: props.nowPlaying.album || '',
+      artwork: [
+        { src: `${window.location.origin}/api/art/${props.nowPlaying.id}`, type: 'image/jpeg' },
+        { src: `${window.location.origin}/icon-512.png`, sizes: '512x512', type: 'image/png' },
+      ],
+    });
+    navigator.mediaSession.metadata = metadata;
+
+    return () => {
+      if (navigator.mediaSession.metadata === metadata) {
+        navigator.mediaSession.metadata = null;
+      }
+    };
+  }, [props.nowPlaying.id, props.nowPlaying.title, props.nowPlaying.artist, props.nowPlaying.album]);
 
   // Close queue panel on click outside
   useEffect(() => {
@@ -520,24 +556,6 @@ function PlayerBar(props: {
         prefetchLyrics(props.token, props.nowPlaying.id).catch(() => {});
       }
       
-      // Set Media Session metadata for OS media controls (lock screen, notification)
-      if ('mediaSession' in navigator) {
-        const artUrl = `${window.location.origin}/api/art/${props.nowPlaying.id}`;
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: props.nowPlaying.title || 'Unknown Track',
-          artist: props.nowPlaying.artist || 'Unknown Artist',
-          album: props.nowPlaying.album || '',
-          artwork: [
-            { src: artUrl, sizes: '96x96', type: 'image/jpeg' },
-            { src: artUrl, sizes: '128x128', type: 'image/jpeg' },
-            { src: artUrl, sizes: '192x192', type: 'image/jpeg' },
-            { src: artUrl, sizes: '256x256', type: 'image/jpeg' },
-            { src: artUrl, sizes: '384x384', type: 'image/jpeg' },
-            { src: artUrl, sizes: '512x512', type: 'image/jpeg' },
-          ],
-        });
-      }
-      
       if (!props.token || !preferHls) return;
       try {
         await requestHlsTranscode(props.token, props.nowPlaying.id);
@@ -550,7 +568,6 @@ function PlayerBar(props: {
     })();
 
     return () => { cancelled = true; cleanupHls(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.nowPlaying.id, props.token, preferHls]);
 
   useEffect(() => {
@@ -560,12 +577,26 @@ function PlayerBar(props: {
   // Media Session action handlers for OS media controls
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
-    
-    const actionHandlers: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
-      ['play', () => { audioRef.current?.play(); }],
+
+    const actionHandlers: Array<[MediaSessionAction, MediaSessionActionHandler | null]> = [
+      ['play', () => { audioRef.current?.play().catch(() => {}); }],
       ['pause', () => { audioRef.current?.pause(); }],
-      ['previoustrack', () => { props.onPrev(); }],
-      ['nexttrack', () => { props.onNext(); }],
+      ['stop', () => {
+        const a = audioRef.current;
+        if (a) {
+          a.pause();
+          a.currentTime = 0;
+        }
+        mediaSessionActionsRef.current.onClose();
+      }],
+      ['previoustrack', canGoPrevious ? () => { mediaSessionActionsRef.current.onPrev(); } : null],
+      ['nexttrack', canGoNext ? () => {
+        const a = audioRef.current;
+        mediaSessionActionsRef.current.onNext({
+          currentTime: a?.currentTime || 0,
+          duration: a && Number.isFinite(a.duration) ? a.duration : 0,
+        });
+      } : null],
       ['seekbackward', (details) => {
         const a = audioRef.current;
         if (a) a.currentTime = Math.max(0, a.currentTime - (details.seekOffset || 10));
@@ -591,8 +622,16 @@ function PlayerBar(props: {
         try { navigator.mediaSession.setActionHandler(action, null); } catch {}
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.onPrev, props.onNext]);
+  }, [canGoPrevious, canGoNext]);
+
+  // Do not leave stale track state in Windows after closing the player.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    return () => {
+      navigator.mediaSession.playbackState = 'none';
+      try { navigator.mediaSession.setPositionState(); } catch {}
+    };
+  }, []);
 
   const togglePlay = () => {
     const a = audioRef.current;
@@ -617,12 +656,12 @@ function PlayerBar(props: {
 
   // Update Media Session position state for lock screen seek bar
   const updateMediaSessionPosition = (position: number, dur: number) => {
-    if ('mediaSession' in navigator && dur > 0) {
+    if ('mediaSession' in navigator && Number.isFinite(dur) && dur > 0) {
       try {
         navigator.mediaSession.setPositionState({
           duration: dur,
-          playbackRate: 1,
-          position: Math.min(position, dur),
+          playbackRate: audioRef.current?.playbackRate || 1,
+          position: Math.max(0, Math.min(Number.isFinite(position) ? position : 0, dur)),
         });
       } catch {}
     }
@@ -1096,6 +1135,7 @@ function PlayerBar(props: {
 
       <audio
         ref={audioRef}
+        preload="metadata"
         onPlay={() => {
           setIsPlaying(true);
           if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -1118,6 +1158,15 @@ function PlayerBar(props: {
           const dur = e.currentTarget.duration;
           setDuration(dur);
           updateMediaSessionPosition(0, dur);
+        }}
+        onDurationChange={(e) => {
+          const a = e.currentTarget;
+          setDuration(a.duration);
+          updateMediaSessionPosition(a.currentTime, a.duration);
+        }}
+        onRateChange={(e) => {
+          const a = e.currentTarget;
+          updateMediaSessionPosition(a.currentTime, a.duration);
         }}
         onEnded={() => {
           // Handle repeat-one by replaying the same track
