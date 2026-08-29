@@ -18,6 +18,7 @@ import { audit, db, redis } from './db.js';
 import logger from './logger.js';
 import { allowedLibrariesForUser } from './access.js';
 import { normalizeEmail, verifyPassword } from './security.js';
+import * as regularPlaylists from './playlistsRepo.js';
 import { buildSmartPlaylistQuery, normalizeFilters } from './smartPlaylists.js';
 import type { Role } from './store.js';
 
@@ -359,6 +360,24 @@ function trackAccessCondition(user: SubsonicUser, params: unknown[], alias = 't'
   if (user.allowedLibraries === null) return 'true';
   params.push(user.allowedLibraries);
   return `${alias}.library_id = any($${params.length}::bigint[])`;
+}
+
+function regularPlaylistAccessCondition(userParameter = '$1', alias = 'p') {
+  return `(
+    ${alias}.user_id=${userParameter}
+    or exists (
+      select 1
+        from playlist_collaborators member
+        join friendships friendship on friendship.id=member.friendship_id
+       where member.playlist_id=${alias}.id
+         and member.user_id=${userParameter}
+         and friendship.status='accepted'
+         and (
+           (friendship.requester_id=${alias}.user_id and friendship.addressee_id=${userParameter})
+           or (friendship.addressee_id=${alias}.user_id and friendship.requester_id=${userParameter})
+         )
+    )
+  )`;
 }
 
 function smartPlaylistAllowedLibraries(user: SubsonicUser, musicFolderId?: string) {
@@ -1981,11 +2000,12 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     const args: unknown[] = [user.userId];
     const access = trackAccessCondition(user, args, 't', params.musicFolderId);
     const r = await db().query(`
-      select p.id, p.name, p.created_at,
+      select p.id, p.name, p.created_at, owner.email as owner_email,
              (select count(*)::int from playlist_items pi join active_tracks t on t.id=pi.track_id where pi.playlist_id=p.id and ${access}) as song_count,
              (select sum(t.duration_ms) from playlist_items pi join active_tracks t on t.id=pi.track_id where pi.playlist_id=p.id and ${access}) as duration
         from playlists p
-       where p.user_id = $1
+        join users owner on owner.id=p.user_id
+       where ${regularPlaylistAccessCondition()}
        order by p.name
     `, args);
 
@@ -2016,7 +2036,7 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     const regularPlaylists = r.rows.map((p) => ({
       id: String(p.id),
       name: p.name,
-      owner: user.username,
+      owner: p.owner_email,
       public: false,
       songCount: Number(p.song_count) || 0,
       duration: Math.round((Number(p.duration) || 0) / 1000),
@@ -2068,7 +2088,13 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
       }), params.f, params.callback);
     }
 
-    const pr = await db().query('select id, name, user_id, created_at from playlists where id=$1 and user_id=$2', [params.id, user.userId]);
+    const pr = await db().query(
+      `select p.id, p.name, p.user_id, p.created_at, owner.email as owner_email
+         from playlists p
+         join users owner on owner.id=p.user_id
+        where p.id=$1 and ${regularPlaylistAccessCondition('$2')}`,
+      [params.id, user.userId]
+    );
     if (!pr.rows[0]) return sendResponse(reply, createError(ERROR.NOT_FOUND.code, 'Playlist not found'), params.f, params.callback);
 
     const args: unknown[] = [user.userId, params.id];
@@ -2086,7 +2112,7 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
       playlist: {
         id: String(playlist.id),
         name: playlist.name,
-        owner: user.username,
+        owner: playlist.owner_email,
         public: false,
         songCount: songs.rows.length,
         duration: Math.round(songs.rows.reduce((sum: number, s: any) => sum + Number(s.duration_ms || 0), 0) / 1000),
@@ -2188,10 +2214,11 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (params.songId && playlistId !== null) {
       const trackIds = await resolveTrackIds({ ...params, id: params.songId }, user);
       if (trackIds.includes(Number(params.songId))) {
-        const pos = await db().query<{ p: number }>('select coalesce(max(position), -1) + 1 as p from playlist_items where playlist_id=$1', [playlistId]);
-        await db().query(
-          'insert into playlist_items (playlist_id, track_id, position) values ($1, $2, $3) on conflict (playlist_id, track_id) do nothing',
-          [playlistId, Number(params.songId), Number(pos.rows[0]?.p ?? 0)]
+        await regularPlaylists.addItem(
+          user.userId,
+          playlistId,
+          Number(params.songId),
+          user.allowedLibraries
         );
       }
     }
@@ -2211,21 +2238,20 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (params.songIdToAdd) {
       const trackIds = await resolveTrackIds({ ...params, id: params.songIdToAdd }, user);
       if (trackIds.includes(Number(params.songIdToAdd))) {
-        const pos = await db().query<{ p: number }>('select coalesce(max(position), -1) + 1 as p from playlist_items where playlist_id=$1', [playlistId]);
-        await db().query(
-          `insert into playlist_items (playlist_id, track_id, position)
-           select $1, $2, $3 where exists (select 1 from playlists where id=$1 and user_id=$4)
-           on conflict (playlist_id, track_id) do nothing`,
-          [playlistId, Number(params.songIdToAdd), Number(pos.rows[0]?.p ?? 0), user.userId]
+        await regularPlaylists.addItem(
+          user.userId,
+          playlistId,
+          Number(params.songIdToAdd),
+          user.allowedLibraries
         );
       }
     }
     if (params.songIdToRemove) {
-      await db().query(
-        `delete from playlist_items
-          where playlist_id=$1 and track_id=$2
-            and exists (select 1 from playlists where id=$1 and user_id=$3)`,
-        [playlistId, Number(params.songIdToRemove), user.userId]
+      await regularPlaylists.removeItem(
+        user.userId,
+        playlistId,
+        Number(params.songIdToRemove),
+        user.allowedLibraries
       );
     }
     sendResponse(reply, createResponse(), params.f, params.callback);

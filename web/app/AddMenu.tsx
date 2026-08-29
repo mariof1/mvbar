@@ -10,7 +10,7 @@ import { ShareTrackDialog } from './ShareTrackDialog';
 
 export type AddMenuTrack = QueueTrack;
 
-type Playlist = { id: string; name: string };
+type Playlist = { id: string; name: string; ownerEmail?: string; isOwner: boolean };
 
 interface AddMenuProps {
   // Returns the tracks this menu acts upon. Async so we can lazily fetch
@@ -103,7 +103,12 @@ export function AddMenu({
     if (!token) return;
     try {
       const r = await listPlaylists(token);
-      setPlaylists((r.playlists ?? []).map((p) => ({ id: String(p.id), name: p.name })));
+      setPlaylists((r.playlists ?? []).map((p) => ({
+        id: String(p.id),
+        name: p.name,
+        ownerEmail: p.owner?.email,
+        isOwner: p.is_owner,
+      })));
     } catch (e: any) {
       if (e?.status === 401) clear();
     }
@@ -365,7 +370,10 @@ export function AddMenu({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                           d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
                       </svg>
-                      <span className="truncate">{p.name}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate">{p.name}</span>
+                        {!p.isOwner && <span className="block truncate text-[10px] text-slate-500">Shared by {p.ownerEmail || 'a friend'}</span>}
+                      </span>
                     </button>
                   ))}
                 </div>

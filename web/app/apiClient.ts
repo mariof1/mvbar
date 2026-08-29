@@ -543,14 +543,38 @@ export async function setUserLibraries(token: string, userId: string, libraryIds
   };
 }
 
+export type Playlist = {
+  id: string;
+  name: string;
+  created_at: string;
+  item_count: number;
+  owner: SocialUser;
+  is_owner: boolean;
+  is_collaborative: boolean;
+  collaborator_count: number;
+};
+
+export type PlaylistCollaborator = {
+  user: SocialUser;
+  addedAt: string;
+};
+
+export type PlaylistCollaboration = {
+  ok: true;
+  owner: SocialUser;
+  isOwner: boolean;
+  collaborators: PlaylistCollaborator[];
+  eligibleFriends: SocialUser[];
+};
+
 export async function listPlaylists(token: string) {
-  return (await apiFetch('/playlists', { method: 'GET' }, token)) as { ok: boolean; playlists: Array<{ id: string; name: string; created_at: string }> };
+  return (await apiFetch('/playlists', { method: 'GET' }, token)) as { ok: boolean; playlists: Playlist[] };
 }
 
 export async function createPlaylist(token: string, name: string) {
   return (await apiFetch('/playlists', { method: 'POST', body: JSON.stringify({ name }) }, token)) as {
     ok: boolean;
-    playlist: { id: string; name: string; created_at: string };
+    playlist: { id: string; name: string; created_at: string; item_count: number };
   };
 }
 
@@ -598,6 +622,30 @@ export async function setPlaylistItemPosition(token: string, playlistId: string,
   return (await apiFetch(`/playlists/${encodeURIComponent(playlistId)}/items/${trackId}`, { method: 'PUT', body: JSON.stringify({ position }) }, token)) as {
     ok: boolean;
   };
+}
+
+export async function getPlaylistCollaborators(token: string, playlistId: string) {
+  return (await apiFetch(
+    `/playlists/${encodeURIComponent(playlistId)}/collaborators`,
+    { method: 'GET' },
+    token
+  )) as PlaylistCollaboration;
+}
+
+export async function addPlaylistCollaborator(token: string, playlistId: string, userId: string) {
+  return (await apiFetch(
+    `/playlists/${encodeURIComponent(playlistId)}/collaborators`,
+    { method: 'POST', body: JSON.stringify({ userId }) },
+    token
+  )) as { ok: true; collaborator: PlaylistCollaborator };
+}
+
+export async function removePlaylistCollaborator(token: string, playlistId: string, userId: string) {
+  return (await apiFetch(
+    `/playlists/${encodeURIComponent(playlistId)}/collaborators/${encodeURIComponent(userId)}`,
+    { method: 'DELETE' },
+    token
+  )) as { ok: true };
 }
 
 export async function addFavorite(token: string, trackId: number) {

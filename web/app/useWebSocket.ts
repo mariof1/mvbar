@@ -38,13 +38,23 @@ type PodcastProgressUpdate = {
 };
 
 type PlaylistUpdate = {
-  type: 'playlist:created' | 'playlist:updated' | 'playlist:item_added' | 'playlist:item_removed';
+  type:
+    | 'playlist:created'
+    | 'playlist:updated'
+    | 'playlist:item_added'
+    | 'playlist:item_removed'
+    | 'playlist:deleted'
+    | 'playlist:collaborator_added'
+    | 'playlist:collaborator_removed';
   data: {
     playlistId?: number;
     id?: number;
     name?: string;
     trackId?: number;
     position?: number;
+    by?: string;
+    userId?: string;
+    user?: { id: string; email: string };
   };
 };
 
@@ -334,12 +344,27 @@ export function useWebSocket(isAdmin = false) {
           } else if (msg.type === 'podcast:progress') {
             // Podcast progress update from another device
             usePodcastProgress.getState().setProgress(msg.data);
-          } else if (msg.type === 'playlist:created' || msg.type === 'playlist:updated' || msg.type === 'playlist:item_added' || msg.type === 'playlist:item_removed') {
+          } else if (
+            msg.type === 'playlist:created'
+            || msg.type === 'playlist:updated'
+            || msg.type === 'playlist:item_added'
+            || msg.type === 'playlist:item_removed'
+            || msg.type === 'playlist:deleted'
+            || msg.type === 'playlist:collaborator_added'
+            || msg.type === 'playlist:collaborator_removed'
+          ) {
             // Playlist updates
             usePlaylistUpdates.setState({
               lastUpdate: Date.now(),
               lastEvent: msg.data,
             });
+            if (
+              msg.type === 'playlist:collaborator_added'
+              && msg.data.user?.id === useAuth.getState().user?.id
+              && !systemSocialNotificationsEnabled()
+            ) {
+              useToastStore.getState().show(`You can now contribute to “${msg.data.name || 'a shared playlist'}”`, 'queue');
+            }
           } else if (msg.type === 'history:added') {
             // History update
             useHistoryUpdates.setState({

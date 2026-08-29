@@ -1649,7 +1649,7 @@ export function AppShellNew() {
   void favLastChange;
   
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
-  const [playlists, setPlaylists] = useState<{ id: number; name: string }[]>([]);
+  const [playlists, setPlaylists] = useState<{ id: number; name: string; ownerEmail?: string; isOwner: boolean }[]>([]);
   
   // Lyrics overlay state
   const [showLyrics, setShowLyrics] = useState(false);
@@ -1687,7 +1687,12 @@ export function AppShellNew() {
     if (!token) return;
     try {
       const data = await listPlaylists(token);
-      setPlaylists(data.playlists?.map(p => ({ id: parseInt(p.id), name: p.name })) ?? []);
+      setPlaylists(data.playlists?.map(p => ({
+        id: parseInt(p.id),
+        name: p.name,
+        ownerEmail: p.owner?.email,
+        isOwner: p.is_owner,
+      })) ?? []);
       setShowPlaylistModal(true);
     } catch {}
   };
@@ -2064,7 +2069,8 @@ export function AppShellNew() {
                     onClick={() => addToPlaylist(pl.id)}
                     className="w-full text-left px-4 py-3 rounded-lg hover:bg-white/10 transition text-white"
                   >
-                    {pl.name}
+                    <span className="block truncate">{pl.name}</span>
+                    {!pl.isOwner && <span className="block truncate text-xs text-white/45">Shared by {pl.ownerEmail || 'a friend'}</span>}
                   </button>
                 ))}
               </div>

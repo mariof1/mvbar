@@ -1,17 +1,53 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { createPlaylist, getPlaylistItems, listPlaylists, addTrackToPlaylist, removeTrackFromPlaylist, setPlaylistItemPosition, deletePlaylist, renamePlaylist } from './apiClient';
+import {
+  addPlaylistCollaborator,
+  addTrackToPlaylist,
+  createPlaylist,
+  deletePlaylist,
+  getPlaylistCollaborators,
+  getPlaylistItems,
+  listPlaylists,
+  removePlaylistCollaborator,
+  removeTrackFromPlaylist,
+  renamePlaylist,
+  setPlaylistItemPosition,
+  type Playlist,
+  type PlaylistCollaboration,
+  type SocialUser,
+} from './apiClient';
 import { useAuth } from './store';
 import { SmartPlaylists } from './SmartPlaylists';
 import { useRouter } from './router';
 import { showConfirm } from './ConfirmModal';
 import { usePlaylistUpdates, useLibraryUpdates } from './useWebSocket';
+import { useToastStore } from './Toast';
 
 type PlaylistTab = 'regular' | 'smart';
 
-type Playlist = { id: string; name: string; created_at: string };
-type PlaylistItem = { id: string; track_id: string; position: number; title: string | null; artist: string | null; album: string | null; duration_ms: number | null };
+type PlaylistItem = {
+  id: string;
+  track_id: string;
+  position: number;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  duration_ms: number | null;
+  added_at: string;
+  added_by: SocialUser | null;
+};
+
+function Avatar({ user }: { user: SocialUser }) {
+  if (user.avatarPath) {
+    return <img src={`/api/avatars/${user.avatarPath}`} alt="" className="h-8 w-8 flex-none rounded-full object-cover" />;
+  }
+  return (
+    <div className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 text-xs font-bold text-white">
+      {user.email.charAt(0).toUpperCase()}
+    </div>
+  );
+}
 
 function swap<T>(arr: T[], i: number, j: number) {
   const next = arr.slice();
@@ -27,6 +63,7 @@ export function Playlists(props: {
 }) {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
+  const showToast = useToastStore((s) => s.show);
   
   // Navigation using new router
   const route = useRouter((s) => s.route);
@@ -44,6 +81,10 @@ export function Playlists(props: {
   const [error, setError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [playlistsLoaded, setPlaylistsLoaded] = useState(false);
+  const [collaboration, setCollaboration] = useState<PlaylistCollaboration | null>(null);
+  const [showCollaborators, setShowCollaborators] = useState(false);
+  const [collaboratorBusy, setCollaboratorBusy] = useState<string | null>(null);
 
   // Live updates
   const playlistLastUpdate = usePlaylistUpdates((s) => s.lastUpdate);
@@ -74,6 +115,8 @@ export function Playlists(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
       setError(e?.message ?? 'error');
+    } finally {
+      setPlaylistsLoaded(true);
     }
   }
 
@@ -88,6 +131,16 @@ export function Playlists(props: {
     }
   }
 
+  async function refreshCollaboration(id: string) {
+    if (!token) return;
+    try {
+      setCollaboration(await getPlaylistCollaborators(token, id));
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      else if (e?.status === 404) setCollaboration(null);
+    }
+  }
+
   useEffect(() => {
     if (!token) return;
     refreshPlaylists();
@@ -97,8 +150,17 @@ export function Playlists(props: {
   useEffect(() => {
     if (!selectedId) return;
     refreshItems(selectedId);
+    refreshCollaboration(selectedId);
+    setShowCollaborators(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, token]);
+
+  useEffect(() => {
+    if (!selectedId || !playlistsLoaded) return;
+    if (!pls.some((playlist) => String(playlist.id) === selectedId)) {
+      navigate({ type: 'playlists', sub: 'regular' }, true);
+    }
+  }, [selectedId, playlistsLoaded, pls, navigate]);
 
   // Live updates: refresh playlists list when a playlist is created
   useEffect(() => {
@@ -113,6 +175,7 @@ export function Playlists(props: {
     const eventPlaylistId = playlistLastEvent.playlistId ?? playlistLastEvent.id;
     if (eventPlaylistId && String(eventPlaylistId) === selectedId) {
       refreshItems(selectedId);
+      refreshCollaboration(selectedId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playlistLastEvent, selectedId]);
@@ -225,9 +288,71 @@ export function Playlists(props: {
     }
   }
 
+  async function handleAddCollaborator(user: SocialUser) {
+    if (!token || !selectedId || collaboratorBusy) return;
+    setCollaboratorBusy(user.id);
+    try {
+      await addPlaylistCollaborator(token, selectedId, user.id);
+      showToast(`${user.email} can now contribute`, 'success');
+      await Promise.all([refreshCollaboration(selectedId), refreshPlaylists()]);
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      else showToast('Could not add that collaborator', 'error');
+    } finally {
+      setCollaboratorBusy(null);
+    }
+  }
+
+  async function handleRemoveCollaborator(user: SocialUser) {
+    if (!token || !selectedId || collaboratorBusy) return;
+    const confirmed = await showConfirm({
+      title: 'Remove collaborator',
+      message: `Remove ${user.email} from this playlist?`,
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!confirmed) return;
+    setCollaboratorBusy(user.id);
+    try {
+      await removePlaylistCollaborator(token, selectedId, user.id);
+      showToast('Collaborator removed', 'success');
+      await Promise.all([refreshCollaboration(selectedId), refreshPlaylists()]);
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      else showToast('Could not remove that collaborator', 'error');
+    } finally {
+      setCollaboratorBusy(null);
+    }
+  }
+
+  async function handleLeavePlaylist() {
+    if (!token || !selectedId || !collaboration || collaboration.isOwner || collaboratorBusy) return;
+    const confirmed = await showConfirm({
+      title: 'Leave shared playlist',
+      message: `Leave “${selectedPlaylist?.name ?? 'this playlist'}”?`,
+      confirmLabel: 'Leave',
+      danger: true,
+    });
+    if (!confirmed) return;
+    setCollaboratorBusy('leave');
+    try {
+      const currentUserId = useAuth.getState().user?.id;
+      if (!currentUserId) throw new Error('No current user');
+      await removePlaylistCollaborator(token, selectedId, currentUserId);
+      showToast('You left the shared playlist', 'success');
+      navigate({ type: 'playlists', sub: 'regular' }, true);
+      await refreshPlaylists();
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      else showToast('Could not leave this playlist', 'error');
+    } finally {
+      setCollaboratorBusy(null);
+    }
+  }
+
   if (!token) return null;
 
-  const selectedPlaylist = pls.find(p => p.id === selectedId);
+  const selectedPlaylist = pls.find((playlist) => String(playlist.id) === selectedId);
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -293,6 +418,117 @@ export function Playlists(props: {
             </button>
           </div>
 
+          {collaboration && (
+            <div className="rounded-xl border border-white/10 bg-slate-900/40 p-3 sm:p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex -space-x-2">
+                  <div className="relative z-10 rounded-full ring-2 ring-slate-900" title={`Owner: ${collaboration.owner.email}`}>
+                    <Avatar user={collaboration.owner} />
+                  </div>
+                  {collaboration.collaborators.slice(0, 3).map((member) => (
+                    <div key={member.user.id} className="rounded-full ring-2 ring-slate-900" title={member.user.email}>
+                      <Avatar user={member.user} />
+                    </div>
+                  ))}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-white">
+                    {collaboration.isOwner ? 'Your playlist' : `Shared by ${collaboration.owner.email}`}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {collaboration.collaborators.length === 0
+                      ? 'Private — invite friends to build it together'
+                      : `${collaboration.collaborators.length} ${collaboration.collaborators.length === 1 ? 'collaborator' : 'collaborators'} can add, remove and reorder songs`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCollaborators((shown) => !shown)}
+                  className="rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/15"
+                >
+                  {showCollaborators ? 'Hide' : collaboration.isOwner ? 'Manage' : 'Members'}
+                </button>
+                {!collaboration.isOwner && (
+                  <button
+                    type="button"
+                    onClick={handleLeavePlaylist}
+                    disabled={collaboratorBusy !== null}
+                    className="rounded-lg bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-500/20 disabled:opacity-50"
+                  >
+                    Leave
+                  </button>
+                )}
+              </div>
+
+              {showCollaborators && (
+                <div className="mt-4 grid gap-4 border-t border-white/10 pt-4 lg:grid-cols-2">
+                  <div>
+                    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Members</h3>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3 rounded-lg bg-white/[0.035] p-2.5">
+                        <Avatar user={collaboration.owner} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm text-white">{collaboration.owner.email}</p>
+                          <p className="text-xs text-cyan-400">Owner</p>
+                        </div>
+                      </div>
+                      {collaboration.collaborators.map((member) => (
+                        <div key={member.user.id} className="flex items-center gap-3 rounded-lg bg-white/[0.035] p-2.5">
+                          <Avatar user={member.user} />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm text-white">{member.user.email}</p>
+                            <p className="text-xs text-slate-500">Collaborator</p>
+                          </div>
+                          {collaboration.isOwner && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCollaborator(member.user)}
+                              disabled={collaboratorBusy !== null}
+                              className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-red-300 transition hover:bg-red-500/10 disabled:opacity-50"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {collaboration.isOwner && (
+                    <div>
+                      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Invite friends</h3>
+                      {collaboration.eligibleFriends.length > 0 ? (
+                        <div className="max-h-52 space-y-2 overflow-y-auto">
+                          {collaboration.eligibleFriends.map((friend) => (
+                            <div key={friend.id} className="flex items-center gap-3 rounded-lg bg-white/[0.035] p-2.5">
+                              <Avatar user={friend} />
+                              <p className="min-w-0 flex-1 truncate text-sm text-white">{friend.email}</p>
+                              <button
+                                type="button"
+                                onClick={() => handleAddCollaborator(friend)}
+                                disabled={collaboratorBusy !== null}
+                                className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-cyan-400 disabled:opacity-50"
+                              >
+                                {collaboratorBusy === friend.id ? 'Adding…' : 'Add'}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="rounded-lg bg-white/[0.025] p-3 text-sm text-slate-500">
+                          All of your friends are already members, or you have no accepted friends yet.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  <p className="text-xs text-slate-500 lg:col-span-2">
+                    Each person only sees and contributes songs from music libraries they are allowed to access.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           {error && (
             <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
               {error}
@@ -322,6 +558,9 @@ export function Playlists(props: {
                   <div className="text-xs sm:text-sm text-slate-400 truncate">
                     {[it.artist, it.album].filter(Boolean).join(' • ') || 'Unknown'}
                   </div>
+                  {selectedPlaylist.is_collaborative && it.added_by && (
+                    <div className="mt-0.5 truncate text-[11px] text-slate-500">Added by {it.added_by.email}</div>
+                  )}
                 </div>
 
                 {/* Actions - always visible on mobile, hover on desktop */}
@@ -445,31 +684,42 @@ export function Playlists(props: {
                         </svg>
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium text-white truncate">{p.name}</div>
-                        <div className="text-sm text-slate-400">
-                          {new Date(p.created_at).toLocaleDateString()}
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="truncate font-medium text-white">{p.name}</div>
+                          {p.is_collaborative && (
+                            <span className="flex-none rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-cyan-300">
+                              Collab
+                            </span>
+                          )}
+                        </div>
+                        <div className="truncate text-sm text-slate-400">
+                          {p.is_owner ? `${p.item_count ?? 0} tracks` : `${p.owner?.email ?? 'Friend'} • ${p.item_count ?? 0} tracks`}
                         </div>
                       </div>
                     </button>
                   )}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); startRename(p); }}
-                    className="p-2 text-slate-400 hover:text-cyan-400 hover:bg-cyan-500/10 rounded-lg transition-colors flex-shrink-0"
-                    title="Rename playlist"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => handleDelete(p.id)}
-                    className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors flex-shrink-0"
-                    title="Delete playlist"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
+                  {p.is_owner && (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); startRename(p); }}
+                        className="p-2 text-slate-400 hover:text-cyan-400 hover:bg-cyan-500/10 rounded-lg transition-colors flex-shrink-0"
+                        title="Rename playlist"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => handleDelete(p.id)}
+                        className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors flex-shrink-0"
+                        title="Delete playlist"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </div>
               ))}
             </div>

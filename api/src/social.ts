@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { PoolClient } from 'pg';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import { audit, db } from './db.js';
+import { collaborationPlaylistIds } from './playlistsRepo.js';
 import { broadcastToUser } from './websocket.js';
 import { sendWebPushToUser } from './pushNotifications.js';
 
@@ -317,6 +318,11 @@ export const socialPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!otherUserId || otherUserId === req.user.userId) {
       return reply.code(400).send({ ok: false, error: 'invalid_user' });
     }
+    const existing = await findFriendship(db(), req.user.userId, otherUserId);
+    if (!existing || existing.status !== 'accepted') {
+      return reply.code(404).send({ ok: false, error: 'friend_not_found' });
+    }
+    const collaborationIds = await collaborationPlaylistIds(Number(existing.id));
     const removed = await db().query<{ id: string | number }>(
       `delete from friendships
         where status='accepted'
@@ -326,6 +332,11 @@ export const socialPlugin: FastifyPluginAsync = fp(async (app) => {
     );
     if (!removed.rows[0]) return reply.code(404).send({ ok: false, error: 'friend_not_found' });
     broadcastToUser(otherUserId, 'social:friend_removed', { userId: req.user.userId });
+    for (const playlistId of collaborationIds) {
+      const update = { playlistId, userId: otherUserId, reason: 'friend_removed' };
+      broadcastToUser(req.user.userId, 'playlist:collaborator_removed', update);
+      broadcastToUser(otherUserId, 'playlist:collaborator_removed', update);
+    }
     await audit('friend_removed', { by: req.user.userId, otherUserId });
     return { ok: true };
   });

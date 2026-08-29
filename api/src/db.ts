@@ -181,9 +181,19 @@ export async function initDb() {
       playlist_id bigint not null references playlists(id) on delete cascade,
       track_id bigint not null references tracks(id) on delete cascade,
       position integer not null,
+      added_by text references users(id) on delete set null,
       added_at timestamptz not null default now(),
       primary key (playlist_id, track_id)
     );
+  `);
+  await pool.query('alter table playlist_items add column if not exists added_by text');
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE playlist_items
+        ADD CONSTRAINT playlist_items_added_by_fkey
+        FOREIGN KEY (added_by) REFERENCES users(id) ON DELETE SET NULL;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
   `);
 
   await pool.query(`
@@ -847,6 +857,20 @@ export async function initDb() {
     create index if not exists friendships_members_accepted_idx
     on friendships(requester_id, addressee_id) where status = 'accepted'
   `);
+
+  await pool.query(`
+    create table if not exists playlist_collaborators (
+      playlist_id bigint not null references playlists(id) on delete cascade,
+      user_id text not null references users(id) on delete cascade,
+      friendship_id bigint not null references friendships(id) on delete cascade,
+      added_by text references users(id) on delete set null,
+      created_at timestamptz not null default now(),
+      primary key (playlist_id, user_id)
+    );
+  `);
+  await pool.query(
+    'create index if not exists playlist_collaborators_user_idx on playlist_collaborators(user_id, created_at desc)'
+  );
 
   await pool.query(`
     create table if not exists track_shares (
