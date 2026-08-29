@@ -40,26 +40,37 @@ for (const fam of GENRE_FAMILIES) {
   }
 }
 
-// Country name normalization
+// Two-letter country codes are too ambiguous for implicit free-text parsing
+// (for example, "it", "us", and "no" are common words). They are supported
+// only through explicit syntax such as `country:it`.
+const COUNTRY_CODE_ALIASES: Record<string, string> = {
+  'us': 'USA', 'uk': 'United Kingdom',
+  'pl': 'Poland', 'de': 'Germany', 'fr': 'France', 'es': 'Spain',
+  'it': 'Italy', 'jp': 'Japan', 'kr': 'South Korea', 'br': 'Brazil',
+  'ru': 'Russia', 'nl': 'Netherlands', 'se': 'Sweden', 'no': 'Norway',
+  'au': 'Australia', 'ca': 'Canada', 'mx': 'Mexico',
+};
+
+// Country name normalization for unambiguous natural-language terms.
 const COUNTRY_ALIASES: Record<string, string> = {
-  'usa': 'USA', 'us': 'USA', 'united states': 'USA', 'america': 'USA',
-  'uk': 'United Kingdom', 'england': 'United Kingdom', 'britain': 'United Kingdom', 'great britain': 'United Kingdom',
-  'pl': 'Poland', 'polska': 'Poland',
-  'de': 'Germany', 'deutschland': 'Germany',
-  'fr': 'France', 'french': 'France',
-  'es': 'Spain', 'spanish': 'Spain', 'españa': 'Spain',
-  'it': 'Italy', 'italian': 'Italy', 'italia': 'Italy',
-  'jp': 'Japan', 'japanese': 'Japan', 'nippon': 'Japan',
-  'kr': 'South Korea', 'korean': 'South Korea', 'korea': 'South Korea',
-  'br': 'Brazil', 'brazilian': 'Brazil', 'brasil': 'Brazil',
-  'ru': 'Russia', 'russian': 'Russia',
-  'nl': 'Netherlands', 'dutch': 'Netherlands', 'holland': 'Netherlands',
-  'se': 'Sweden', 'swedish': 'Sweden',
-  'no': 'Norway', 'norwegian': 'Norway',
-  'au': 'Australia', 'australian': 'Australia',
-  'ca': 'Canada', 'canadian': 'Canada',
-  'mx': 'Mexico', 'mexican': 'Mexico',
-  'jamaican': 'Jamaica', 'jamaika': 'Jamaica',
+  'usa': 'USA', 'united states': 'USA', 'america': 'USA',
+  'united kingdom': 'United Kingdom', 'england': 'United Kingdom', 'britain': 'United Kingdom', 'british': 'United Kingdom', 'great britain': 'United Kingdom',
+  'poland': 'Poland', 'polska': 'Poland',
+  'germany': 'Germany', 'deutschland': 'Germany',
+  'france': 'France', 'french': 'France',
+  'spain': 'Spain', 'spanish': 'Spain', 'españa': 'Spain',
+  'italy': 'Italy', 'italian': 'Italy', 'italia': 'Italy',
+  'japan': 'Japan', 'japanese': 'Japan', 'nippon': 'Japan',
+  'south korea': 'South Korea', 'korean': 'South Korea', 'korea': 'South Korea',
+  'brazil': 'Brazil', 'brazilian': 'Brazil', 'brasil': 'Brazil',
+  'russia': 'Russia', 'russian': 'Russia',
+  'netherlands': 'Netherlands', 'dutch': 'Netherlands', 'holland': 'Netherlands',
+  'sweden': 'Sweden', 'swedish': 'Sweden',
+  'norway': 'Norway', 'norwegian': 'Norway',
+  'australia': 'Australia', 'australian': 'Australia',
+  'canada': 'Canada', 'canadian': 'Canada',
+  'mexico': 'Mexico', 'mexican': 'Mexico',
+  'jamaica': 'Jamaica', 'jamaican': 'Jamaica', 'jamaika': 'Jamaica',
   'polish': 'Poland', 'polskie': 'Poland', 'polski': 'Poland',
   'german': 'Germany',
   'irish': 'Ireland', 'scottish': 'Scotland', 'welsh': 'Wales',
@@ -92,7 +103,7 @@ interface ParsedQuery {
   decade: string | null;       // Decade label
 }
 
-function parseQuery(q: string): ParsedQuery {
+export function parseQuery(q: string): ParsedQuery {
   let textQuery = q.trim().toLowerCase();
   const result: ParsedQuery = {
     textQuery: q.trim(),
@@ -125,22 +136,40 @@ function parseQuery(q: string): ParsedQuery {
     textQuery = textQuery.replace(new RegExp(`\\b${yearMatch[1]}\\b`), '').trim();
   }
 
-  // Check for country (with aliases)
-  const words = textQuery.split(/\s+/);
-  for (let i = 0; i < words.length; i++) {
-    // Try 2-word combos first
-    if (i < words.length - 1) {
-      const twoWord = `${words[i]} ${words[i + 1]}`.toLowerCase();
-      if (COUNTRY_ALIASES[twoWord]) {
-        result.country = COUNTRY_ALIASES[twoWord];
-        textQuery = textQuery.replace(new RegExp(`\\b${words[i]}\\s+${words[i + 1]}\\b`, 'i'), '').trim();
-      }
-    }
-    // Single word
-    const normalized = COUNTRY_ALIASES[words[i].toLowerCase()];
-    if (normalized && !result.country) {
+  // Explicit country filters accept codes and names. Quoting is supported for
+  // multi-word names: country:it, country:italy, country:"united states".
+  const explicitCountryMatch = textQuery.match(/\bcountry\s*:\s*(?:"([^"]+)"|'([^']+)'|([^\s]+))/i);
+  if (explicitCountryMatch) {
+    const rawCountry = (explicitCountryMatch[1] ?? explicitCountryMatch[2] ?? explicitCountryMatch[3] ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/-/g, ' ');
+    const normalized = COUNTRY_CODE_ALIASES[rawCountry] ?? COUNTRY_ALIASES[rawCountry];
+    if (normalized) {
       result.country = normalized;
-      textQuery = textQuery.replace(new RegExp(`\\b${words[i]}\\b`, 'i'), '').trim();
+      const matchStart = explicitCountryMatch.index ?? 0;
+      textQuery = `${textQuery.slice(0, matchStart)} ${textQuery.slice(matchStart + explicitCountryMatch[0].length)}`.trim();
+    }
+  }
+
+  // Check for unambiguous country names and adjectives in natural text.
+  if (!result.country) {
+    const words = textQuery.split(/\s+/);
+    for (let i = 0; i < words.length; i++) {
+      // Try 2-word combos first
+      if (i < words.length - 1) {
+        const twoWord = `${words[i]} ${words[i + 1]}`.toLowerCase();
+        if (COUNTRY_ALIASES[twoWord]) {
+          result.country = COUNTRY_ALIASES[twoWord];
+          textQuery = textQuery.replace(new RegExp(`\\b${words[i]}\\s+${words[i + 1]}\\b`, 'i'), '').trim();
+        }
+      }
+      // Single word
+      const normalized = COUNTRY_ALIASES[words[i].toLowerCase()];
+      if (normalized && !result.country) {
+        result.country = normalized;
+        textQuery = textQuery.replace(new RegExp(`\\b${words[i]}\\b`, 'i'), '').trim();
+      }
     }
   }
 
