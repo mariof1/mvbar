@@ -4,11 +4,12 @@ import React from 'react';
 import { create } from 'zustand';
 import { useEffect, useState, useCallback } from 'react';
 
-type ToastItem = { id: number; message: string; icon?: 'queue' | 'success' | 'error' };
+type ToastPosition = 'top-right';
+type ToastItem = { id: number; message: string; icon?: 'playing' | 'queue' | 'success' | 'error'; position: ToastPosition };
 
 type ToastState = {
   toasts: ToastItem[];
-  show: (message: string, icon?: ToastItem['icon']) => void;
+  show: (message: string, icon?: ToastItem['icon'], position?: ToastPosition) => void;
   dismiss: (id: number) => void;
 };
 
@@ -16,15 +17,23 @@ let _nextId = 0;
 
 export const useToastStore = create<ToastState>((set) => ({
   toasts: [],
-  show: (message, icon) => {
+  show: (message, icon, position = 'top-right') => {
     const id = ++_nextId;
-    set((s) => ({ toasts: [...s.toasts, { id, message, icon }] }));
-    setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 2400);
+    // Keep a small bounded stack so simultaneous background events can never
+    // obscure the app, particularly on a phone-sized screen.
+    set((s) => ({ toasts: [...s.toasts, { id, message, icon, position }].slice(-3) }));
+    setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 3600);
   },
   dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 }));
 
 const icons: Record<string, React.ReactElement> = {
+  playing: (
+    <svg className="w-5 h-5 text-cyan-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M9 18V5l11-2v13M9 9l11-2M9 18a3 3 0 11-6 0 3 3 0 016 0zm11-2a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  ),
   queue: (
     <svg className="w-5 h-5 text-cyan-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -48,7 +57,7 @@ function ToastSlice({ item, onDone }: { item: ToastItem; onDone: () => void }) {
 
   useEffect(() => {
     requestAnimationFrame(() => setPhase('visible'));
-    const timer = setTimeout(() => setPhase('exit'), 2000);
+    const timer = setTimeout(() => setPhase('exit'), 3200);
     return () => clearTimeout(timer);
   }, []);
 
@@ -61,8 +70,9 @@ function ToastSlice({ item, onDone }: { item: ToastItem; onDone: () => void }) {
 
   return (
     <div
+      role={item.icon === 'error' ? 'alert' : 'status'}
       className={`
-        flex items-center gap-2.5 px-4 py-2.5 rounded-xl
+        flex w-full items-start gap-2.5 px-3.5 py-2.5 rounded-xl sm:px-4
         bg-slate-800/90 backdrop-blur-md border border-white/10 shadow-lg shadow-black/30
         text-sm text-white pointer-events-auto select-none
         transition-all duration-300 ease-out
@@ -71,8 +81,8 @@ function ToastSlice({ item, onDone }: { item: ToastItem; onDone: () => void }) {
         ${phase === 'exit' ? 'opacity-0 -translate-y-1 scale-95' : ''}
       `}
     >
-      {item.icon && icons[item.icon]}
-      <span className="truncate max-w-[260px]">{item.message}</span>
+      {item.icon && <span className="mt-0.5">{icons[item.icon]}</span>}
+      <span className="min-w-0 flex-1 break-words leading-5">{item.message}</span>
     </div>
   );
 }
@@ -85,9 +95,14 @@ export function ToastContainer() {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[250] flex flex-col items-center gap-2 pointer-events-none">
-      {toasts.map((t) => (
-        <ToastSlice key={t.id} item={t} onDone={() => handleDone(t.id)} />
+    <div
+      aria-live="polite"
+      aria-relevant="additions"
+      className="fixed left-3 right-3 z-[250] flex flex-col items-stretch gap-2 pointer-events-none sm:left-auto sm:right-6 sm:w-96"
+      style={{ top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)' }}
+    >
+      {toasts.map((toast) => (
+        <ToastSlice key={toast.id} item={toast} onDone={() => handleDone(toast.id)} />
       ))}
     </div>
   );

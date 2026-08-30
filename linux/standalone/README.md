@@ -1,0 +1,145 @@
+# MVBar Standalone for Linux
+
+This build packages MVBar, Node.js, PostgreSQL, Redis, Meilisearch, FFmpeg,
+Caddy, and their required libraries into one Linux x86-64 executable. Docker,
+Caddy, and a Node.js installation are not required on the destination computer.
+
+The current build target is Debian 12 x86-64. The destination needs only the
+standard GNU C library, `/bin/sh`, `tar`, and `gzip` from the base operating
+system.
+
+## Build
+
+Build on Debian 12 with:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential caddy file git gzip postgresql-15 redis-server ffmpeg python3 tar
+./linux/standalone/build-standalone.sh --meilisearch /path/to/meilisearch
+```
+
+Node.js 22 is recommended. Pass its executable with `--node PATH` if `node` is
+not already on `PATH`. The executable and SHA-256 checksum are written to
+`linux/standalone/out`.
+
+Use `--skip-app-build` to reuse existing successful API, worker, and web builds.
+
+## Run
+
+Make the file executable and start MVBar:
+
+```bash
+chmod +x MVBar-Standalone-*-linux-x64
+./MVBar-Standalone-*-linux-x64 start
+```
+
+On first run the binary:
+
+1. Extracts its versioned application payload under
+   `~/.local/share/mvbar/app`.
+2. Initializes PostgreSQL and the other local services.
+3. Creates an administrator and writes the credentials to
+   `~/.local/share/mvbar/credentials.txt`.
+4. Starts MVBar in the background and prints its URL.
+
+Application data survives binary upgrades under `~/.local/share/mvbar/data`.
+Set `MVBAR_HOME` before running the binary to use a different data location.
+
+Useful commands:
+
+```bash
+./MVBar-Standalone-*-linux-x64 status
+./MVBar-Standalone-*-linux-x64 credentials
+./MVBar-Standalone-*-linux-x64 config-path
+./MVBar-Standalone-*-linux-x64 logs api
+./MVBar-Standalone-*-linux-x64 restart
+./MVBar-Standalone-*-linux-x64 stop
+```
+
+The public entry point is bundled Caddy, using the same route map as the Docker
+image for the web UI, REST/API calls, HLS/streaming paths, health checks, and
+WebSockets. HAProxy or another TLS-terminating reverse proxy only needs to
+forward to this one listener.
+
+The default music library is `~/Music`, the default listening address is
+`127.0.0.1`, and the default public port is `8080`. Edit `config.env` and
+restart to use other music/audiobook folders or to set `LISTEN_HOST=0.0.0.0`
+for LAN access. Library paths are comma separated.
+
+The generated `config.env` exposes every supported application-level setting.
+They are grouped as follows:
+
+- account and network: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `LISTEN_HOST`, `PORT`;
+- security and sessions: `JWT_SECRET`, `COOKIE_NAME`, `COOKIE_SECURE`,
+  `TRUST_PROXY`;
+- integrations: `LASTFM_API_KEY`, `GOOGLE_CLIENT_ID`,
+  `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`;
+- Web Push: `WEB_PUSH_ENABLED`, optional externally managed
+  `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, and
+  `WEB_PUSH_VAPID_SUBJECT`;
+- libraries and scanning: `MUSIC_DIRS`, `AUDIOBOOK_DIRS`, `LIBRARY_READ_ONLY`,
+  `FAST_SCAN`, `SCAN_CONCURRENCY`, `ARTIST_ART_CONCURRENCY`, `SCAN_MAX_QUEUE`,
+  `SCAN_REFRESH_META`, `METADATA_TIMEOUT_MS`, `RESCAN_INTERVAL_MS`,
+  `AUDIOBOOK_RESCAN_INTERVAL_MS`, `PODCAST_REFRESH_INTERVAL_MS`;
+- tempo analysis: `TEMPO_DETECT`, `TEMPO_MODE`, `TEMPO_METHOD`,
+  `TEMPO_MIN_CONF`, `TEMPO_CONCURRENCY`, `TEMPO_BACKFILL_INTERVAL_MS`,
+  `TEMPO_BACKFILL_BATCH`;
+- resources and diagnostics: `DB_POOL_SIZE`, `MEILI_TASK_TIMEOUT_MS`,
+  `BACKUP_MAX_UPLOAD_MB`, `UV_THREADPOOL_SIZE`, `LOG_LEVEL`, `DEBUG`, `TZ`;
+- sandboxed plugins: `PLUGINS_ENABLED`, `PLUGIN_MAX_UPLOAD_MB`,
+  `PLUGIN_TIMEOUT_MS`, `PLUGIN_MEMORY_MB`, `PLUGIN_MAX_CONCURRENCY`;
+- persistent generated-data paths: `LYRICS_DIR`, `ART_DIR`, `AVATARS_DIR`,
+  `HLS_DIR`, `PODCAST_DIR`, `PODCAST_ART_DIR`, `AUDIOBOOK_ART_DIR`,
+  `DEVICE_LOG_DIR`, `BACKUP_DIR`, `PLUGINS_DIR`.
+
+Plugin packages can be installed from **Admin → Plugins** or copied into
+`PLUGINS_DIR`. They are disabled until an administrator reviews and approves
+their requested permissions. See `docs/plugins.md` in the source repository.
+
+`DATABASE_PASSWORD` and `MEILI_MASTER_KEY` also remain available in the file.
+Internal connection URLs, private service ports, API/web bind addresses, and
+build metadata stay launcher-managed because changing them would disconnect
+the services bundled inside the executable.
+
+For Google OAuth, set all three values below, register the exact callback URL
+as an authorized redirect URI in the Google OAuth client, and restart MVBar:
+
+```dotenv
+GOOGLE_CLIENT_ID=your-client-id
+GOOGLE_CLIENT_SECRET=your-client-secret
+GOOGLE_CALLBACK_URL=https://music.example.com/api/auth/google/callback
+```
+
+Google sign-in remains disabled when any of these values is empty. Existing
+standalone installations automatically receive every newly exposed setting
+with the standalone defaults on their next launch; existing values and secrets
+are left unchanged.
+
+Web Push is enabled by default for standalone installations. When explicit
+VAPID keys are left empty, MVBar generates them once and stores them in the
+persistent PostgreSQL data directory. This keeps browser subscriptions valid
+across executable upgrades without placing the private key in `config.env`.
+
+## systemd
+
+For a dedicated server, run the built-in installer as the Linux account that
+should own MVBar. It uses `sudo` for the privileged installation steps, stops
+any manually started MVBar instance, and enables and starts systemd:
+
+```bash
+./MVBar-Standalone-*-linux-x64 install-service
+```
+
+Pass a Linux username only when installing for a different account, for
+example `./MVBar-Standalone-*-linux-x64 install-service lanadmin`. The bundled
+unit currently expects that account's home directory at `/home/USERNAME`.
+After editing `config.env`, restart with
+`sudo systemctl restart mvbar@USERNAME.service`.
+
+## Limitations
+
+- The executable is not code-signed.
+- The bundled native runtimes currently target Debian 12 x86-64 and compatible
+  glibc environments.
+- Google OAuth requires its exact public callback URL to be registered with
+  Google. Local password authentication works without external configuration.

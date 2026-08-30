@@ -7,6 +7,7 @@ import { useFavorites } from './favoritesStore';
 import { useRouter } from './router';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
+import { useUi, type PodcastEpisode } from './uiStore';
 
 type Hit = {
   id: number;
@@ -45,11 +46,42 @@ type PlaylistHit = {
   kind?: 'playlist' | 'smart';
 };
 
+type PodcastHit = {
+  id: number;
+  title: string;
+  author: string | null;
+  description: string | null;
+  image_url: string | null;
+  image_path: string | null;
+  unplayed_count: number;
+};
+
+type PodcastEpisodeHit = PodcastEpisode & {
+  image_path?: string | null;
+  podcast_image_path?: string | null;
+};
+
 function getInitials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   const a = parts[0]?.[0] ?? '?';
   const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? '' : '';
   return (a + b).toUpperCase();
+}
+
+function stripHtml(value?: string | null) {
+  return (value ?? '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function podcastArtUrl(podcast: Pick<PodcastHit, 'id' | 'image_url' | 'image_path'>) {
+  return `/api/podcasts/${podcast.id}/art`;
+}
+
+function episodeArtUrl(episode: PodcastEpisodeHit) {
+  return `/api/podcasts/episodes/${episode.id}/art`;
 }
 
 function ArtistArt({ name, art_path, art_hash }: { name: string; art_path: string | null; art_hash: string | null }) {
@@ -78,6 +110,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
   const navigate = useRouter((s) => s.navigate);
+  const setPodcastEpisode = useUi((s) => s.setPodcastEpisode);
   const [q, setQ] = useState('');
   const favIds = useFavorites((s) => s.ids);
   const refreshFavs = useFavorites((s) => s.refresh);
@@ -86,6 +119,8 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
   const [artistHits, setArtistHits] = useState<ArtistHit[]>([]);
   const [albumHits, setAlbumHits] = useState<AlbumHit[]>([]);
   const [playlistHits, setPlaylistHits] = useState<PlaylistHit[]>([]);
+  const [podcastHits, setPodcastHits] = useState<PodcastHit[]>([]);
+  const [podcastEpisodeHits, setPodcastEpisodeHits] = useState<PodcastEpisodeHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lastUpdate = useLibraryUpdates((s) => s.lastUpdate);
@@ -118,6 +153,14 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
         setArtistHits(r.artists ?? []);
         setAlbumHits((r.albums ?? []).map((a: any) => ({ ...a, artist_id: a.artist_id == null ? null : Number(a.artist_id), art_track_id: a.art_track_id == null ? null : Number(a.art_track_id) })));
         setPlaylistHits((r.playlists ?? []).map((p: any) => ({ ...p, id: Number(p.id) })));
+        setPodcastHits((r.podcasts ?? []).map((p: any) => ({ ...p, id: Number(p.id), unplayed_count: Number(p.unplayed_count ?? 0) })));
+        setPodcastEpisodeHits((r.podcastEpisodes ?? []).map((e: any) => ({
+          ...e,
+          id: Number(e.id),
+          podcast_id: Number(e.podcast_id),
+          position_ms: Number(e.position_ms ?? 0),
+          played: Boolean(e.played),
+        })));
       } catch (e: any) {
         if (e?.status === 401) clear();
         setError(e?.message ?? 'error');
@@ -131,9 +174,12 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
 
   useEffect(() => {
     if (q.trim().length === 0) {
+      setHits([]);
       setArtistHits([]);
       setAlbumHits([]);
       setPlaylistHits([]);
+      setPodcastHits([]);
+      setPodcastEpisodeHits([]);
     }
   }, [q]);
 
@@ -158,7 +204,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search songs, artists, albums..."
+          placeholder="Search songs, artists, albums, podcasts..."
           className="w-full pl-12 pr-4 py-4 bg-slate-800/50 border border-slate-700/50 rounded-2xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-transparent text-lg transition-all"
         />
         {loading && (
@@ -176,7 +222,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
 
       {/* Results */}
       <div className="space-y-6">
-        {(artistHits.length > 0 || albumHits.length > 0 || playlistHits.length > 0) && (
+        {(artistHits.length > 0 || albumHits.length > 0 || playlistHits.length > 0 || podcastHits.length > 0 || podcastEpisodeHits.length > 0) && (
           <div className="space-y-6">
             {artistHits.length > 0 && (
               <div className="space-y-2">
@@ -286,6 +332,79 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
                 </div>
               </div>
             )}
+
+            {podcastHits.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-slate-300">Podcasts</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {podcastHits.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => navigate({ type: 'podcast', podcastId: p.id })}
+                      className="group p-3 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200 text-left flex items-center gap-3"
+                    >
+                      <img
+                        src={podcastArtUrl(p)}
+                        alt=""
+                        className="w-10 h-10 rounded-lg object-cover bg-slate-700 flex-shrink-0"
+                        loading="lazy"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                          e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                        }}
+                      />
+                      <div className="hidden w-10 h-10 rounded-lg bg-cyan-500/10 flex-shrink-0 flex items-center justify-center text-cyan-200 font-bold">
+                        {getInitials(p.title)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-white truncate">{p.title}</div>
+                        <div className="text-xs text-slate-400 truncate">
+                          {[p.author, p.unplayed_count > 0 ? `${p.unplayed_count} unplayed` : null].filter(Boolean).join(' • ') || 'Podcast'}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {podcastEpisodeHits.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-slate-300">Podcast Episodes</div>
+                <div className="space-y-2">
+                  {podcastEpisodeHits.map((episode) => (
+                    <button
+                      key={episode.id}
+                      onClick={() => setPodcastEpisode(episode)}
+                      className="group w-full p-3 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200 text-left flex items-center gap-3"
+                    >
+                      <img
+                        src={episodeArtUrl(episode)}
+                        alt=""
+                        className="w-12 h-12 rounded-lg object-cover bg-slate-700 flex-shrink-0"
+                        loading="lazy"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                          e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                        }}
+                      />
+                      <div className="hidden w-12 h-12 rounded-lg bg-cyan-500/10 flex-shrink-0 flex items-center justify-center">
+                        <svg className="w-6 h-6 text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 6v12m-4-9v6m8-6v6M5 9v6m14-6v6" />
+                        </svg>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-white truncate">{episode.title}</div>
+                        <div className="text-xs text-slate-400 truncate">{episode.podcast_title || 'Podcast'}</div>
+                        {episode.description && (
+                          <div className="mt-1 text-xs text-slate-500 line-clamp-1">{stripHtml(episode.description)}</div>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -372,7 +491,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
         </div>
 
         {/* Empty state */}
-        {!loading && q && hits.length === 0 && artistHits.length === 0 && albumHits.length === 0 && playlistHits.length === 0 && (
+        {!loading && q && hits.length === 0 && artistHits.length === 0 && albumHits.length === 0 && playlistHits.length === 0 && podcastHits.length === 0 && podcastEpisodeHits.length === 0 && (
           <div className="text-center py-12 text-slate-400">
             <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -389,7 +508,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
             <p className="text-lg">Search your library</p>
-            <p className="text-sm mt-1">Find songs, artists, and albums</p>
+            <p className="text-sm mt-1">Find songs, artists, albums, and podcasts</p>
           </div>
         )}
       </div>

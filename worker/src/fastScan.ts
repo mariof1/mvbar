@@ -1,14 +1,15 @@
-import { readdir, stat, readFile } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import Redis from 'ioredis';
 import { db, audit } from './db.js';
 import { readTags } from './metadata.js';
-import { writeArt } from './art.js';
-import { indexAllTracks, indexChangedTracks, ensureTracksIndex } from './indexer.js';
+import { writeMusicArt } from './art.js';
+import { getTrackIndexStatus, indexAllTracks, indexChangedTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
 import { asciiFold } from './tagRules.js';
 import { detectTempoBpm, type OnsetMethod } from './tempoDetector.js';
+import { resolveInside } from './pathSafety.js';
 
 const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
@@ -18,8 +19,24 @@ const ARTIST_IMAGE_NAMES = ['artist.jpg', 'artist.jpeg', 'artist.png', 'band.jpg
 
 // Tuning parameters
 const BATCH_SIZE = 100;  // DB batch insert size
-const CONCURRENCY = 100;  // Parallel file reads (increased for network FS)
+function boundedInteger(value: string | undefined, fallback: number, min: number, max: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.trunc(parsed))) : fallback;
+}
+
+const CONCURRENCY = boundedInteger(process.env.SCAN_CONCURRENCY, 25, 1, 500);
+const ARTIST_ART_CONCURRENCY = boundedInteger(process.env.ARTIST_ART_CONCURRENCY, 16, 1, 64);
 const PROGRESS_INTERVAL = 3000;  // Progress log interval in ms
+const METADATA_TIMEOUT_MS = boundedInteger(process.env.METADATA_TIMEOUT_MS, 300000, 1000, 600000);
+
+function scanOrderKey(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
 
 // Optional tempo detection (expensive: uses ffmpeg decode + DSP)
 // TEMPO_DETECT + TEMPO_MODE=scan => run during scans
@@ -48,16 +65,33 @@ async function withTempoSlot<T>(fn: () => Promise<T>): Promise<T> {
 
 // Redis publisher for live updates
 let publisher: Redis | null = null;
+let lastRedisErrorLogAt = 0;
+function logRedisError(error: unknown) {
+  const now = Date.now();
+  if (now - lastRedisErrorLogAt < 30_000) return;
+  lastRedisErrorLogAt = now;
+  logger.warn('scan', `Redis progress update failed: ${error instanceof Error ? error.message : String(error)}`);
+}
+
 function getPublisher() {
   if (!publisher) {
     publisher = new Redis(REDIS_URL);
+    publisher.on('error', logRedisError);
   }
   return publisher;
 }
 
 // Publish library update event
 function publishUpdate(event: string, data: Record<string, unknown>) {
-  getPublisher().publish('library:updates', JSON.stringify({ event, ...data, ts: Date.now() }));
+  void getPublisher()
+    .publish('library:updates', JSON.stringify({ event, ...data, ts: Date.now() }))
+    .catch(logRedisError);
+}
+
+function storeProgress(data: Record<string, unknown>) {
+  void getPublisher()
+    .set('scan:progress', JSON.stringify(data))
+    .catch(logRedisError);
 }
 
 interface TrackData {
@@ -114,6 +148,8 @@ interface TrackData {
   musicbrainzReleaseId: string | null;
   musicbrainzArtistId: string | null;
   musicbrainzAlbumArtistId: string | null;
+  isNew: boolean;
+  isRestored: boolean;
 }
 
 interface FileInfo {
@@ -126,7 +162,11 @@ interface FileInfo {
 }
 
 // Fast parallel directory walk
-async function* walkDirectory(dir: string, rootDir: string): AsyncGenerator<FileInfo> {
+async function* walkDirectory(
+  dir: string,
+  rootDir: string,
+  onError: (target: string, error: unknown) => void
+): AsyncGenerator<FileInfo> {
   const dirQueue: string[] = [dir];
   
   while (dirQueue.length > 0) {
@@ -155,14 +195,15 @@ async function* walkDirectory(dir: string, rootDir: string): AsyncGenerator<File
                   sizeBytes: st.size,
                   ext,
                 });
-              } catch {
-                // Skip files we can't stat
+              } catch (error) {
+                onError(full, error);
               }
             }
           }
         }
         return { dirs, files };
-      } catch {
+      } catch (error) {
+        onError(d, error);
         return { dirs: [], files: [] };
       }
     }));
@@ -176,23 +217,66 @@ async function* walkDirectory(dir: string, rootDir: string): AsyncGenerator<File
   }
 }
 
+async function readTagsWithTimeout(filePath: string) {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      readTags(filePath),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`metadata read timed out after ${METADATA_TIMEOUT_MS}ms`)),
+          METADATA_TIMEOUT_MS
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 // Parallel file processor with concurrency limit
 async function processFilesParallel<T, R>(
   items: T[],
   concurrency: number,
-  processor: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = [];
+  processor: (item: T) => Promise<R | null>,
+  onResult: (result: R | null) => Promise<void>,
+  onProcessed?: (completed: number) => void
+): Promise<void> {
   let index = 0;
-  
+  let completed = 0;
+  let fatalError: unknown = null;
+  let resultLock = Promise.resolve();
+
+  const deliverResult = async (result: R | null) => {
+    const previous = resultLock;
+    let release: () => void = () => {};
+    resultLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      if (fatalError) throw fatalError;
+      await onResult(result);
+    } catch (error) {
+      fatalError ??= error;
+      throw error;
+    } finally {
+      release();
+    }
+  };
+
   async function worker(): Promise<void> {
-    while (index < items.length) {
+    while (index < items.length && !fatalError) {
       const i = index++;
+      let result: R | null = null;
       try {
-        results[i] = await processor(items[i]);
+        result = await processor(items[i]);
       } catch {
-        results[i] = null as any;
+        result = null;
       }
+      await deliverResult(result);
+      completed++;
+      onProcessed?.(completed);
     }
   }
   
@@ -201,7 +285,6 @@ async function processFilesParallel<T, R>(
     .map(() => worker());
   
   await Promise.all(workers);
-  return results;
 }
 
 // Batch upsert tracks
@@ -264,7 +347,7 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
     const mbAlbumArtistIds = tracks.map(t => t.musicbrainzAlbumArtistId);
     
     // Insert/update tracks and get their IDs
-    const trackResult = await client.query<{ id: number; path: string }>(`
+    const trackResult = await client.query<{ id: number | string; path: string }>(`
       INSERT INTO tracks (
         library_id, path, mtime_ms, size_bytes, ext, title, artist, album, album_artist, 
         genre, country, language, year, duration_ms, art_path, art_mime, art_hash, lyrics_path,
@@ -317,10 +400,10 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
         artist = EXCLUDED.artist,
         album = EXCLUDED.album,
         album_artist = EXCLUDED.album_artist,
-        genre = COALESCE(EXCLUDED.genre, tracks.genre),
-        country = COALESCE(EXCLUDED.country, tracks.country),
-        language = COALESCE(EXCLUDED.language, tracks.language),
-        year = COALESCE(EXCLUDED.year, tracks.year),
+        genre = EXCLUDED.genre,
+        country = EXCLUDED.country,
+        language = EXCLUDED.language,
+        year = EXCLUDED.year,
         duration_ms = EXCLUDED.duration_ms,
         art_path = EXCLUDED.art_path,
         art_mime = EXCLUDED.art_mime,
@@ -334,26 +417,27 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
         disc_total = EXCLUDED.disc_total,
         last_seen_job_id = EXCLUDED.last_seen_job_id,
         bpm = COALESCE(EXCLUDED.bpm, tracks.bpm),
-        initial_key = COALESCE(EXCLUDED.initial_key, tracks.initial_key),
-        composer = COALESCE(EXCLUDED.composer, tracks.composer),
-        conductor = COALESCE(EXCLUDED.conductor, tracks.conductor),
-        publisher = COALESCE(EXCLUDED.publisher, tracks.publisher),
-        copyright = COALESCE(EXCLUDED.copyright, tracks.copyright),
-        comment = COALESCE(EXCLUDED.comment, tracks.comment),
-        mood = COALESCE(EXCLUDED.mood, tracks.mood),
-        grouping = COALESCE(EXCLUDED.grouping, tracks.grouping),
-        isrc = COALESCE(EXCLUDED.isrc, tracks.isrc),
-        release_date = COALESCE(EXCLUDED.release_date, tracks.release_date),
-        original_year = COALESCE(EXCLUDED.original_year, tracks.original_year),
-        compilation = COALESCE(EXCLUDED.compilation, tracks.compilation),
-        title_sort = COALESCE(EXCLUDED.title_sort, tracks.title_sort),
-        artist_sort = COALESCE(EXCLUDED.artist_sort, tracks.artist_sort),
-        album_sort = COALESCE(EXCLUDED.album_sort, tracks.album_sort),
-        album_artist_sort = COALESCE(EXCLUDED.album_artist_sort, tracks.album_artist_sort),
-        musicbrainz_track_id = COALESCE(EXCLUDED.musicbrainz_track_id, tracks.musicbrainz_track_id),
-        musicbrainz_release_id = COALESCE(EXCLUDED.musicbrainz_release_id, tracks.musicbrainz_release_id),
-        musicbrainz_artist_id = COALESCE(EXCLUDED.musicbrainz_artist_id, tracks.musicbrainz_artist_id),
-        musicbrainz_album_artist_id = COALESCE(EXCLUDED.musicbrainz_album_artist_id, tracks.musicbrainz_album_artist_id),
+        initial_key = EXCLUDED.initial_key,
+        composer = EXCLUDED.composer,
+        conductor = EXCLUDED.conductor,
+        publisher = EXCLUDED.publisher,
+        copyright = EXCLUDED.copyright,
+        comment = EXCLUDED.comment,
+        mood = EXCLUDED.mood,
+        grouping = EXCLUDED.grouping,
+        isrc = EXCLUDED.isrc,
+        release_date = EXCLUDED.release_date,
+        original_year = EXCLUDED.original_year,
+        compilation = EXCLUDED.compilation,
+        title_sort = EXCLUDED.title_sort,
+        artist_sort = EXCLUDED.artist_sort,
+        album_sort = EXCLUDED.album_sort,
+        album_artist_sort = EXCLUDED.album_artist_sort,
+        musicbrainz_track_id = EXCLUDED.musicbrainz_track_id,
+        musicbrainz_release_id = EXCLUDED.musicbrainz_release_id,
+        musicbrainz_artist_id = EXCLUDED.musicbrainz_artist_id,
+        musicbrainz_album_artist_id = EXCLUDED.musicbrainz_album_artist_id,
+        deleted_at = NULL,
         updated_at = now()
       RETURNING id, path
     `, [
@@ -376,107 +460,129 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
     // Build path -> track mapping for artist updates
     const pathToTrackId = new Map<string, number>();
     for (const row of trackResult.rows) {
-      pathToTrackId.set(row.path, row.id);
+      pathToTrackId.set(row.path, Number(row.id));
+    }
+
+    const trackIds = [...pathToTrackId.values()];
+    if (trackIds.length > 0) {
+      await client.query('DELETE FROM track_artists WHERE track_id = ANY($1)', [trackIds]);
+      await client.query('DELETE FROM track_genres WHERE track_id = ANY($1)', [trackIds]);
+      await client.query('DELETE FROM track_credits WHERE track_id = ANY($1)', [trackIds]);
+      await client.query('DELETE FROM track_countries WHERE track_id = ANY($1)', [trackIds]);
+      await client.query('DELETE FROM track_languages WHERE track_id = ANY($1)', [trackIds]);
     }
     
-    // Update track_artists for each track
+    const artistRelations: Array<{ trackId: number; name: string; role: string; position: number }> = [];
+    const creditRelations: Array<{ trackId: number; name: string; role: string; position: number }> = [];
+    const genreRelations: Array<{ trackId: number; value: string }> = [];
+    const countryRelations: Array<{ trackId: number; value: string }> = [];
+    const languageRelations: Array<{ trackId: number; value: string }> = [];
+
     for (const track of tracks) {
       const trackId = pathToTrackId.get(track.path);
       if (!trackId) continue;
 
-      // Collect all artists to insert (names are already sanitized/normalized by readTags)
-      const artistsToInsert: { name: string; role: string; position: number }[] = [];
-      
-      let i = 0;
+      let position = 0;
       for (const name of track.albumartists) {
-        if (name?.trim()) artistsToInsert.push({ name: name.trim(), role: 'albumartist', position: i++ });
+        if (name?.trim()) artistRelations.push({ trackId, name: name.trim(), role: 'albumartist', position: position++ });
       }
-      
-      i = 0;
+      position = 0;
       for (const name of track.artists) {
-        if (name?.trim()) artistsToInsert.push({ name: name.trim(), role: 'artist', position: i++ });
+        if (name?.trim()) artistRelations.push({ trackId, name: name.trim(), role: 'artist', position: position++ });
       }
-      
-      if (artistsToInsert.length === 0) continue;
-      
-      // Delete existing relations
-      await client.query('DELETE FROM track_artists WHERE track_id = $1', [trackId]);
-      
-      // Insert new artist relations
-      for (const { name, role, position } of artistsToInsert) {
-        const asciiName = asciiFold(name);
-        const artistRes = await client.query<{ id: number }>(
-          'INSERT INTO artists(name, ascii_name) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET ascii_name = COALESCE(artists.ascii_name, EXCLUDED.ascii_name) RETURNING id',
-          [name, asciiName || null]
-        );
-        await client.query(
-          'INSERT INTO track_artists(track_id, artist_id, role, position) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
-          [trackId, artistRes.rows[0].id, role, position]
-        );
-      }
-      
-      // Update track_genres
+
       if (track.genre) {
-        await client.query('DELETE FROM track_genres WHERE track_id = $1', [trackId]);
-        const genreList = track.genre.split(/[;,]/).map(g => g.trim()).filter(Boolean);
-        for (const genre of genreList) {
-          await client.query(
-            'INSERT INTO track_genres(track_id, genre) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-            [trackId, genre]
-          );
+        for (const value of track.genre.split(/[;,]/).map((item) => item.trim()).filter(Boolean)) {
+          genreRelations.push({ trackId, value });
         }
       }
-      
-      // Update track_credits (composers, conductors, etc.)
-      const creditsToInsert: { name: string; role: string; position: number }[] = [];
-      let cpos = 0;
+
+      position = 0;
       for (const name of track.composers) {
-        if (name?.trim()) creditsToInsert.push({ name: name.trim(), role: 'composer', position: cpos++ });
+        if (name?.trim()) creditRelations.push({ trackId, name: name.trim(), role: 'composer', position: position++ });
       }
-      cpos = 0;
+      position = 0;
       for (const name of track.conductors) {
-        if (name?.trim()) creditsToInsert.push({ name: name.trim(), role: 'conductor', position: cpos++ });
+        if (name?.trim()) creditRelations.push({ trackId, name: name.trim(), role: 'conductor', position: position++ });
       }
-      
-      if (creditsToInsert.length > 0) {
-        await client.query('DELETE FROM track_credits WHERE track_id = $1', [trackId]);
-        for (const { name, role, position } of creditsToInsert) {
-          const asciiName = asciiFold(name);
-          const artistRes = await client.query<{ id: number }>(
-            'INSERT INTO artists(name, ascii_name) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET ascii_name = COALESCE(artists.ascii_name, EXCLUDED.ascii_name) RETURNING id',
-            [name, asciiName || null]
-          );
-          await client.query(
-            'INSERT INTO track_credits(track_id, artist_id, role, position) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
-            [trackId, artistRes.rows[0].id, role, position]
-          );
-        }
-      }
-      
-      // Update track_countries
+
       if (track.country) {
-        await client.query('DELETE FROM track_countries WHERE track_id = $1', [trackId]);
-        const countryList = track.country.split(/[;,]/).map(c => c.trim()).filter(Boolean);
-        for (const country of countryList) {
-          await client.query(
-            'INSERT INTO track_countries(track_id, country) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-            [trackId, country]
-          );
+        for (const value of track.country.split(/[;,]/).map((item) => item.trim()).filter(Boolean)) {
+          countryRelations.push({ trackId, value });
         }
       }
-      
-      // Update track_languages
+
       if (track.language) {
-        await client.query('DELETE FROM track_languages WHERE track_id = $1', [trackId]);
-        const langList = track.language.split(/[;,]/).map(l => l.trim()).filter(Boolean);
-        for (const language of langList) {
-          await client.query(
-            'INSERT INTO track_languages(track_id, language) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-            [trackId, language]
-          );
+        for (const value of track.language.split(/[;,]/).map((item) => item.trim()).filter(Boolean)) {
+          languageRelations.push({ trackId, value });
         }
       }
     }
+
+    const artistNames = [...new Set([...artistRelations, ...creditRelations].map((relation) => relation.name))];
+    const artistIdByName = new Map<string, number>();
+    if (artistNames.length > 0) {
+      const artistResult = await client.query<{ id: number | string; name: string }>(
+        `INSERT INTO artists(name, ascii_name)
+         SELECT name, ascii_name
+         FROM unnest($1::text[], $2::text[]) AS incoming(name, ascii_name)
+         ON CONFLICT (name) DO UPDATE
+         SET ascii_name = EXCLUDED.ascii_name
+         RETURNING id, name`,
+        [artistNames, artistNames.map((name) => asciiFold(name))]
+      );
+      for (const artist of artistResult.rows) artistIdByName.set(artist.name, Number(artist.id));
+    }
+
+    if (artistRelations.length > 0) {
+      await client.query(
+        `INSERT INTO track_artists(track_id, artist_id, role, position)
+         SELECT * FROM unnest($1::bigint[], $2::bigint[], $3::text[], $4::int[])
+         ON CONFLICT DO NOTHING`,
+        [
+          artistRelations.map((relation) => relation.trackId),
+          artistRelations.map((relation) => artistIdByName.get(relation.name)),
+          artistRelations.map((relation) => relation.role),
+          artistRelations.map((relation) => relation.position),
+        ]
+      );
+    }
+
+    if (creditRelations.length > 0) {
+      await client.query(
+        `INSERT INTO track_credits(track_id, artist_id, role, position)
+         SELECT * FROM unnest($1::bigint[], $2::bigint[], $3::text[], $4::int[])
+         ON CONFLICT DO NOTHING`,
+        [
+          creditRelations.map((relation) => relation.trackId),
+          creditRelations.map((relation) => artistIdByName.get(relation.name)),
+          creditRelations.map((relation) => relation.role),
+          creditRelations.map((relation) => relation.position),
+        ]
+      );
+    }
+
+    const insertTagRelations = async (table: string, column: string, relations: Array<{ trackId: number; value: string }>) => {
+      if (relations.length === 0) return;
+      await client.query(
+        `INSERT INTO ${table}(track_id, ${column})
+         SELECT * FROM unnest($1::bigint[], $2::text[])
+         ON CONFLICT DO NOTHING`,
+        [relations.map((relation) => relation.trackId), relations.map((relation) => relation.value)]
+      );
+    };
+    await insertTagRelations('track_genres', 'genre', genreRelations);
+    await insertTagRelations('track_countries', 'country', countryRelations);
+    await insertTagRelations('track_languages', 'language', languageRelations);
+
+    await client.query(
+      `INSERT INTO audit_events(event, meta)
+       SELECT * FROM unnest($1::text[], $2::jsonb[])`,
+      [
+        tracks.map((track) => track.isRestored ? 'track_restored' : track.isNew ? 'track_added' : 'track_updated'),
+        tracks.map((track) => JSON.stringify({ path: track.path, title: track.title, artist: track.artist })),
+      ]
+    );
     
     await client.query('COMMIT');
   } catch (e) {
@@ -522,88 +628,101 @@ async function getOrCreateLibrary(mountPath: string): Promise<number> {
   return Number(ins.rows[0].id);
 }
 
+async function refreshArtistAsciiNames(): Promise<number> {
+  const result = await db().query<{ id: number; name: string; ascii_name: string | null }>(
+    'SELECT id, name, ascii_name FROM artists WHERE name IS NOT NULL'
+  );
+  const changed = result.rows
+    .map((artist) => ({ id: artist.id, asciiName: asciiFold(artist.name) }))
+    .filter((artist, index) => artist.asciiName !== result.rows[index].ascii_name);
+  if (changed.length === 0) return 0;
+
+  await db().query(
+    `UPDATE artists AS artist
+     SET ascii_name = incoming.ascii_name
+     FROM unnest($1::bigint[], $2::text[]) AS incoming(id, ascii_name)
+     WHERE artist.id = incoming.id`,
+    [changed.map((artist) => artist.id), changed.map((artist) => artist.asciiName)]
+  );
+  return changed.length;
+}
+
 // Scan for artist artwork in library directories
 // Looks for artist.jpg/png, band.jpg/png, photo.jpg/png in artist folders
 async function scanArtistArtwork(musicDir: string): Promise<number> {
   logger.info('artist-art', 'Scanning for artist artwork...');
-  
-  // Get all artists from DB
+
   const artistsResult = await db().query<{ id: number; name: string; art_path: string | null }>(
     'SELECT id, name, art_path FROM artists'
   );
-  
+
   if (artistsResult.rows.length === 0) {
     logger.info('artist-art', 'No artists in database');
     return 0;
   }
-  
+
+  let rootEntries: Dirent[];
+  try {
+    rootEntries = await readdir(musicDir, { withFileTypes: true });
+  } catch (error) {
+    logger.warn(
+      'artist-art',
+      `Skipping artist artwork scan because the library root is unavailable: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return 0;
+  }
+  const artistFolders = new Map<string, string>();
+  for (const entry of rootEntries) {
+    if (!entry.isDirectory()) continue;
+    const key = entry.name.normalize('NFC').toLocaleLowerCase();
+    if (!artistFolders.has(key)) artistFolders.set(key, entry.name);
+  }
+
   let updated = 0;
-  
-  // For each artist, try to find artwork in their folder
-  for (const artist of artistsResult.rows) {
-    // Skip if already has artwork and the cached file still exists
-    if (artist.art_path) {
-      try {
-        await stat(path.join(ART_DIR, artist.art_path));
-        continue;
-      } catch {
-        // Cache missing - fall through and try to rehydrate
-        // Clear art_path so we can re-scan and re-create the cached file.
-        await db().query('UPDATE artists SET art_path = NULL, art_hash = NULL WHERE id = $1', [artist.id]);
-        artist.art_path = null;
-      }
-    }
-    
-    // Try to find artist folder (typically /music/ArtistName/)
-    const artistDir = path.join(musicDir, artist.name);
-    
-    try {
-      const dirStat = await stat(artistDir);
-      if (!dirStat.isDirectory()) continue;
-      
-      // Look for artist image files
-      const files = await readdir(artistDir);
-      const lowerFiles = files.map(f => f.toLowerCase());
-      
-      let artFile: string | null = null;
-      for (const imageName of ARTIST_IMAGE_NAMES) {
-        const idx = lowerFiles.indexOf(imageName);
-        if (idx >= 0) {
-          artFile = files[idx]; // Use original case
-          break;
+
+  await processFilesParallel(
+    artistsResult.rows,
+    ARTIST_ART_CONCURRENCY,
+    async (artist) => {
+      if (artist.art_path) {
+        try {
+          await stat(path.join(ART_DIR, artist.art_path));
+          return null;
+        } catch {
+          await db().query('UPDATE artists SET art_path = NULL, art_hash = NULL WHERE id = $1', [artist.id]);
         }
       }
-      
-      if (!artFile) continue;
-      
-      // Found artist image - read and hash it
-      const artPath = path.join(artistDir, artFile);
-      const data = await readFile(artPath);
-      const hash = createHash('sha1').update(data).digest('hex');
-      
-      // Determine extension for file naming
-      const ext = path.extname(artFile).toLowerCase();
-      
-      // Store in art cache directory
-      const relPath = `artists/${hash.slice(0, 2)}/${hash}${ext}`;
-      const absPath = path.join(ART_DIR, relPath);
-      const { mkdir, writeFile: writeF } = await import('node:fs/promises');
-      await mkdir(path.dirname(absPath), { recursive: true });
-      await writeF(absPath, data);
-      
-      // Update artist record
-      await db().query(
-        'UPDATE artists SET art_path = $1, art_hash = $2 WHERE id = $3',
-        [relPath, hash, artist.id]
-      );
-      
+
+      const folderName = artistFolders.get(artist.name.normalize('NFC').toLocaleLowerCase());
+      if (!folderName) return null;
+
+      try {
+        const artistDir = resolveInside(musicDir, folderName);
+        const files = await readdir(artistDir);
+        const fileByLowerName = new Map(files.map((file) => [file.toLowerCase(), file]));
+        const artFile = ARTIST_IMAGE_NAMES
+          .map((imageName) => fileByLowerName.get(imageName))
+          .find((file): file is string => Boolean(file));
+        if (!artFile) return null;
+
+        const data = await readFile(path.join(artistDir, artFile));
+        const art = await writeMusicArt(ART_DIR, data);
+        await db().query(
+          'UPDATE artists SET art_path = $1, art_hash = $2 WHERE id = $3',
+          [art.relPath, art.hash, artist.id]
+        );
+        return artist.name;
+      } catch {
+        return null;
+      }
+    },
+    async (artistName) => {
+      if (!artistName) return;
       updated++;
-      logger.success('artist-art', `Found artwork for ${artist.name}`);
-    } catch {
-      // Artist folder doesn't exist or can't be read - skip
+      logger.success('artist-art', `Found artwork for ${artistName}`);
     }
-  }
-  
+  );
+
   logger.success('artist-art', `Updated ${updated} artist artworks`);
   return updated;
 }
@@ -618,6 +737,7 @@ export async function runFastScan(
   newFiles: number; 
   updatedFiles: number; 
   skippedFiles: number;
+  failedFiles: number;
   durationMs: number;
 }> {
   const startTime = Date.now();
@@ -646,12 +766,16 @@ export async function runFastScan(
       durationMs,
       cancelled: true,
     };
-    getPublisher().set('scan:progress', JSON.stringify(progress));
+    storeProgress(progress);
     publishUpdate('scan:progress', progress);
     throw new ScanCancelledError(`cancelled: ${where}`);
   };
 
-  logger.info('scan', `Fast scan starting: ${musicDir}${forceFullScan ? ' (FORCE FULL)' : ''}`);
+  logger.info('scan', `Fast scan starting: ${musicDir}${forceFullScan ? ' (FORCE FULL)' : ''}`, {
+    concurrency: CONCURRENCY,
+    metadataTimeoutMs: METADATA_TIMEOUT_MS,
+    uvThreadpoolSize: Number(process.env.UV_THREADPOOL_SIZE ?? 4),
+  });
   if (TEMPO_IN_SCAN) {
     logger.info('tempo', 'Tempo detection enabled during scan (missing-tag backfill)', {
       method: TEMPO_METHOD,
@@ -670,10 +794,31 @@ export async function runFastScan(
     filesProcessed: 0,
     currentFile: 'Initializing...',
   };
-  getPublisher().set('scan:progress', JSON.stringify(initialProgress));
+  storeProgress(initialProgress);
   publishUpdate('scan:progress', initialProgress);
   
   cancelNow('before_init');
+
+  try {
+    const root = await stat(musicDir);
+    if (!root.isDirectory()) throw new Error('configured library path is not a directory');
+    await readdir(musicDir);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const progress = {
+      status: 'error',
+      mountPath: musicDir,
+      libraryIndex,
+      libraryTotal,
+      filesFound: 0,
+      filesProcessed: 0,
+      currentFile: 'Library unavailable',
+      error: message,
+    };
+    storeProgress(progress);
+    publishUpdate('scan:progress', progress);
+    throw new Error(`Library is unavailable: ${musicDir}: ${message}`);
+  }
 
   const libraryId = await getOrCreateLibrary(musicDir);
   
@@ -703,13 +848,12 @@ export async function runFastScan(
     const missDur = await db().query<{ path: string }>(
       `select t.path
        from tracks t
-       where t.library_id = $1 and t.deleted_at is null and t.duration_ms is null
-         and lower(t.ext) in ('.opus','opus','.ogg','ogg')`,
+       where t.library_id = $1 and t.deleted_at is null and t.duration_ms is null`,
       [libraryId]
     );
     for (const r of missDur.rows) missingDurationPaths.add(r.path);
     if (missingDurationPaths.size > 0) {
-      logger.info('scan', `Will refresh ${missingDurationPaths.size} tracks missing duration (opus/ogg)`);
+      logger.info('scan', `Will refresh ${missingDurationPaths.size} tracks missing duration`);
     }
   }
 
@@ -720,7 +864,15 @@ export async function runFastScan(
   // Phase 2: Walk directory and collect files
   logger.info('scan', 'Scanning filesystem...');
   const allFiles: FileInfo[] = [];
-  for await (const file of walkDirectory(musicDir, musicDir)) {
+  let filesystemErrors = 0;
+  const filesystemErrorSamples: string[] = [];
+  const onFilesystemError = (target: string, error: unknown) => {
+    filesystemErrors++;
+    if (filesystemErrorSamples.length < 10) {
+      filesystemErrorSamples.push(`${target}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  for await (const file of walkDirectory(musicDir, musicDir, onFilesystemError)) {
     if (shouldCancel()) cancelNow('discovering_files');
     allFiles.push(file);
     if (allFiles.length % 1000 === 0) {
@@ -735,11 +887,16 @@ export async function runFastScan(
         filesProcessed: 0,
         currentFile: `Discovering files... (${allFiles.length.toLocaleString()} found)`,
       };
-      getPublisher().set('scan:progress', JSON.stringify(discoveryProgress));
+      storeProgress(discoveryProgress);
       publishUpdate('scan:progress', discoveryProgress);
     }
   }
   logger.success('scan', `Found ${allFiles.length} audio files`);
+  if (filesystemErrors > 0) {
+    logger.warn('scan', `Filesystem scan had ${filesystemErrors} read/stat errors; orphan cleanup will be skipped`, {
+      samples: filesystemErrorSamples,
+    });
+  }
   
   // Phase 3: Filter to only new/changed files, and detect files to restore
   // Force full scan: process all files regardless of mtime/size
@@ -771,19 +928,18 @@ export async function runFastScan(
     }
   }
   
-  // Restore soft-deleted tracks (clear deleted_at)
+  // Restoration is performed atomically by the successful metadata upsert.
+  // Leaving deleted_at intact until then prevents an unreadable file from
+  // reactivating stale catalogue data.
   if (filesToRestore.length > 0) {
-    logger.info('scan', `Restoring ${filesToRestore.length} previously deleted tracks...`);
-    await db().query(
-      'UPDATE tracks SET deleted_at = NULL WHERE library_id = $1 AND path = ANY($2)',
-      [libraryId, filesToRestore]
-    );
-    for (const p of filesToRestore) {
-      audit('track_restored', { path: p, actor: 'worker' });
-    }
+    logger.info('scan', `Will restore ${filesToRestore.length} previously deleted tracks after successful metadata reads`);
   }
   
   logger.info('scan', `${filesToProcess.length} files to process, ${skippedFiles} unchanged`);
+  const processingQueue = filesToProcess
+    .map((file) => ({ file, order: scanOrderKey(file.relPath) }))
+    .sort((a, b) => a.order - b.order || a.file.relPath.localeCompare(b.file.relPath))
+    .map(({ file }) => file);
   
   // Update Redis progress
   const updateProgress = (processed: number) => {
@@ -796,8 +952,11 @@ export async function runFastScan(
       filesProcessed: skippedFiles + processed,
       newFiles: filesToProcess.length,
       skipped: skippedFiles,
+      failedFiles,
+      failureSamples: failedFileSamples,
+      filesystemErrors,
     };
-    getPublisher().set('scan:progress', JSON.stringify(progress));
+    storeProgress(progress);
     publishUpdate('scan:progress', progress);
   };
   
@@ -805,6 +964,8 @@ export async function runFastScan(
   let processed = 0;
   let newFiles = 0;
   let updatedFiles = 0;
+  let failedFiles = 0;
+  const failedFileSamples: string[] = [];
   let lastProgressTime = Date.now();
   const batch: TrackData[] = [];
 
@@ -813,192 +974,200 @@ export async function runFastScan(
   let tempoLowConfidence = 0;
   let tempoFailed = 0;
   
-  // Process in chunks
-  for (let i = 0; i < filesToProcess.length; i += CONCURRENCY) {
-    if (shouldCancel()) cancelNow('processing_files');
-    const chunk = filesToProcess.slice(i, i + CONCURRENCY);
-    
-    const results = await processFilesParallel(chunk, CONCURRENCY, async (file) => {
-      try {
-        if (shouldCancel()) return null;
-        // Read metadata
-        const tags = await readTags(file.fullPath);
-
-        const existing = existingTracks.get(file.relPath);
-
-        // Optional: detect tempo and store in DB when missing from tags.
-        // IMPORTANT: if the DB already has bpm for this track, skip detection (especially for FORCE FULL scans)
-        // since it would otherwise re-run ffmpeg/DSP for every file without a BPM tag.
-        let detectedBpm: number | null = null;
-        if (
-          TEMPO_IN_SCAN &&
-          existing?.bpm == null &&
-          (tags.bpm == null || !Number.isFinite(tags.bpm) || tags.bpm <= 0)
-        ) {
-          tempoTried++;
-          try {
-            const res = await withTempoSlot(() => detectTempoBpm(file.fullPath, { onsetMethod: TEMPO_METHOD }));
-            if (res.confidence >= TEMPO_MIN_CONF && Number.isFinite(res.bpm) && res.bpm > 0) {
-              detectedBpm = res.bpm;
-              tempoApplied++;
-            } else {
-              tempoLowConfidence++;
-            }
-          } catch (e) {
-            tempoFailed++;
-            logger.debug('tempo', `Tempo detect failed: ${e instanceof Error ? e.message : String(e)}`);
-          }
-        }
-        
-        // Handle art
-        let artPath: string | null = null;
-        let artMime: string | null = null;
-        let artHash: string | null = null;
-        if (tags.artData && tags.artMime) {
-          try {
-            const w = await writeArt(ART_DIR, tags.artData, tags.artMime);
-            artPath = w.relPath;
-            artMime = w.mime;
-            artHash = w.hash;
-          } catch {}
-        }
-        
-        // Check lyrics
-        const baseNoExtRel = file.relPath.replace(/\.[^./\\]+$/, '');
-        const lyricsRel = `${baseNoExtRel}.lrc`;
-        const lyricsAbs = path.join(LYRICS_DIR, lyricsRel);
-        let lyricsPath: string | null = null;
+  if (shouldCancel()) cancelNow('processing_files');
+  await processFilesParallel(
+      processingQueue,
+      CONCURRENCY,
+      async (file) => {
         try {
-          const lst = await stat(lyricsAbs);
-          if (lst.isFile()) lyricsPath = lyricsRel;
-        } catch {
-          const txtRel = `${baseNoExtRel}.txt`;
-          const txtAbs = path.join(LYRICS_DIR, txtRel);
-          try {
-            const tst = await stat(txtAbs);
-            if (tst.isFile()) lyricsPath = txtRel;
-          } catch {
-            // no lyrics sidecar files in the lyrics cache
-          }
-        }
+          if (shouldCancel()) return null;
+          // Read metadata
+          const tags = await readTagsWithTimeout(file.fullPath);
 
-        if (!lyricsPath) {
-          const baseNoExtAbs = file.fullPath.replace(/\.[^./\\]+$/, '');
-          for (const sidecarExt of ['.lrc', '.txt']) {
+          const existing = existingTracks.get(file.relPath);
+
+          // Optional: detect tempo and store in DB when missing from tags.
+          // IMPORTANT: if the DB already has bpm for this track, skip detection (especially for FORCE FULL scans)
+          // since it would otherwise re-run ffmpeg/DSP for every file without a BPM tag.
+          let detectedBpm: number | null = null;
+          if (
+            TEMPO_IN_SCAN &&
+            existing?.bpm == null &&
+            (tags.bpm == null || !Number.isFinite(tags.bpm) || tags.bpm <= 0)
+          ) {
+            tempoTried++;
             try {
-              const sst = await stat(baseNoExtAbs + sidecarExt);
-              if (sst.isFile()) {
-                lyricsPath = `music:${path.relative(musicDir, baseNoExtAbs + sidecarExt)}`;
-                break;
+              const res = await withTempoSlot(() => detectTempoBpm(file.fullPath, { onsetMethod: TEMPO_METHOD }));
+              if (res.confidence >= TEMPO_MIN_CONF && Number.isFinite(res.bpm) && res.bpm > 0) {
+                detectedBpm = res.bpm;
+                tempoApplied++;
+              } else {
+                tempoLowConfidence++;
               }
-            } catch {
-              // no music-dir sidecar for this extension
+            } catch (e) {
+              tempoFailed++;
+              logger.debug('tempo', `Tempo detect failed: ${e instanceof Error ? e.message : String(e)}`);
             }
           }
+
+          // Handle art
+          let artPath: string | null = null;
+          let artMime: string | null = null;
+          let artHash: string | null = null;
+          if (tags.artData && tags.artMime) {
+            try {
+              const w = await writeMusicArt(ART_DIR, tags.artData);
+              artPath = w.relPath;
+              artMime = w.mime;
+              artHash = w.hash;
+            } catch {}
+          }
+
+          // Check lyrics
+          const baseNoExtRel = file.relPath.replace(/\.[^./\\]+$/, '');
+          const lyricsRel = `${baseNoExtRel}.lrc`;
+          const lyricsAbs = path.join(LYRICS_DIR, lyricsRel);
+          let lyricsPath: string | null = null;
+          try {
+            const lst = await stat(lyricsAbs);
+            if (lst.isFile()) lyricsPath = lyricsRel;
+          } catch {
+            const txtRel = `${baseNoExtRel}.txt`;
+            const txtAbs = path.join(LYRICS_DIR, txtRel);
+            try {
+              const tst = await stat(txtAbs);
+              if (tst.isFile()) lyricsPath = txtRel;
+            } catch {
+              // no lyrics sidecar files in the lyrics cache
+            }
+          }
+
+          if (!lyricsPath) {
+            const baseNoExtAbs = file.fullPath.replace(/\.[^./\\]+$/, '');
+            for (const sidecarExt of ['.lrc', '.txt']) {
+              try {
+                const sst = await stat(baseNoExtAbs + sidecarExt);
+                if (sst.isFile()) {
+                  lyricsPath = `music:${path.relative(musicDir, baseNoExtAbs + sidecarExt)}`;
+                  break;
+                }
+              } catch {
+                // no music-dir sidecar for this extension
+              }
+            }
+          }
+
+          const isNew = !existing;
+          return {
+            libraryId,
+            path: file.relPath,
+            mtimeMs: file.mtimeMs,
+            birthtimeMs: file.birthtimeMs,
+            sizeBytes: file.sizeBytes,
+            ext: file.ext,
+            title: tags.title,
+            artist: tags.artist,
+            album: tags.album,
+            albumartist: tags.albumartist,
+            genre: tags.genre,
+            country: tags.country,
+            language: tags.language,
+            year: tags.year,
+            durationMs: tags.durationMs,
+            artPath,
+            artMime,
+            artHash,
+            lyricsPath,
+            embeddedLyrics: tags.embeddedLyrics,
+            embeddedLyricsSynced: tags.embeddedLyricsSynced,
+            artists: tags.artists,
+            albumartists: tags.albumartists,
+            composers: tags.composers || [],
+            conductors: tags.conductors || [],
+            trackNumber: tags.trackNumber,
+            trackTotal: tags.trackTotal,
+            discNumber: tags.discNumber,
+            discTotal: tags.discTotal,
+            // Extended metadata
+            bpm: tags.bpm ?? detectedBpm ?? null,
+            initialKey: tags.initialKey ?? null,
+            composer: tags.composer ?? null,
+            conductor: tags.conductor ?? null,
+            publisher: tags.publisher ?? null,
+            copyright: tags.copyright ?? null,
+            comment: tags.comment ?? null,
+            mood: tags.mood ?? null,
+            grouping: tags.grouping ?? null,
+            isrc: tags.isrc ?? null,
+            releaseDate: tags.releaseDate ?? null,
+            originalYear: tags.originalYear ?? null,
+            compilation: tags.compilation ?? false,
+            // Sort fields
+            titleSort: tags.titleSort ?? null,
+            artistSort: tags.artistSort ?? null,
+            albumSort: tags.albumSort ?? null,
+            albumArtistSort: tags.albumArtistSort ?? null,
+            // MusicBrainz IDs
+            musicbrainzTrackId: tags.musicbrainzTrackId ?? null,
+            musicbrainzReleaseId: tags.musicbrainzReleaseId ?? null,
+            musicbrainzArtistId: tags.musicbrainzArtistId ?? null,
+            musicbrainzAlbumArtistId: tags.musicbrainzAlbumArtistId ?? null,
+            isNew,
+            isRestored: deletedTracks.has(file.relPath),
+          };
+        } catch (error) {
+          failedFiles++;
+          if (failedFileSamples.length < 10) {
+            const failure = `${file.relPath}: ${error instanceof Error ? error.message : String(error)}`;
+            failedFileSamples.push(failure);
+            logger.warn('scan', `Metadata read failed: ${failure}`);
+          }
+          return null;
         }
-        
-        const isNew = !existing;
-        return {
-          libraryId,
-          path: file.relPath,
-          mtimeMs: file.mtimeMs,
-          birthtimeMs: file.birthtimeMs,
-          sizeBytes: file.sizeBytes,
-          ext: file.ext,
-          title: tags.title,
-          artist: tags.artist,
-          album: tags.album,
-          albumartist: tags.albumartist,
-          genre: tags.genre,
-          country: tags.country,
-          language: tags.language,
-          year: tags.year,
-          durationMs: tags.durationMs,
-          artPath,
-          artMime,
-          artHash,
-          lyricsPath,
-          embeddedLyrics: tags.embeddedLyrics,
-          embeddedLyricsSynced: tags.embeddedLyricsSynced,
-          artists: tags.artists,
-          albumartists: tags.albumartists,
-          composers: tags.composers || [],
-          conductors: tags.conductors || [],
-          trackNumber: tags.trackNumber,
-          trackTotal: tags.trackTotal,
-          discNumber: tags.discNumber,
-          discTotal: tags.discTotal,
-          // Extended metadata
-          bpm: tags.bpm ?? detectedBpm ?? null,
-          initialKey: tags.initialKey ?? null,
-          composer: tags.composer ?? null,
-          conductor: tags.conductor ?? null,
-          publisher: tags.publisher ?? null,
-          copyright: tags.copyright ?? null,
-          comment: tags.comment ?? null,
-          mood: tags.mood ?? null,
-          grouping: tags.grouping ?? null,
-          isrc: tags.isrc ?? null,
-          releaseDate: tags.releaseDate ?? null,
-          originalYear: tags.originalYear ?? null,
-          compilation: tags.compilation ?? false,
-          // Sort fields
-          titleSort: tags.titleSort ?? null,
-          artistSort: tags.artistSort ?? null,
-          albumSort: tags.albumSort ?? null,
-          albumArtistSort: tags.albumArtistSort ?? null,
-          // MusicBrainz IDs
-          musicbrainzTrackId: tags.musicbrainzTrackId ?? null,
-          musicbrainzReleaseId: tags.musicbrainzReleaseId ?? null,
-          musicbrainzArtistId: tags.musicbrainzArtistId ?? null,
-          musicbrainzAlbumArtistId: tags.musicbrainzAlbumArtistId ?? null,
-          isNew,
-        };
-      } catch {
-        return null;
-      }
-    });
-    
-    // Collect valid results
-    for (const r of results) {
-      if (r) {
-        batch.push(r);
-        if (r.isNew) {
+      },
+      async (result) => {
+        if (!result) return;
+        batch.push(result);
+        if (result.isNew) {
           newFiles++;
-          // Emit audit event for new track
-          await audit('track_added', { path: r.path, title: r.title, artist: r.artist });
-          // Publish live update
-          publishUpdate('track_added', { path: r.path, title: r.title, artist: r.artist, album: r.album });
+          publishUpdate('track_added', {
+            path: result.path,
+            title: result.title,
+            artist: result.artist,
+            album: result.album,
+          });
         } else {
           updatedFiles++;
-          // Emit audit event for updated track
-          await audit('track_updated', { path: r.path, title: r.title, artist: r.artist });
-          // Publish live update
-          publishUpdate('track_updated', { path: r.path, title: r.title, artist: r.artist, album: r.album });
+          publishUpdate('track_updated', {
+            path: result.path,
+            title: result.title,
+            artist: result.artist,
+            album: result.album,
+          });
         }
-        
-        // Batch insert
+
         if (batch.length >= BATCH_SIZE) {
-          await batchUpsertTracks(batch);
-          batch.length = 0;
+          await batchUpsertTracks(batch.splice(0, BATCH_SIZE));
+        }
+      },
+      (totalProcessed) => {
+        processed = totalProcessed;
+        const now = Date.now();
+        if (now - lastProgressTime > PROGRESS_INTERVAL) {
+          lastProgressTime = now;
+          logger.progress('scan', 'Processing files', totalProcessed, filesToProcess.length);
+          updateProgress(totalProcessed);
         }
       }
-    }
-    
-    processed += chunk.length;
-    
-    // Log progress
-    const now = Date.now();
-    if (now - lastProgressTime > PROGRESS_INTERVAL) {
-      lastProgressTime = now;
-      logger.progress('scan', 'Processing files', processed, filesToProcess.length);
-      updateProgress(processed);
-    }
-  }
+    );
+  updateProgress(processed);
   
   // Insert remaining batch
   if (batch.length > 0) {
     await batchUpsertTracks(batch);
+  }
+  if (failedFiles > 0) {
+    logger.warn('scan', `Failed to read metadata for ${failedFiles} files`, { samples: failedFileSamples });
   }
   
   // Phase 5: Soft-delete orphan tracks (in DB but not on disk)
@@ -1011,7 +1180,7 @@ export async function runFastScan(
     }
   }
   
-  if (orphanPaths.length > 0) {
+  if (orphanPaths.length > 0 && filesystemErrors === 0) {
     logger.info('scan', `Soft-deleting ${orphanPaths.length} orphan tracks...`);
     
     // Soft-delete in batches (set deleted_at instead of DELETE)
@@ -1031,6 +1200,9 @@ export async function runFastScan(
     }
     
     logger.success('scan', `Soft-deleted ${orphanPaths.length} orphan tracks`);
+  } else if (orphanPaths.length > 0) {
+    logger.warn('scan', `Preserving ${orphanPaths.length} apparent orphan tracks because the filesystem scan was incomplete`);
+    orphanPaths.length = 0;
   }
   
   if (shouldCancel()) cancelNow('before_indexing');
@@ -1046,36 +1218,55 @@ export async function runFastScan(
       filesProcessed: allFiles.length,
       currentFile: 'Indexing search…',
     };
-    getPublisher().set('scan:progress', JSON.stringify(progress));
+    storeProgress(progress);
     publishUpdate('scan:progress', progress);
   }
+  const refreshedArtistNames = await refreshArtistAsciiNames();
+  if (refreshedArtistNames > 0) {
+    logger.info('scan', `Refreshed folded search names for ${refreshedArtistNames} artists`);
+  }
   const hasChanges = filesToProcess.length > 0 || orphanPaths.length > 0 || filesToRestore.length > 0;
+  await ensureTracksIndex();
   if (forceFullScan) {
     logger.info('search', 'Full search re-index...');
-    await ensureTracksIndex();
     await indexAllTracks();
     logger.success('search', 'Search index updated (full)');
   } else if (hasChanges) {
     // Incremental index: only re-index tracks that were processed
     const processedPaths = filesToProcess.map(f => f.relPath);
-    const idResult = await db().query<{ id: number }>(
+    const idResult = await db().query<{ id: number | string }>(
       'SELECT id FROM tracks WHERE library_id = $1 AND path = ANY($2) AND deleted_at IS NULL',
       [libraryId, processedPaths]
     );
-    const changedIds = idResult.rows.map(r => r.id);
+    const changedIds = idResult.rows.map(r => Number(r.id));
     const orphanIdResult = orphanPaths.length > 0
-      ? await db().query<{ id: number }>(
+      ? await db().query<{ id: number | string }>(
           'SELECT id FROM tracks WHERE library_id = $1 AND path = ANY($2)',
           [libraryId, orphanPaths]
         )
       : { rows: [] };
-    const deletedIds = orphanIdResult.rows.map(r => r.id);
-    await ensureTracksIndex();
+    const deletedIds = orphanIdResult.rows.map(r => Number(r.id));
     const result = await indexChangedTracks(changedIds, deletedIds);
     logger.success('search', `Search index updated (incremental: ${result.indexed} indexed, ${result.deleted} removed)`);
   } else {
-    logger.info('search', 'No changes detected, skipping search re-index');
+    logger.info('search', 'No library changes detected');
   }
+
+  let indexStatus = await getTrackIndexStatus();
+  if (!indexStatus.consistent) {
+    logger.warn(
+      'search',
+      `Search index mismatch (${indexStatus.index} indexed, ${indexStatus.database} active); rebuilding`
+    );
+    await indexAllTracks();
+    indexStatus = await getTrackIndexStatus();
+  }
+  if (!indexStatus.consistent) {
+    throw new Error(
+      `Search index consistency check failed (${indexStatus.index} indexed, ${indexStatus.database} active)`
+    );
+  }
+  logger.success('search', `Search index verified (${indexStatus.index} documents)`);
   
   if (shouldCancel()) cancelNow('before_artist_artwork');
 
@@ -1090,7 +1281,7 @@ export async function runFastScan(
       filesProcessed: allFiles.length,
       currentFile: 'Scanning artist artwork…',
     };
-    getPublisher().set('scan:progress', JSON.stringify(progress));
+    storeProgress(progress);
     publishUpdate('scan:progress', progress);
   }
   await scanArtistArtwork(musicDir);
@@ -1118,9 +1309,12 @@ export async function runFastScan(
     libraryTotal,
     filesFound: allFiles.length,
     filesProcessed: allFiles.length,
+    failedFiles,
+    failureSamples: failedFileSamples,
+    filesystemErrors,
     durationMs,
   };
-  getPublisher().set('scan:progress', JSON.stringify(progress));
+  storeProgress(progress);
   publishUpdate('scan:complete', progress);
   
   return {
@@ -1128,6 +1322,7 @@ export async function runFastScan(
     newFiles,
     updatedFiles,
     skippedFiles,
+    failedFiles,
     durationMs,
   };
 }

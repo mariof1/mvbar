@@ -5,6 +5,7 @@ import { useAuth } from './store';
 import { useUi, AudiobookChapter as AudiobookPlayerChapter } from './uiStore';
 import { usePlayer } from './playerStore';
 import { apiFetch } from './apiClient';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 // ============================================================================
 // TYPES
@@ -140,8 +141,11 @@ export function AudiobookPlayer({
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [expanded, setExpanded] = useState(false);
+  useBodyScrollLock(expanded);
   const chapterRef = useRef(chapter);
   chapterRef.current = chapter;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     const audioEl = new Audio(`/api/audiobook-stream/${chapter.audiobook_id}/chapters/${chapter.id}`);
@@ -256,53 +260,68 @@ export function AudiobookPlayer({
 
   // Media Session API
   useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
+    if (!('mediaSession' in navigator) || !('MediaMetadata' in window)) return;
 
     const imageUrl = chapter.audiobook_cover_path
       ? `/api/audiobook-art/${chapter.audiobook_id}`
       : undefined;
 
-    navigator.mediaSession.metadata = new MediaMetadata({
+    const metadata = new MediaMetadata({
       title: chapter.title,
       artist: chapter.author || 'Audiobook',
       album: chapter.audiobook_title,
-      ...(imageUrl ? { artwork: [{ src: imageUrl, sizes: '512x512', type: 'image/jpeg' }] } : {}),
+      artwork: [
+        ...(imageUrl ? [{ src: imageUrl, type: 'image/jpeg' }] : []),
+        { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+      ],
     });
+    navigator.mediaSession.metadata = metadata;
 
-    navigator.mediaSession.setActionHandler('play', () => audio?.play());
-    navigator.mediaSession.setActionHandler('pause', () => audio?.pause());
-    navigator.mediaSession.setActionHandler('seekbackward', () => {
-      if (audio) audio.currentTime = Math.max(0, audio.currentTime - 15);
-    });
-    navigator.mediaSession.setActionHandler('seekforward', () => {
-      if (audio) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 15);
-    });
-    navigator.mediaSession.setActionHandler('seekto', (details) => {
-      if (audio && details.seekTime !== undefined) audio.currentTime = details.seekTime;
-    });
-    navigator.mediaSession.setActionHandler('stop', () => onClose());
+    const actionHandlers: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
+      ['play', () => { audio?.play().catch(() => {}); }],
+      ['pause', () => { audio?.pause(); }],
+      ['seekbackward', (details) => {
+        if (audio) audio.currentTime = Math.max(0, audio.currentTime - (details.seekOffset || 15));
+      }],
+      ['seekforward', (details) => {
+        if (audio) audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (details.seekOffset || 15));
+      }],
+      ['seekto', (details) => {
+        if (audio && details.seekTime !== undefined) audio.currentTime = details.seekTime;
+      }],
+      ['stop', () => {
+        audio?.pause();
+        onCloseRef.current();
+      }],
+    ];
+    for (const [action, handler] of actionHandlers) {
+      try { navigator.mediaSession.setActionHandler(action, handler); } catch {}
+    }
 
     return () => {
-      navigator.mediaSession.metadata = null;
-      navigator.mediaSession.setActionHandler('play', null);
-      navigator.mediaSession.setActionHandler('pause', null);
-      navigator.mediaSession.setActionHandler('seekbackward', null);
-      navigator.mediaSession.setActionHandler('seekforward', null);
-      navigator.mediaSession.setActionHandler('seekto', null);
-      navigator.mediaSession.setActionHandler('stop', null);
+      if (navigator.mediaSession.metadata === metadata) navigator.mediaSession.metadata = null;
+      for (const [action] of actionHandlers) {
+        try { navigator.mediaSession.setActionHandler(action, null); } catch {}
+      }
+      navigator.mediaSession.playbackState = 'none';
+      try { navigator.mediaSession.setPositionState(); } catch {}
     };
-  }, [chapter, audio, onClose]);
+  }, [chapter, audio]);
 
   // Update Media Session position state
   useEffect(() => {
     if (!('mediaSession' in navigator) || !audio) return;
-    navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
-    if (duration > 0) {
-      navigator.mediaSession.setPositionState({
-        duration,
-        playbackRate,
-        position: currentTime,
-      });
+    try {
+      navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+      if (Number.isFinite(duration) && duration > 0) {
+        navigator.mediaSession.setPositionState({
+          duration,
+          playbackRate: playbackRate > 0 ? playbackRate : 1,
+          position: Math.max(0, Math.min(Number.isFinite(currentTime) ? currentTime : 0, duration)),
+        });
+      }
+    } catch {
+      // Browsers expose different subsets of the Media Session API.
     }
   }, [playing, currentTime, duration, playbackRate, audio]);
 
@@ -624,6 +643,7 @@ function AudiobookDetailView({
   const [editChapter, setEditChapter] = useState<AudiobookChapter | null>(null);
   const [editChapterTitle, setEditChapterTitle] = useState('');
   const [editChapterSaving, setEditChapterSaving] = useState(false);
+  useBodyScrollLock(editBookOpen || Boolean(editChapter));
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -921,7 +941,7 @@ function AudiobookDetailView({
       {/* Edit Book Modal */}
       {editBookOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditBookOpen(false)}>
-          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 w-full max-w-lg mx-4" onClick={(e) => e.stopPropagation()}>
+          <div className="mx-4 max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto overscroll-contain rounded-xl border border-slate-700 bg-slate-800 p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-white mb-4">Edit Audiobook</h3>
             <div className="space-y-3">
               <label className="block">

@@ -1,13 +1,15 @@
 import { db } from './db.js';
 import type { Role } from './store.js';
+import { clientAuditMeta, type ClientInfo } from './clientInfo.js';
 
 export type DbUser = {
   id: string;
   email: string;
-  password_hash: string;
+  password_hash: string | null;
   role: Role;
   session_version: number;
   avatar_path?: string | null;
+  google_id?: string | null;
 };
 
 export async function countUsers() {
@@ -25,10 +27,75 @@ export async function getUserByEmail(email: string) {
 
 export async function getUserById(id: string) {
   const r = await db().query<DbUser>(
-    'select id, email, password_hash, role, session_version, avatar_path from users where id=$1',
+    'select id, email, password_hash, role, session_version, avatar_path, google_id from users where id=$1',
     [id]
   );
   return r.rows[0] ?? null;
+}
+
+export async function markUserActive(userId: string, ip: string) {
+  await db().query(
+    'update users set last_seen_at=now(), last_seen_ip=$2 where id=$1',
+    [userId, ip]
+  );
+}
+
+export async function touchClientActivity(userId: string, ip: string, client: ClientInfo) {
+  await db().query(
+    `
+    insert into user_client_activity (
+      user_id, client_id, client_type, app_version, device_name,
+      platform, user_agent, first_seen_at, last_seen_at, last_seen_ip
+    )
+    values ($1, $2, $3, $4, $5, $6, $7, now(), now(), $8)
+    on conflict (user_id, client_id) do update set
+      client_type = excluded.client_type,
+      app_version = coalesce(excluded.app_version, user_client_activity.app_version),
+      device_name = coalesce(excluded.device_name, user_client_activity.device_name),
+      platform = coalesce(excluded.platform, user_client_activity.platform),
+      user_agent = coalesce(excluded.user_agent, user_client_activity.user_agent),
+      last_seen_at = now(),
+      last_seen_ip = excluded.last_seen_ip
+    `,
+    [
+      userId,
+      client.id,
+      client.type,
+      client.version,
+      client.device,
+      client.platform,
+      client.userAgent,
+      ip,
+    ]
+  );
+}
+
+export async function ensureSessionLogin(params: {
+  email: string;
+  method: 'password' | 'google';
+  sessionIat: number;
+  ip?: string | null;
+  client?: ClientInfo;
+}) {
+  const clientMeta = params.client ? clientAuditMeta(params.client) : {};
+  await db().query(
+    `
+    insert into audit_events(ts, event, meta)
+    values (
+      to_timestamp($1),
+      'login_ok',
+      jsonb_build_object(
+        'email', $2::text,
+        'method', $3::text,
+        'sessionIat', $1::bigint
+      )
+      || case when $4::text is null then '{}'::jsonb else jsonb_build_object('ip', $4::text) end
+      || $5::jsonb
+    )
+    on conflict do nothing
+    `,
+    [params.sessionIat, params.email, params.method, params.ip ?? null, JSON.stringify(clientMeta)]
+  );
 }
 
 export async function createUser(params: { id: string; email: string; passwordHash: string; role: Role }) {

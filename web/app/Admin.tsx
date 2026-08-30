@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   adminCreateUser,
   adminDeleteUser,
@@ -16,13 +16,24 @@ import {
   listLibraries,
   setUserLibraries,
   getScanProgress,
+  createAdminBackup,
+  deleteAdminBackup,
+  downloadAdminBackup,
+  listAdminBackups,
+  restoreAdminBackup,
+  uploadAdminBackup,
+  type AdminBackup,
+  type AdminBackupJob,
   type ScanProgress,
 } from './apiClient';
 import { useAuth } from './store';
 import { showConfirm } from './ConfirmModal';
-import { useScanProgress, useLibraryUpdates, useAdminPending } from './useWebSocket';
+import { useScanProgress, useLibraryUpdates, useAdminPending, useBackupUpdates } from './useWebSocket';
+import { AdminUserAudit } from './AdminUserAudit';
+import { AdminPlugins } from './AdminPlugins';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
-type Tab = 'library' | 'users' | 'settings' | 'device-logs' | 'notifications';
+type Tab = 'library' | 'users' | 'user-audit' | 'plugins' | 'settings' | 'device-logs' | 'notifications';
 
 export function Admin() {
   const token = useAuth((s) => s.token);
@@ -54,6 +65,16 @@ export function Admin() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 11a4 4 0 100-8 4 4 0 000 8z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M22 21v-2a4 4 0 00-3-3.87" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 3.13a4 4 0 010 7.75" />
+            </svg>
+          )},
+          { id: 'user-audit' as Tab, label: 'User Audit', icon: (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 19V9m5 10V5m5 14v-7m5 7V3" />
+            </svg>
+          )},
+          { id: 'plugins' as Tab, label: 'Plugins', icon: (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.5 3v4.5H4a1 1 0 00-1 1V12h3a2 2 0 110 4H3v3.5a1 1 0 001 1h4.5V17a2 2 0 114 0v3.5H17a1 1 0 001-1V15h1.5a2 2 0 100-4H18V8.5a1 1 0 00-1-1h-4.5V3a2 2 0 10-4 0z" />
             </svg>
           )},
           { id: 'settings' as Tab, label: 'Settings', icon: (
@@ -91,7 +112,9 @@ export function Admin() {
       {/* Tab Content */}
       {activeTab === 'library' && <LibraryTab token={token} clear={clear} />}
       {activeTab === 'users' && <UsersTab token={token} clear={clear} currentUserId={user?.id} />}
-      {activeTab === 'settings' && <SettingsTab token={token} />}
+      {activeTab === 'user-audit' && <AdminUserAudit token={token} clear={clear} />}
+      {activeTab === 'plugins' && <AdminPlugins token={token} />}
+      {activeTab === 'settings' && <SettingsTab token={token} clear={clear} />}
       {activeTab === 'device-logs' && <DeviceLogsTab token={token} />}
       {activeTab === 'notifications' && <NotificationsTab token={token} />}
     </div>
@@ -111,6 +134,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
   const [showForceConfirm, setShowForceConfirm] = useState(false);
   const [showDeleteLibraryConfirm, setShowDeleteLibraryConfirm] = useState(false);
   const [libraryToDelete, setLibraryToDelete] = useState<any | null>(null);
+  useBodyScrollLock(showForceConfirm || (showDeleteLibraryConfirm && Boolean(libraryToDelete)));
 
   // Live updates from WebSocket
   const wsScanProgress = useScanProgress();
@@ -144,13 +168,15 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
     setScanProgress((prev) => ({
       ...prev,
       ok: true,
-      status: wsScanProgress.status === 'indexing' ? 'indexing' : (wsScanProgress.scanning ? 'scanning' : 'idle'),
+      status: (wsScanProgress.status || (wsScanProgress.scanning ? 'scanning' : 'idle')) as ScanProgress['status'],
       mountPath: wsScanProgress.mountPath || prev?.mountPath,
       libraryIndex: wsScanProgress.libraryIndex || prev?.libraryIndex,
       libraryTotal: wsScanProgress.libraryTotal || prev?.libraryTotal,
       filesProcessed: wsScanProgress.filesProcessed,
       filesFound: wsScanProgress.filesFound,
       currentFile: wsScanProgress.currentFile,
+      error: wsScanProgress.error || undefined,
+      failedFiles: wsScanProgress.failedFiles,
     }));
 
     // Reset triggered flag when scan completes
@@ -160,7 +186,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
   }, [wsScanProgress]);
 
   useEffect(() => {
-    if (scanProgress?.status === 'idle') setScanCanceling(false);
+    if (scanProgress?.status === 'idle' || scanProgress?.status === 'error') setScanCanceling(false);
   }, [scanProgress?.status]);
 
   // Live updates: Refresh stats and activity when library changes (throttled)
@@ -323,14 +349,24 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
 
       {/* Scan Progress Banner */}
       {(scanTriggered || (scanProgress && scanProgress.status !== 'idle')) && (
-        <div className="p-4 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 rounded-xl">
+        <div className={`p-4 border rounded-xl ${
+          scanProgress?.status === 'error'
+            ? 'bg-red-500/10 border-red-500/30'
+            : 'bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border-cyan-500/20'
+        }`}>
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-cyan-500/20 rounded-full flex items-center justify-center">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                scanProgress?.status === 'error' ? 'bg-red-500/20' : 'bg-cyan-500/20'
+              }`}>
                 {scanProgress?.status === 'scanning' || scanTriggered ? (
                   <svg className="w-5 h-5 text-cyan-400 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : scanProgress?.status === 'error' ? (
+                  <svg className="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86l-8.82 15.28A2 2 0 003.2 22h17.6a2 2 0 001.73-2.86L13.71 3.86a2 2 0 00-3.42 0z" />
                   </svg>
                 ) : (
                   <svg className="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -344,12 +380,16 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                     ? 'Starting Scan...' 
                     : scanProgress?.status === 'scanning' 
                       ? 'Scanning Library...' 
-                      : 'Indexing...'}
+                      : scanProgress?.status === 'error'
+                        ? 'Library Scan Failed'
+                        : 'Indexing...'}
                 </div>
                 <div className="text-sm text-slate-400">
                   {scanTriggered && (!scanProgress || scanProgress.status === 'idle')
                     ? 'Waiting for worker to start...'
-                    : <>
+                    : scanProgress?.status === 'error'
+                      ? (scanProgress.error || 'The scan could not be completed.')
+                      : <>
                         {scanProgress?.mountPath ? <span>Library: <span className="text-slate-200">{scanProgress.mountPath}</span></span> : null}
                         {scanProgress?.libraryIndex && scanProgress?.libraryTotal ? (
                           <span className="ml-2">({scanProgress.libraryIndex}/{scanProgress.libraryTotal})</span>
@@ -371,7 +411,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                   {Math.round((scanProgress.filesProcessed / scanProgress.filesFound) * 100)}%
                 </div>
               )}
-              {(scanTriggered || (scanProgress && scanProgress.status !== 'idle')) && (
+              {(scanTriggered || scanProgress?.status === 'scanning' || scanProgress?.status === 'indexing') && (
                 <button
                   onClick={async () => {
                     try {
@@ -393,7 +433,9 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
           {/* Progress Bar */}
           <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
             <div 
-              className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-300"
+              className={`h-full transition-all duration-300 ${
+                scanProgress?.status === 'error' ? 'bg-red-500' : 'bg-gradient-to-r from-cyan-500 to-blue-500'
+              }`}
               style={{ width: `${scanProgress && scanProgress.filesFound > 0 ? (scanProgress.filesProcessed / scanProgress.filesFound) * 100 : 0}%` }}
             />
           </div>
@@ -551,6 +593,9 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
               </div>
               <code className="flex-1 text-sm text-slate-300 font-mono">{lib.mount_path}</code>
               <div className="flex items-center gap-2">
+                <span className="text-xs px-2 py-1 rounded-md bg-slate-700/30 text-slate-300 border border-slate-700/40">
+                  {lib.media_type === 'audiobook' ? 'audiobooks' : 'music'}
+                </span>
                 {lib.mounted === false ? (
                   <span className="text-xs px-2 py-1 rounded-md bg-red-500/10 text-red-400 border border-red-500/20">unmounted</span>
                 ) : (
@@ -627,7 +672,11 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
 function UsersTab({ token, clear, currentUserId }: { token: string; clear: () => void; currentUserId?: string }) {
   const [users, setUsers] = useState<Array<{ id: string; email: string; role: string; avatar_path?: string }>>([]);
   const [pendingUsers, setPendingUsers] = useState<Array<{ id: string; email: string; created_at: string; avatar_path?: string }>>([]);
-  const [libraries, setLibraries] = useState<Array<{ id: number; mount_path: string }>>([]);
+  const [libraries, setLibraries] = useState<Array<{
+    id: number;
+    mount_path: string;
+    media_type: 'music' | 'audiobook';
+  }>>([]);
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [userLibraryIds, setUserLibraryIds] = useState<number[]>([]);
   const [newEmail, setNewEmail] = useState('');
@@ -1153,6 +1202,9 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
                             <div className={`font-mono text-sm truncate ${hasAccess ? 'text-white' : 'text-slate-400'}`}>
                               {lib.mount_path}
                             </div>
+                            <div className="text-[10px] uppercase text-slate-500 mt-1">
+                              {lib.media_type === 'audiobook' ? 'Audiobooks' : 'Music'}
+                            </div>
                           </div>
                           <div className={`text-xs px-2 py-0.5 rounded ${
                             hasAccess ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-500'
@@ -1210,8 +1262,322 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
   );
 }
 
+// ============ Backup Settings ============
+function BackupSettings({ token, clear }: { token: string; clear: () => void }) {
+  const [includeCaches, setIncludeCaches] = useState(false);
+  const [restoreCaches, setRestoreCaches] = useState(false);
+  const [backups, setBackups] = useState<AdminBackup[]>([]);
+  const [creating, setCreating] = useState<AdminBackupJob | null>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const backupLastUpdate = useBackupUpdates((state) => state.lastUpdate);
+
+  function formatBytes(bytes: number) {
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let value = bytes / 1024;
+    let unit = units[0];
+    for (let index = 1; index < units.length && value >= 1024; index += 1) {
+      value /= 1024;
+      unit = units[index];
+    }
+    return `${value.toFixed(value >= 10 ? 1 : 2)} ${unit}`;
+  }
+
+  function formatDate(value: string) {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString() : value;
+  }
+
+  const loadBackups = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
+    try {
+      const result = await listAdminBackups(token);
+      setBackups(result.backups);
+      setCreating(result.creating);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load backups');
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void loadBackups(backupLastUpdate === 0);
+  }, [backupLastUpdate, loadBackups]);
+
+  useEffect(() => {
+    if (!creating) return;
+    const timer = window.setInterval(() => void loadBackups(false), 3000);
+    return () => window.clearInterval(timer);
+  }, [creating, loadBackups]);
+
+  async function startBackup() {
+    setError(null);
+    try {
+      const result = await createAdminBackup(token, includeCaches);
+      setCreating(result.job);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backup failed');
+    }
+  }
+
+  async function uploadBackup() {
+    if (!uploadFile) return;
+    setUploading(true);
+    setError(null);
+    try {
+      await uploadAdminBackup(token, uploadFile);
+      setUploadFile(null);
+      await loadBackups(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backup upload failed');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function downloadBackup(backup: AdminBackup) {
+    setDownloading(backup.name);
+    setError(null);
+    try {
+      await downloadAdminBackup(token, backup.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backup download failed');
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  async function deleteBackup(backup: AdminBackup) {
+    const confirmed = await showConfirm({
+      title: 'Delete server backup?',
+      message: `Delete ${backup.name} from this MVBar server? Download it first if you need to keep a copy.`,
+      confirmLabel: 'Delete backup',
+      danger: true,
+    });
+    if (!confirmed) return;
+    setDeleting(backup.name);
+    setError(null);
+    try {
+      await deleteAdminBackup(token, backup.name);
+      setBackups((current) => current.filter((item) => item.name !== backup.name));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backup deletion failed');
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  async function restoreBackup(backup: AdminBackup) {
+    const confirmed = await showConfirm({
+      title: 'Replace the MVBar database?',
+      message: `This restores ${backup.name}, replacing the current database. Library roots will be mapped to this server's configured folders. ${restoreCaches && backup.includesCaches ? 'Included cache files will also be copied.' : 'Cache files will not be restored.'} Everyone will be signed out.`,
+      confirmLabel: 'Restore backup',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    setRestoring(backup.name);
+    setError(null);
+    try {
+      const result = await restoreAdminBackup(token, backup.name, restoreCaches);
+      await showConfirm({
+        title: 'Restore complete',
+        message: `Restored ${result.rows.toLocaleString()} database rows across ${result.tables} tables${result.cachesRestored ? ` and ${result.cacheFiles.toLocaleString()} cache files` : ''}.${result.reindexQueued ? ' A full library scan was queued to rebuild search.' : ''}${result.warning ? ` Warning: ${result.warning}.` : ''} Sign in with an administrator account from the restored backup.`,
+        confirmLabel: 'Go to sign in',
+        cancelLabel: '',
+      });
+      clear();
+      window.location.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Restore failed');
+      setRestoring(null);
+    }
+  }
+
+  return (
+    <section className="space-y-5 rounded-xl border border-slate-700/30 bg-slate-800/30 p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-white">Backup and restore</h3>
+          <p className="mt-1 text-sm text-slate-400">
+            Backups are created and retained by this server, and remain portable across Docker, Windows, and Linux.
+          </p>
+        </div>
+        <button
+          onClick={() => void loadBackups(true)}
+          disabled={loading}
+          className="shrink-0 rounded-lg bg-slate-700 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-600 disabled:opacity-50"
+        >
+          Refresh list
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="space-y-4 rounded-xl border border-slate-700/50 bg-slate-900/30 p-5">
+          <div>
+            <h4 className="font-semibold text-white">Create server backup</h4>
+            <p className="text-sm text-slate-400 mt-1">
+              The database is always included: users, settings, playlists, listening data, podcasts, and the library catalog.
+            </p>
+          </div>
+
+          <label className="flex items-start gap-3 rounded-xl border border-slate-700/50 bg-slate-900/30 p-4 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={includeCaches}
+              onChange={(event) => setIncludeCaches(event.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-cyan-500"
+            />
+            <span>
+              <span className="block text-sm font-medium text-slate-200">Include generated and downloaded caches</span>
+              <span className="block text-xs text-slate-500 mt-1">
+                Optional and disabled by default. Includes artwork, lyrics, avatars, HLS, and downloaded podcast files; it can make the backup much larger.
+              </span>
+            </span>
+          </label>
+
+          <div className="rounded-xl bg-slate-900/40 px-4 py-3 text-xs text-slate-500">
+            Not included: music/audiobook source files, config.env, deployment secrets, Redis sessions, or the Meilisearch index.
+          </div>
+
+          <button
+            onClick={startBackup}
+            disabled={Boolean(creating || restoring || uploading)}
+            className="w-full rounded-lg bg-cyan-600 px-4 py-2.5 font-medium text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {creating ? 'Backup running on server…' : 'Create backup'}
+          </button>
+          {creating && (
+            <div className="flex items-center gap-3 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-cyan-300 border-t-transparent" />
+              Started {formatDate(creating.startedAt)}{creating.includeCaches ? ' with caches' : ''}. You may leave this page.
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-4 rounded-xl border border-slate-700/50 bg-slate-900/30 p-5">
+          <div>
+            <h4 className="font-semibold text-white">Upload portable backup</h4>
+            <p className="text-sm text-slate-400 mt-1">
+              Add an archive from another MVBar installation to this server. It will appear in the backup list after validation.
+            </p>
+          </div>
+
+          <label className="block rounded-xl border border-dashed border-slate-600 bg-slate-900/30 p-4 cursor-pointer hover:border-cyan-500/60 transition-colors">
+            <span className="block text-sm font-medium text-slate-200">Choose .mvbar-backup file</span>
+            <span className="block text-xs text-slate-500 mt-1 truncate">
+              {uploadFile ? `${uploadFile.name} · ${formatBytes(uploadFile.size)}` : 'No file selected'}
+            </span>
+            <input
+              type="file"
+              accept=".mvbar-backup,application/zip"
+              onChange={(event) => {
+                setUploadFile(event.target.files?.[0] ?? null);
+                setError(null);
+              }}
+              className="sr-only"
+            />
+          </label>
+
+          <button
+            onClick={uploadBackup}
+            disabled={!uploadFile || uploading || Boolean(creating || restoring)}
+            className="w-full rounded-lg bg-slate-700 px-4 py-2.5 font-medium text-white transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {uploading ? 'Uploading and validating…' : 'Upload to server'}
+          </button>
+        </div>
+      </div>
+
+      <label className="flex items-start gap-3 rounded-xl border border-slate-700/50 bg-slate-900/30 p-4 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={restoreCaches}
+          onChange={(event) => setRestoreCaches(event.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-cyan-500"
+        />
+        <span>
+          <span className="block text-sm font-medium text-slate-200">Restore caches when available</span>
+          <span className="block text-xs text-slate-500 mt-1">
+            Disabled by default. This applies when Restore is selected below; database data is always restored.
+          </span>
+        </span>
+      </label>
+
+      <div className="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900/30">
+        <div className="border-b border-slate-700/50 px-4 py-3">
+          <h4 className="font-semibold text-white">Backups available on this server</h4>
+          <p className="mt-1 text-xs text-slate-500">New backups appear automatically when the server finishes creating them.</p>
+        </div>
+        {loading ? (
+          <div className="flex items-center justify-center gap-3 px-4 py-10 text-sm text-slate-400">
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-400 border-t-transparent" />
+            Loading backups…
+          </div>
+        ) : backups.length === 0 ? (
+          <div className="px-4 py-10 text-center text-sm text-slate-500">No server backups yet.</div>
+        ) : (
+          <div className="divide-y divide-slate-700/50">
+            {backups.map((backup) => (
+              <div key={backup.name} className="flex flex-col gap-3 px-4 py-4 xl:flex-row xl:items-center">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-100" title={backup.name}>{backup.name}</p>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                    <span>{formatDate(backup.createdAt)}</span>
+                    <span>{formatBytes(backup.size)}</span>
+                    <span>{backup.includesCaches ? `Caches included (${formatBytes(backup.cacheBytes)})` : 'Database only'}</span>
+                    <span>MVBar {backup.appVersion}</span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => void downloadBackup(backup)}
+                    disabled={downloading === backup.name || Boolean(restoring || deleting)}
+                    className="rounded-lg bg-slate-700 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-600 disabled:opacity-50"
+                  >
+                    {downloading === backup.name ? 'Downloading…' : 'Download'}
+                  </button>
+                  <button
+                    onClick={() => void restoreBackup(backup)}
+                    disabled={Boolean(creating || restoring || deleting || uploading)}
+                    className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 transition-colors hover:bg-amber-500/20 disabled:opacity-50"
+                  >
+                    {restoring === backup.name ? 'Restoring…' : 'Restore'}
+                  </button>
+                  <button
+                    onClick={() => void deleteBackup(backup)}
+                    disabled={deleting === backup.name || Boolean(restoring)}
+                    className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300 transition-colors hover:bg-red-500/20 disabled:opacity-50"
+                  >
+                    {deleting === backup.name ? 'Deleting…' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-200/80">
+        Restore replaces the current database and signs out every user. Current library roots are mapped onto this installation, and the archive must contain at least one administrator.
+      </div>
+    </section>
+  );
+}
+
 // ============ Settings Tab ============
-function SettingsTab({ token }: { token: string }) {
+function SettingsTab({ token, clear }: { token: string; clear: () => void }) {
   const [bypassIPs, setBypassIPs] = useState<string[]>([]);
   const [myIP, setMyIP] = useState<string>('');
   const [newIP, setNewIP] = useState('');
@@ -1267,6 +1633,8 @@ function SettingsTab({ token }: { token: string }) {
 
   return (
     <div className="space-y-6">
+      <BackupSettings token={token} clear={clear} />
+
       {/* Rate Limit Bypass */}
       <div className="p-6 bg-slate-800/30 border border-slate-700/30 rounded-xl">
         <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
@@ -1346,16 +1714,16 @@ function DeviceLogsTab({ token }: { token: string }) {
   const [filter, setFilter] = useState('');
   const [uploadUrl, setUploadUrl] = useState('');
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     setLoading(true);
     try {
       const data = await apiFetch('/admin/device-logs', { method: 'GET' }, token);
       if (data.ok) setLogs(data.logs);
     } catch { /* */ }
     setLoading(false);
-  };
+  }, [token]);
 
-  useEffect(() => { fetchLogs(); }, []);
+  useEffect(() => { void fetchLogs(); }, [fetchLogs]);
 
   useEffect(() => {
     const proto = window.location.protocol;
@@ -1531,7 +1899,7 @@ function NotificationsTab({ token }: { token: string }) {
   const [events, setEvents] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const data = await apiFetch('/telegram/settings', { method: 'GET' }, token);
@@ -1545,9 +1913,9 @@ function NotificationsTab({ token }: { token: string }) {
       }
     } catch { /* */ }
     setLoading(false);
-  }
+  }, [token]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   async function save() {
     setSaving(true);

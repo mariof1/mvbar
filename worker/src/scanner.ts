@@ -132,8 +132,8 @@ export async function runScan(mountPath: string, musicDir: string, jobId: number
       let art: { relPath: string; mime: string; hash: string } | null = null;
       if (tags.artData && tags.artMime) {
         try {
-          const { writeArt } = await import('./art.js');
-          const w = await writeArt(artDir, tags.artData, tags.artMime);
+          const { writeMusicArt } = await import('./art.js');
+          const w = await writeMusicArt(artDir, tags.artData);
           art = { relPath: w.relPath, mime: w.mime, hash: w.hash };
         } catch {
           // ignore art failures

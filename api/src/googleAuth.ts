@@ -10,6 +10,8 @@ import { db } from './db.js';
 import { config } from './config.js';
 import { notifyAdmins } from './telegram.js';
 import { broadcastToAdmins } from './websocket.js';
+import * as users from './userRepo.js';
+import { clientInfoFromRequest } from './clientInfo.js';
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
@@ -89,10 +91,13 @@ async function downloadAvatar(url: string, userId: string): Promise<string | nul
 }
 
 // Generate JWT token (same as auth.ts)
-function signJwt(payload: object, expiresInSeconds = 86400 * 7): string {
+function signJwt(
+  payload: object,
+  expiresInSeconds = 86400 * 7,
+  issuedAt = Math.floor(Date.now() / 1000)
+): string {
   const header = { alg: 'HS256', typ: 'JWT' };
-  const now = Math.floor(Date.now() / 1000);
-  const fullPayload = { ...payload, iat: now, exp: now + expiresInSeconds };
+  const fullPayload = { ...payload, iat: issuedAt, exp: issuedAt + expiresInSeconds };
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
   const unsigned = `${b64(header)}.${b64(fullPayload)}`;
   const sig = crypto.createHmac('sha256', JWT_SECRET).update(unsigned).digest('base64url');
@@ -246,12 +251,26 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
         }
 
         // Generate JWT token
+        const issuedAt = Math.floor(Date.now() / 1000);
         const token = signJwt({
           sub: user.id,
           email: user.email,
           role: user.role,
           sv: user.session_version,
-        });
+          amr: 'google',
+        }, undefined, issuedAt);
+        const clientInfo = clientInfoFromRequest(request);
+        await Promise.all([
+          users.ensureSessionLogin({
+            email: user.email,
+            method: 'google',
+            sessionIat: issuedAt,
+            ip: request.ip,
+            client: clientInfo,
+          }),
+          users.markUserActive(user.id, request.ip),
+          users.touchClientActivity(user.id, request.ip, clientInfo),
+        ]);
 
         // Set cookie and redirect
         reply.setCookie(config.cookieName, token, {
@@ -275,6 +294,9 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
     '/api/avatars/:filename',
     async (request, reply) => {
       const { filename } = request.params;
+      if (path.basename(filename) !== filename) {
+        return reply.status(404).send({ error: 'Avatar not found' });
+      }
       const filepath = path.join(AVATARS_DIR, filename);
 
       try {
@@ -646,12 +668,26 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
         }
 
         // Generate JWT token
+        const issuedAt = Math.floor(Date.now() / 1000);
         const token = signJwt({
           sub: user.id,
           email: user.email,
           role: user.role,
           sv: user.session_version,
-        });
+          amr: 'google',
+        }, undefined, issuedAt);
+        const clientInfo = clientInfoFromRequest(request);
+        await Promise.all([
+          users.ensureSessionLogin({
+            email: user.email,
+            method: 'google',
+            sessionIat: issuedAt,
+            ip: request.ip,
+            client: clientInfo,
+          }),
+          users.markUserActive(user.id, request.ip),
+          users.touchClientActivity(user.id, request.ip, clientInfo),
+        ]);
 
         return {
           ok: true,
@@ -752,15 +788,44 @@ export async function syncGoogleAvatars(logger?: { info: (...args: any[]) => voi
   log.info('Avatar sync: complete');
 }
 
+export async function reconcileMissingAvatars(
+  logger?: { info: (...args: any[]) => void; error: (...args: any[]) => void },
+): Promise<void> {
+  const log = logger || console;
+  try {
+    const result = await db().query<{ id: string; avatar_path: string }>(
+      'SELECT id, avatar_path FROM users WHERE avatar_path IS NOT NULL',
+    );
+    let cleared = 0;
+    for (const user of result.rows) {
+      const filename = user.avatar_path;
+      const isSafeFilename = path.basename(filename) === filename;
+      try {
+        if (!isSafeFilename) throw new Error('Unsafe avatar path');
+        const avatarStat = await stat(path.join(AVATARS_DIR, filename));
+        if (avatarStat.isFile()) continue;
+      } catch {
+        await db().query('UPDATE users SET avatar_path = NULL WHERE id = $1', [user.id]);
+        cleared += 1;
+      }
+    }
+    if (cleared > 0) log.info(`Avatar cache reconciliation: cleared ${cleared} missing references`);
+  } catch (err: any) {
+    log.error(`Avatar cache reconciliation failed: ${err.message}`);
+  }
+}
+
 // Start avatar sync scheduler (runs daily)
 let syncInterval: NodeJS.Timeout | null = null;
 
 export function startAvatarSyncScheduler(logger?: { info: (...args: any[]) => void; error: (...args: any[]) => void }): void {
+  const log = logger || console;
+  void reconcileMissingAvatars(log);
+
   if (!isGoogleOAuthEnabled()) {
     return;
   }
 
-  const log = logger || console;
   const SYNC_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
   // Run initial sync after 5 minutes (let server stabilize)

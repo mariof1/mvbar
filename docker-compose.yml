@@ -30,10 +30,25 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL:-}
+      WEB_PUSH_ENABLED: ${WEB_PUSH_ENABLED:-false}
+      WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:-}
+      WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
+      WEB_PUSH_VAPID_SUBJECT: ${WEB_PUSH_VAPID_SUBJECT:-}
+      BACKUP_MAX_UPLOAD_MB: ${BACKUP_MAX_UPLOAD_MB:-20480}
+      BACKUP_DIR: /data/backups
+      PLUGINS_ENABLED: ${PLUGINS_ENABLED:-true}
+      PLUGINS_DIR: /data/plugins
+      PLUGIN_MAX_UPLOAD_MB: ${PLUGIN_MAX_UPLOAD_MB:-50}
+      PLUGIN_TIMEOUT_MS: ${PLUGIN_TIMEOUT_MS:-15000}
+      PLUGIN_MEMORY_MB: ${PLUGIN_MEMORY_MB:-64}
+      PLUGIN_MAX_CONCURRENCY: ${PLUGIN_MAX_CONCURRENCY:-4}
 
       # worker
       MUSIC_DIRS: /music
       AUDIOBOOK_DIRS: /audiobooks
+      UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-32}
+      SCAN_CONCURRENCY: ${SCAN_CONCURRENCY:-25}
+      METADATA_TIMEOUT_MS: ${METADATA_TIMEOUT_MS:-300000}
       TEMPO_DETECT: ${TEMPO_DETECT:-0}
       TEMPO_MODE: ${TEMPO_MODE:-batch}
       TEMPO_METHOD: ${TEMPO_METHOD:-energy}
@@ -60,6 +75,8 @@ services:
       - caddy_data:/data/caddy
       - caddy_config:/config/caddy
       - cache:/data/cache
+      - backups:/data/backups
+      - plugins:/data/plugins
       - device_logs:/data/device-logs
       - hls:/hls
       - podcasts:/podcasts
@@ -78,6 +95,8 @@ volumes:
   caddy_data:
   caddy_config:
   cache:
+  backups:
+  plugins:
   device_logs:
   hls:
   podcasts:

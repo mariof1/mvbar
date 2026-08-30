@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { meili } from './meili.js';
 import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
+import { asciiFold } from './asciiFold.js';
 
 // ============================================================================
 // GENRE TAXONOMY (shared with recommendations)
@@ -39,26 +40,37 @@ for (const fam of GENRE_FAMILIES) {
   }
 }
 
-// Country name normalization
+// Two-letter country codes are too ambiguous for implicit free-text parsing
+// (for example, "it", "us", and "no" are common words). They are supported
+// only through explicit syntax such as `country:it`.
+const COUNTRY_CODE_ALIASES: Record<string, string> = {
+  'us': 'USA', 'uk': 'United Kingdom',
+  'pl': 'Poland', 'de': 'Germany', 'fr': 'France', 'es': 'Spain',
+  'it': 'Italy', 'jp': 'Japan', 'kr': 'South Korea', 'br': 'Brazil',
+  'ru': 'Russia', 'nl': 'Netherlands', 'se': 'Sweden', 'no': 'Norway',
+  'au': 'Australia', 'ca': 'Canada', 'mx': 'Mexico',
+};
+
+// Country name normalization for unambiguous natural-language terms.
 const COUNTRY_ALIASES: Record<string, string> = {
-  'usa': 'USA', 'us': 'USA', 'united states': 'USA', 'america': 'USA',
-  'uk': 'United Kingdom', 'england': 'United Kingdom', 'britain': 'United Kingdom', 'great britain': 'United Kingdom',
-  'pl': 'Poland', 'polska': 'Poland',
-  'de': 'Germany', 'deutschland': 'Germany',
-  'fr': 'France', 'french': 'France',
-  'es': 'Spain', 'spanish': 'Spain', 'españa': 'Spain',
-  'it': 'Italy', 'italian': 'Italy', 'italia': 'Italy',
-  'jp': 'Japan', 'japanese': 'Japan', 'nippon': 'Japan',
-  'kr': 'South Korea', 'korean': 'South Korea', 'korea': 'South Korea',
-  'br': 'Brazil', 'brazilian': 'Brazil', 'brasil': 'Brazil',
-  'ru': 'Russia', 'russian': 'Russia',
-  'nl': 'Netherlands', 'dutch': 'Netherlands', 'holland': 'Netherlands',
-  'se': 'Sweden', 'swedish': 'Sweden',
-  'no': 'Norway', 'norwegian': 'Norway',
-  'au': 'Australia', 'australian': 'Australia',
-  'ca': 'Canada', 'canadian': 'Canada',
-  'mx': 'Mexico', 'mexican': 'Mexico',
-  'jamaican': 'Jamaica', 'jamaika': 'Jamaica',
+  'usa': 'USA', 'united states': 'USA', 'america': 'USA',
+  'united kingdom': 'United Kingdom', 'england': 'United Kingdom', 'britain': 'United Kingdom', 'british': 'United Kingdom', 'great britain': 'United Kingdom',
+  'poland': 'Poland', 'polska': 'Poland',
+  'germany': 'Germany', 'deutschland': 'Germany',
+  'france': 'France', 'french': 'France',
+  'spain': 'Spain', 'spanish': 'Spain', 'españa': 'Spain',
+  'italy': 'Italy', 'italian': 'Italy', 'italia': 'Italy',
+  'japan': 'Japan', 'japanese': 'Japan', 'nippon': 'Japan',
+  'south korea': 'South Korea', 'korean': 'South Korea', 'korea': 'South Korea',
+  'brazil': 'Brazil', 'brazilian': 'Brazil', 'brasil': 'Brazil',
+  'russia': 'Russia', 'russian': 'Russia',
+  'netherlands': 'Netherlands', 'dutch': 'Netherlands', 'holland': 'Netherlands',
+  'sweden': 'Sweden', 'swedish': 'Sweden',
+  'norway': 'Norway', 'norwegian': 'Norway',
+  'australia': 'Australia', 'australian': 'Australia',
+  'canada': 'Canada', 'canadian': 'Canada',
+  'mexico': 'Mexico', 'mexican': 'Mexico',
+  'jamaica': 'Jamaica', 'jamaican': 'Jamaica', 'jamaika': 'Jamaica',
   'polish': 'Poland', 'polskie': 'Poland', 'polski': 'Poland',
   'german': 'Germany',
   'irish': 'Ireland', 'scottish': 'Scotland', 'welsh': 'Wales',
@@ -91,7 +103,7 @@ interface ParsedQuery {
   decade: string | null;       // Decade label
 }
 
-function parseQuery(q: string): ParsedQuery {
+export function parseQuery(q: string): ParsedQuery {
   let textQuery = q.trim().toLowerCase();
   const result: ParsedQuery = {
     textQuery: q.trim(),
@@ -124,22 +136,40 @@ function parseQuery(q: string): ParsedQuery {
     textQuery = textQuery.replace(new RegExp(`\\b${yearMatch[1]}\\b`), '').trim();
   }
 
-  // Check for country (with aliases)
-  const words = textQuery.split(/\s+/);
-  for (let i = 0; i < words.length; i++) {
-    // Try 2-word combos first
-    if (i < words.length - 1) {
-      const twoWord = `${words[i]} ${words[i + 1]}`.toLowerCase();
-      if (COUNTRY_ALIASES[twoWord]) {
-        result.country = COUNTRY_ALIASES[twoWord];
-        textQuery = textQuery.replace(new RegExp(`\\b${words[i]}\\s+${words[i + 1]}\\b`, 'i'), '').trim();
-      }
-    }
-    // Single word
-    const normalized = COUNTRY_ALIASES[words[i].toLowerCase()];
-    if (normalized && !result.country) {
+  // Explicit country filters accept codes and names. Quoting is supported for
+  // multi-word names: country:it, country:italy, country:"united states".
+  const explicitCountryMatch = textQuery.match(/\bcountry\s*:\s*(?:"([^"]+)"|'([^']+)'|([^\s]+))/i);
+  if (explicitCountryMatch) {
+    const rawCountry = (explicitCountryMatch[1] ?? explicitCountryMatch[2] ?? explicitCountryMatch[3] ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/-/g, ' ');
+    const normalized = COUNTRY_CODE_ALIASES[rawCountry] ?? COUNTRY_ALIASES[rawCountry];
+    if (normalized) {
       result.country = normalized;
-      textQuery = textQuery.replace(new RegExp(`\\b${words[i]}\\b`, 'i'), '').trim();
+      const matchStart = explicitCountryMatch.index ?? 0;
+      textQuery = `${textQuery.slice(0, matchStart)} ${textQuery.slice(matchStart + explicitCountryMatch[0].length)}`.trim();
+    }
+  }
+
+  // Check for unambiguous country names and adjectives in natural text.
+  if (!result.country) {
+    const words = textQuery.split(/\s+/);
+    for (let i = 0; i < words.length; i++) {
+      // Try 2-word combos first
+      if (i < words.length - 1) {
+        const twoWord = `${words[i]} ${words[i + 1]}`.toLowerCase();
+        if (COUNTRY_ALIASES[twoWord]) {
+          result.country = COUNTRY_ALIASES[twoWord];
+          textQuery = textQuery.replace(new RegExp(`\\b${words[i]}\\s+${words[i + 1]}\\b`, 'i'), '').trim();
+        }
+      }
+      // Single word
+      const normalized = COUNTRY_ALIASES[words[i].toLowerCase()];
+      if (normalized && !result.country) {
+        result.country = normalized;
+        textQuery = textQuery.replace(new RegExp(`\\b${words[i]}\\b`, 'i'), '').trim();
+      }
     }
   }
 
@@ -266,6 +296,171 @@ function normalizeQuery(q: string): string {
   return q.toLowerCase().trim().replace(/\s+/g, ' ').replace(/['"]/g, '');
 }
 
+const SQL_FOLD_FROM = 'ĄĆĘŁŃÓŚŹŻąćęłńóśźż';
+const SQL_FOLD_TO = 'ACELNOSZZacelnoszz';
+
+function sqlFold(expr: string): string {
+  return `lower(translate(coalesce(${expr}, ''), '${SQL_FOLD_FROM}', '${SQL_FOLD_TO}'))`;
+}
+
+function entitySearchTerms(query: string): { lower: string; folded: string; stripped: string | null } | null {
+  const lower = query.toLowerCase().trim().replace(/\s+/g, ' ');
+  if (!lower) return null;
+
+  const folded = asciiFold(query).replace(/\s+/g, ' ').trim() || lower;
+  const stripped = folded.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+  return {
+    lower,
+    folded,
+    stripped: stripped && stripped !== folded ? stripped : null
+  };
+}
+
+function entityMatchCondition(fields: string[], terms: ReturnType<typeof entitySearchTerms>, params: any[], paramIndex: { value: number }): string | null {
+  if (!terms) return null;
+
+  const originalParam = paramIndex.value++;
+  const foldedParam = paramIndex.value++;
+  params.push(`%${terms.lower}%`, `%${terms.folded}%`);
+  const strippedParam = terms.stripped ? paramIndex.value++ : null;
+  if (terms.stripped) params.push(`%${terms.stripped}%`);
+
+  const parts = fields.flatMap((field) => {
+    const foldedField = sqlFold(field);
+    return [
+      `lower(coalesce(${field}, '')) like $${originalParam}`,
+      `${foldedField} like $${foldedParam}`,
+      ...(strippedParam ? [`regexp_replace(${foldedField}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}`] : [])
+    ];
+  });
+
+  return `(${parts.join(' or ')})`;
+}
+
+function uniquePodcastSearchTerms(q: string, parsedTextQuery: string): ReturnType<typeof entitySearchTerms>[] {
+  const seen = new Set<string>();
+  const candidates = [q, parsedTextQuery]
+    .map((value) => entitySearchTerms(value))
+    .filter((value): value is NonNullable<ReturnType<typeof entitySearchTerms>> => value !== null);
+
+  return candidates.filter((terms) => {
+    const key = terms.folded;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function searchPodcastEntities(userId: string, q: string, parsedTextQuery: string) {
+  const terms = uniquePodcastSearchTerms(q, parsedTextQuery);
+  if (terms.length === 0) return { podcasts: [], podcastEpisodes: [] };
+
+  const podcastParams: any[] = [userId];
+  const podcastIndex = { value: 2 };
+  const podcastConditions = terms
+    .map((term) => entityMatchCondition(['p.title', 'p.author', 'p.description'], term, podcastParams, podcastIndex))
+    .filter((condition): condition is string => Boolean(condition));
+
+  const episodeParams: any[] = [userId];
+  const episodeIndex = { value: 2 };
+  const episodeConditions = terms
+    .map((term) => entityMatchCondition(['e.title', 'p.title', 'e.description', 'p.description'], term, episodeParams, episodeIndex))
+    .filter((condition): condition is string => Boolean(condition));
+
+  if (podcastConditions.length === 0 && episodeConditions.length === 0) {
+    return { podcasts: [], podcastEpisodes: [] };
+  }
+
+  const [podcastsR, episodesR] = await Promise.all([
+    podcastConditions.length > 0
+      ? db().query(
+          `
+          select
+            p.id::int,
+            p.feed_url,
+            p.title,
+            p.author,
+            p.description,
+            p.image_url,
+            p.image_path,
+            p.link,
+            p.language,
+            p.last_fetched_at,
+            p.created_at,
+            sum(case when e.id is not null and coalesce(uep.played, false) = false then 1 else 0 end)::int as unplayed_count
+          from podcasts p
+          join user_podcast_subscriptions ups on ups.podcast_id = p.id and ups.user_id = $1
+          left join podcast_episodes e on e.podcast_id = p.id
+          left join user_episode_progress uep on uep.episode_id = e.id and uep.user_id = $1
+          where ${podcastConditions.join(' or ')}
+          group by p.id
+          order by
+            case
+              when ${sqlFold('p.title')} = replace($2, '%', '') then 0
+              when ${sqlFold('p.title')} like replace($2, '%', '') || '%' then 1
+              when ${sqlFold('p.title')} like $2 then 2
+              when ${sqlFold('p.author')} like $2 then 3
+              else 4
+            end,
+            p.title asc
+          limit 24
+        `,
+          podcastParams
+        )
+      : Promise.resolve({ rows: [] }),
+    episodeConditions.length > 0
+      ? db().query(
+          `
+          select
+            e.id::int,
+            e.podcast_id::int,
+            e.guid,
+            e.title,
+            e.description,
+            e.audio_url,
+            e.audio_type,
+            e.duration_ms,
+            e.file_size_bytes,
+            e.image_url,
+            e.image_path,
+            e.link,
+            e.published_at,
+            e.downloaded_path,
+            e.downloaded_at,
+            p.title as podcast_title,
+            p.image_url as podcast_image_url,
+            p.image_path as podcast_image_path,
+            coalesce(uep.position_ms, 0)::int as position_ms,
+            coalesce(uep.played, false) as played,
+            (e.downloaded_path is not null) as downloaded
+          from podcast_episodes e
+          join podcasts p on p.id = e.podcast_id
+          join user_podcast_subscriptions ups on ups.podcast_id = p.id and ups.user_id = $1
+          left join user_episode_progress uep on uep.episode_id = e.id and uep.user_id = $1
+          where ${episodeConditions.join(' or ')}
+          order by
+            case
+              when ${sqlFold('e.title')} = replace($2, '%', '') then 0
+              when ${sqlFold('e.title')} like replace($2, '%', '') || '%' then 1
+              when ${sqlFold('p.title')} = replace($2, '%', '') then 2
+              when ${sqlFold('p.title')} like replace($2, '%', '') || '%' then 3
+              when ${sqlFold('e.title')} like $2 then 4
+              when ${sqlFold('p.title')} like $2 then 5
+              when ${sqlFold('e.description')} like $2 then 6
+              else 7
+            end,
+            e.published_at desc nulls last,
+            e.created_at desc
+          limit 50
+        `,
+          episodeParams
+        )
+      : Promise.resolve({ rows: [] })
+  ]);
+
+  return { podcasts: podcastsR.rows, podcastEpisodes: episodesR.rows };
+}
+
 export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/search', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
@@ -276,7 +471,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
     const userId = req.user.userId;
 
     if (q.trim().length === 0) {
-      return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [] };
+      return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [], podcasts: [], podcastEpisodes: [] };
     }
 
     const index = meili().index('tracks');
@@ -397,6 +592,8 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
       const artists: any[] = [];
       const albums: any[] = [];
       const playlists: any[] = [];
+      let podcasts: any[] = [];
+      let podcastEpisodes: any[] = [];
 
       if (wantEntities) {
         // Artists
@@ -404,17 +601,20 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
           const params: any[] = [];
           let i = 1;
           const where: string[] = ["a.name is not null and a.name <> ''", "ta.role = 'artist'"];
+          const artistAsciiExpr = `lower(coalesce(nullif(a.ascii_name, ''), translate(coalesce(a.name, ''), '${SQL_FOLD_FROM}', '${SQL_FOLD_TO}')))`;
+          const terms = entitySearchTerms(entityTextQuery);
 
-          if (entityTextQuery.length > 0) {
-            const cleanQuery = entityTextQuery.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
-            params.push(`%${entityTextQuery.toLowerCase()}%`);
-            if (cleanQuery && cleanQuery !== entityTextQuery.toLowerCase()) {
-              params.push(`%${cleanQuery}%`);
-              where.push(`(lower(a.name) like $${i} or lower(regexp_replace(a.name, '[^a-zA-Z0-9 ]', '', 'g')) like $${i + 1})`);
-              i += 2;
-            } else {
-              where.push(`lower(a.name) like $${i++}`);
-            }
+          if (terms) {
+            const originalParam = i++;
+            const foldedParam = i++;
+            params.push(`%${terms.lower}%`, `%${terms.folded}%`);
+            const strippedParam = terms.stripped ? i++ : null;
+            if (terms.stripped) params.push(`%${terms.stripped}%`);
+            where.push(`(
+              lower(a.name) like $${originalParam}
+              or ${artistAsciiExpr} like $${foldedParam}
+              ${strippedParam ? `or regexp_replace(${artistAsciiExpr}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}` : ''}
+            )`);
           }
           if (allowed !== null) {
             params.push(allowed);
@@ -438,12 +638,15 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
             where.push(`exists (select 1 from unnest(string_to_array(coalesce(t.genre, ''), ';')) as g where lower(trim(g)) = any($${i++}))`);
           }
 
-          const orderBy = entityTextQuery.length > 0
+          const orderBy = terms
             ? `case
-                 when lower(a.name) = $1 then 0
-                 when lower(a.name) like $1 then 1
-                 when lower(a.name) like replace($1, '%', '') || '%' then 2
-                 else 3
+                 when lower(a.name) = replace($1, '%', '') then 0
+                 when ${artistAsciiExpr} = replace($2, '%', '') then 0
+                 when lower(a.name) like replace($1, '%', '') || '%' then 1
+                 when ${artistAsciiExpr} like replace($2, '%', '') || '%' then 1
+                 when lower(a.name) like $1 then 2
+                 when ${artistAsciiExpr} like $2 then 2
+                 else 4
                end, track_count desc, a.name asc`
             : 'track_count desc, a.name asc';
 
@@ -474,18 +677,24 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
           const params: any[] = [];
           let i = 1;
           const where: string[] = ["t.album is not null and t.album <> ''"];
+          const albumFoldExpr = sqlFold('t.album');
+          const albumArtistFoldExpr = sqlFold('coalesce(t.album_artist, t.artist)');
+          const terms = entitySearchTerms(entityTextQuery);
 
-          if (entityTextQuery.length > 0) {
-            const cleanQuery = entityTextQuery.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
-            params.push(`%${entityTextQuery.toLowerCase()}%`);
-            if (cleanQuery && cleanQuery !== entityTextQuery.toLowerCase()) {
-              params.push(`%${cleanQuery}%`);
-              where.push(`(lower(t.album) like $${i} or lower(coalesce(t.album_artist, t.artist)) like $${i} or lower(regexp_replace(t.album, '[^a-zA-Z0-9 ]', '', 'g')) like $${i + 1} or lower(regexp_replace(coalesce(t.album_artist, t.artist), '[^a-zA-Z0-9 ]', '', 'g')) like $${i + 1})`);
-              i += 2;
-            } else {
-              where.push(`(lower(t.album) like $${i} or lower(coalesce(t.album_artist, t.artist)) like $${i})`);
-              i++;
-            }
+          if (terms) {
+            const originalParam = i++;
+            const foldedParam = i++;
+            params.push(`%${terms.lower}%`, `%${terms.folded}%`);
+            const strippedParam = terms.stripped ? i++ : null;
+            if (terms.stripped) params.push(`%${terms.stripped}%`);
+            where.push(`(
+              lower(t.album) like $${originalParam}
+              or lower(coalesce(t.album_artist, t.artist)) like $${originalParam}
+              or ${albumFoldExpr} like $${foldedParam}
+              or ${albumArtistFoldExpr} like $${foldedParam}
+              ${strippedParam ? `or regexp_replace(${albumFoldExpr}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}` : ''}
+              ${strippedParam ? `or regexp_replace(${albumArtistFoldExpr}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}` : ''}
+            )`);
           }
           if (allowed !== null) {
             params.push(allowed);
@@ -556,27 +765,33 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
 
         // Playlists (name match only)
         if (entityTextQuery.length > 0) {
-          const pat = `%${entityTextQuery.toLowerCase()}%`;
-          const cleanQuery = entityTextQuery.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
-          const cleanPat = `%${cleanQuery}%`;
-          const useClean = cleanQuery && cleanQuery !== entityTextQuery.toLowerCase();
+          const terms = entitySearchTerms(entityTextQuery);
+          const playlistFoldExpr = sqlFold('name');
+          const playlistWhere = terms
+            ? `(lower(name) like $2 or ${playlistFoldExpr} like $3${terms.stripped ? ` or regexp_replace(${playlistFoldExpr}, '[^a-z0-9 ]', '', 'g') like $4` : ''})`
+            : 'false';
+          const playlistParams = terms
+            ? [userId, `%${terms.lower}%`, `%${terms.folded}%`, ...(terms.stripped ? [`%${terms.stripped}%`] : [])]
+            : [userId];
 
           const r = await db().query(
-            useClean
-              ? `select id::int, name, created_at from playlists where user_id = $1 and (lower(name) like $2 or lower(regexp_replace(name, '[^a-zA-Z0-9 ]', '', 'g')) like $3) order by id desc limit 12`
-              : `select id::int, name, created_at from playlists where user_id = $1 and lower(name) like $2 order by id desc limit 12`,
-            useClean ? [userId, pat, cleanPat] : [userId, pat]
+            `select id::int, name, created_at from playlists where user_id = $1 and ${playlistWhere} order by id desc limit 12`,
+            playlistParams
           );
           playlists.push(...r.rows.map((x: any) => ({ ...x, kind: 'playlist' })));
 
           const r2 = await db().query(
-            useClean
-              ? `select id::int, name, updated_at from smart_playlists where user_id = $1 and (lower(name) like $2 or lower(regexp_replace(name, '[^a-zA-Z0-9 ]', '', 'g')) like $3) order by updated_at desc limit 12`
-              : `select id::int, name, updated_at from smart_playlists where user_id = $1 and lower(name) like $2 order by updated_at desc limit 12`,
-            useClean ? [userId, pat, cleanPat] : [userId, pat]
+            `select id::int, name, updated_at from smart_playlists where user_id = $1 and ${playlistWhere} order by updated_at desc limit 12`,
+            playlistParams
           );
           playlists.push(...r2.rows.map((x: any) => ({ ...x, kind: 'smart' })));
         }
+      }
+
+      if (offset === 0) {
+        const podcastResults = await searchPodcastEntities(userId, q, parsed.textQuery);
+        podcasts = podcastResults.podcasts;
+        podcastEpisodes = podcastResults.podcastEpisodes;
       }
 
       // Log search for recommendations (only meaningful queries)
@@ -595,7 +810,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         if (!isPrefix) {
           await db().query(
             `INSERT INTO search_logs(user_id, query, query_normalized, result_count) VALUES ($1, $2, $3, $4)`,
-            [userId, q.trim(), normalized, res.estimatedTotalHits || 0]
+            [userId, q.trim(), normalized, (res.estimatedTotalHits || 0) + podcasts.length + podcastEpisodes.length]
           );
         }
       }
@@ -610,6 +825,8 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         artists,
         albums,
         playlists,
+        podcasts,
+        podcastEpisodes,
         parsed: {
           genreFamily: parsed.genreFamily,
           country: parsed.country,
@@ -620,7 +837,10 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('Index `tracks` not found')) {
-        return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [] };
+        const podcastResults = offset === 0
+          ? await searchPodcastEntities(userId, q, q)
+          : { podcasts: [], podcastEpisodes: [] };
+        return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [], ...podcastResults };
       }
       throw e;
     }

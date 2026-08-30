@@ -1,14 +1,11 @@
 import { stat } from 'node:fs/promises';
-import path from 'node:path';
 import { db } from './db.js';
 import logger from './logger.js';
 import { detectTempoBpm, type OnsetMethod } from './tempoDetector.js';
+import { resolveInside } from './pathSafety.js';
 
 function safeJoinMount(mountPath: string, relPath: string) {
-  const abs = path.resolve(mountPath, relPath);
-  const base = path.resolve(mountPath);
-  if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(mountPath, relPath);
 }
 
 const TEMPO_METHOD = (process.env.TEMPO_METHOD as OnsetMethod | undefined) ?? 'energy';

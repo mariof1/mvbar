@@ -9,7 +9,7 @@ import { UserManagementPanel } from './UserManagementPanel';
 import { LibraryManagementPanel } from './LibraryManagementPanel';
 import { Admin } from './Admin';
 import { SearchModal } from './SearchModal';
-import { ToastContainer } from './Toast';
+import { ToastContainer, useToastStore } from './Toast';
 import { ConfirmModal } from './ConfirmModal';
 import { Tracks } from './Tracks';
 import { Playlists } from './Playlists';
@@ -21,15 +21,27 @@ import { Podcasts, PodcastPlayer } from './Podcasts';
 import { Audiobooks, AudiobookPlayer } from './Audiobooks';
 import { Settings } from './Settings';
 import { RecentlyAdded } from './RecentlyAdded';
+import { Social } from './Social';
+import { ShareTrackDialog } from './ShareTrackDialog';
+import { MissingMusic } from './MissingMusic';
 import { useAuth } from './store';
 import { useFavorites } from './favoritesStore';
 import { usePlayer, type QueueTrack } from './playerStore';
+import {
+  MUSIC_AUDIO_ELEMENT_ID,
+  directMusicStreamUrl,
+  getMusicAudioElement,
+  reportMusicPlaybackFailure,
+} from './musicAudio';
 import { useUi } from './uiStore';
 import { useRouter, useRoute, initRouter, getTabFromRoute, type Route } from './router';
 import { NavigationHeader } from './NavigationHeader';
 import { usePreferences } from './preferencesStore';
 import { getHlsStatus, logout, recordPlay, recordSkip, requestHlsTranscode, scrobbleToListenBrainz, nowPlayingListenBrainz, prefetchLyrics, listPlaylists, addTrackToPlaylist, apiFetch } from './apiClient';
-import { useWebSocket, useAdminPending } from './useWebSocket';
+import { useWebSocket, useAdminPending, usePluginUpdates } from './useWebSocket';
+import { useSocialUpdates } from './socialStore';
+import { preparePushNotifications, unsubscribeCurrentPushDevice } from './pushNotifications';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 // Icons as simple SVG components
 const Icons = {
@@ -56,6 +68,16 @@ const Icons = {
   Heart: () => (
     <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" />
+    </svg>
+  ),
+  Social: () => (
+    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.742-.479 3 3 0 00-4.682-2.72m.94 3.198v.001c0 .732-.411 1.406-1.068 1.73A10.964 10.964 0 0112 21c-1.77 0-3.443-.417-4.925-1.158A1.928 1.928 0 016 18.12v-.002a4.5 4.5 0 018.5-2.063M15 7.5a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+    </svg>
+  ),
+  Share: () => (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.273.283.6.283.943s-.103.67-.283.943m0-1.886 9.566-5.064m-9.566 7.25 9.566 5.064m0-12.314a2.25 2.25 0 103.934-2.186 2.25 2.25 0 00-3.934 2.186zm0 12.314a2.25 2.25 0 103.934 2.186 2.25 2.25 0 00-3.934-2.186z" />
     </svg>
   ),
   Clock: () => (
@@ -209,6 +231,7 @@ function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: (
   const [lyricsType, setLyricsType] = useState<'synced' | 'unsynced' | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const activeLineRef = useRef<HTMLDivElement>(null);
+  useBodyScrollLock(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -379,6 +402,7 @@ function PlayerBar(props: {
   isFavorite: boolean;
   onToggleFavorite: () => void;
   onAddToPlaylist: () => void;
+  onShare: () => void;
   showLyrics: boolean;
   onToggleLyrics: () => void;
   onTimeUpdate?: (time: number) => void;
@@ -398,18 +422,68 @@ function PlayerBar(props: {
   const [showVolume, setShowVolume] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  useBodyScrollLock(expanded);
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
   const volumeRef = useRef<HTMLDivElement>(null);
   const queueRef = useRef<HTMLDivElement>(null);
   const activeQueueItemRef = useRef<HTMLDivElement>(null);
   const playedSentRef = useRef(false);
+  const lastNotifiedTrackRef = useRef<number | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const [preferHls, setPreferHls] = useState(true);
+  const showToast = useToastStore((s) => s.show);
+  const mediaSessionActionsRef = useRef({
+    onPrev: props.onPrev,
+    onNext: props.onNext,
+    onClose: props.onClose,
+  });
+  const playerEventPropsRef = useRef(props);
+  playerEventPropsRef.current = props;
+  mediaSessionActionsRef.current = {
+    onPrev: props.onPrev,
+    onNext: props.onNext,
+    onClose: props.onClose,
+  };
+
+  const canGoPrevious = props.hasPrev || props.playMode !== 'normal';
+  const canGoNext = props.hasNext || props.playMode !== 'normal';
 
   useEffect(() => {
     setArtOk(true);
     playedSentRef.current = false;
   }, [props.nowPlaying.id]);
+
+  useEffect(() => {
+    if (lastNotifiedTrackRef.current === props.nowPlaying.id) return;
+    lastNotifiedTrackRef.current = props.nowPlaying.id;
+
+    const title = props.nowPlaying.title || 'Unknown Track';
+    const artist = props.nowPlaying.artist;
+    showToast(`Now playing: ${title}${artist ? ` — ${artist}` : ''}`, 'playing');
+  }, [props.nowPlaying.id, props.nowPlaying.title, props.nowPlaying.artist, showToast]);
+
+  // Publish metadata independently from stream startup. This lets installed
+  // desktop PWAs expose the current track even while playback is buffering.
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !('MediaMetadata' in window)) return;
+
+    const metadata = new MediaMetadata({
+      title: props.nowPlaying.title || 'Unknown Track',
+      artist: props.nowPlaying.artist || 'Unknown Artist',
+      album: props.nowPlaying.album || '',
+      artwork: [
+        { src: `${window.location.origin}/api/art/${props.nowPlaying.id}`, type: 'image/jpeg' },
+        { src: `${window.location.origin}/icon-512.png`, sizes: '512x512', type: 'image/png' },
+      ],
+    });
+    navigator.mediaSession.metadata = metadata;
+
+    return () => {
+      if (navigator.mediaSession.metadata === metadata) {
+        navigator.mediaSession.metadata = null;
+      }
+    };
+  }, [props.nowPlaying.id, props.nowPlaying.title, props.nowPlaying.artist, props.nowPlaying.album]);
 
   // Close queue panel on click outside
   useEffect(() => {
@@ -459,11 +533,89 @@ function PlayerBar(props: {
   useEffect(() => {
     try {
       const v = localStorage.getItem('mvbar_prefer_hls');
-      if (v === null) return;
-      setPreferHls(v !== '0');
+      if (v !== null) setPreferHls(v !== '0');
       const vol = localStorage.getItem('mvbar_volume');
       if (vol) setVolume(parseFloat(vol));
     } catch {}
+  }, []);
+
+  // The audio element lives at AppShell level so it already exists when a
+  // mobile user taps a track. PlayerBar only binds its controls and events.
+  useEffect(() => {
+    const a = getMusicAudioElement();
+    audioRef.current = a;
+    if (!a) return;
+
+    const onPlay = () => {
+      a.dataset.mvbarPlaybackState = 'playing';
+      delete a.dataset.mvbarPlaybackError;
+      setIsPlaying(true);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+    };
+    const onPause = () => {
+      if (a.dataset.mvbarPlaybackState !== 'failed') {
+        a.dataset.mvbarPlaybackState = 'paused';
+      }
+      setIsPlaying(false);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    };
+    const onTimeUpdate = () => {
+      setCurrentTime(a.currentTime);
+      playerEventPropsRef.current.onTimeUpdate?.(a.currentTime);
+      updateMediaSessionPosition(a.currentTime, a.duration);
+      if (!playedSentRef.current && a.duration > 0 && a.currentTime / a.duration >= 0.8) {
+        playedSentRef.current = true;
+        playerEventPropsRef.current.onPlayed({ currentTime: a.currentTime, duration: a.duration });
+      }
+    };
+    const onLoadedMetadata = () => {
+      setDuration(a.duration);
+      updateMediaSessionPosition(a.currentTime, a.duration);
+    };
+    const onDurationChange = () => {
+      setDuration(a.duration);
+      updateMediaSessionPosition(a.currentTime, a.duration);
+    };
+    const onRateChange = () => updateMediaSessionPosition(a.currentTime, a.duration);
+    const onError = () => {
+      a.dataset.mvbarPlaybackState = 'failed';
+      a.dataset.mvbarPlaybackError = 'MediaError';
+      reportMusicPlaybackFailure(a.error);
+    };
+    const onEnded = () => {
+      const currentProps = playerEventPropsRef.current;
+      if (currentProps.playMode === 'repeat-one') {
+        a.currentTime = 0;
+        a.play().catch(reportMusicPlaybackFailure);
+      } else {
+        currentProps.onEnded();
+      }
+    };
+
+    a.addEventListener('play', onPlay);
+    a.addEventListener('pause', onPause);
+    a.addEventListener('timeupdate', onTimeUpdate);
+    a.addEventListener('loadedmetadata', onLoadedMetadata);
+    a.addEventListener('durationchange', onDurationChange);
+    a.addEventListener('ratechange', onRateChange);
+    a.addEventListener('error', onError);
+    a.addEventListener('ended', onEnded);
+
+    setIsPlaying(!a.paused);
+    setCurrentTime(a.currentTime || 0);
+    setDuration(Number.isFinite(a.duration) ? a.duration : 0);
+
+    return () => {
+      a.removeEventListener('play', onPlay);
+      a.removeEventListener('pause', onPause);
+      a.removeEventListener('timeupdate', onTimeUpdate);
+      a.removeEventListener('loadedmetadata', onLoadedMetadata);
+      a.removeEventListener('durationchange', onDurationChange);
+      a.removeEventListener('ratechange', onRateChange);
+      a.removeEventListener('error', onError);
+      a.removeEventListener('ended', onEnded);
+      if (audioRef.current === a) audioRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -478,10 +630,30 @@ function PlayerBar(props: {
       }
     };
 
-    const setStream = async () => {
+    const setStream = async (): Promise<boolean> => {
       cleanupHls();
-      a.src = `/api/stream/${props.nowPlaying.id}`;
-      try { await a.play(); } catch {}
+      const streamUrl = directMusicStreamUrl(props.nowPlaying.id);
+      const sourceChanged = a.getAttribute('src') !== streamUrl;
+      if (sourceChanged) a.src = streamUrl;
+
+      // The store normally starts this source synchronously from the tap. Do
+      // not issue a second, asynchronous play() for that same source.
+      if (!sourceChanged) return !a.paused;
+
+      a.dataset.mvbarPlaybackState = 'pending';
+      delete a.dataset.mvbarPlaybackError;
+      try {
+        await a.play();
+        a.dataset.mvbarPlaybackState = 'playing';
+        return true;
+      } catch (error) {
+        a.dataset.mvbarPlaybackState = 'failed';
+        a.dataset.mvbarPlaybackError = error && typeof error === 'object' && 'name' in error
+          ? String((error as { name?: unknown }).name || '')
+          : 'PlaybackError';
+        reportMusicPlaybackFailure(error);
+        return false;
+      }
     };
 
     const setHls = async (seekTo?: number) => {
@@ -493,21 +665,31 @@ function PlayerBar(props: {
         if (typeof seekTo === 'number' && seekTo > 0) {
           a.addEventListener('loadedmetadata', () => { try { a.currentTime = seekTo; } catch {} }, { once: true });
         }
-        try { await a.play(); } catch {}
-        return true;
+        try {
+          await a.play();
+          return true;
+        } catch (error) {
+          reportMusicPlaybackFailure(error);
+          return false;
+        }
       }
       if (!Hls.isSupported()) { await setStream(); return false; }
       cleanupHls();
       const hls = new Hls({ enableWorker: true });
       hlsRef.current = hls;
-      hls.on(Hls.Events.ERROR, (_evt, data) => { if (data?.fatal) setStream(); });
+      hls.on(Hls.Events.ERROR, (_evt, data) => { if (data?.fatal) void setStream(); });
       hls.loadSource(`/api/hls/${id}`);
       hls.attachMedia(a);
       if (typeof seekTo === 'number' && seekTo > 0) {
         a.addEventListener('loadedmetadata', () => { try { a.currentTime = seekTo; } catch {} }, { once: true });
       }
-      try { await a.play(); } catch {}
-      return true;
+      try {
+        await a.play();
+        return true;
+      } catch (error) {
+        reportMusicPlaybackFailure(error);
+        return false;
+      }
     };
 
     (async () => {
@@ -519,37 +701,31 @@ function PlayerBar(props: {
         prefetchLyrics(props.token, props.nowPlaying.id).catch(() => {});
       }
       
-      // Set Media Session metadata for OS media controls (lock screen, notification)
-      if ('mediaSession' in navigator) {
-        const artUrl = `${window.location.origin}/api/art/${props.nowPlaying.id}`;
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: props.nowPlaying.title || 'Unknown Track',
-          artist: props.nowPlaying.artist || 'Unknown Artist',
-          album: props.nowPlaying.album || '',
-          artwork: [
-            { src: artUrl, sizes: '96x96', type: 'image/jpeg' },
-            { src: artUrl, sizes: '128x128', type: 'image/jpeg' },
-            { src: artUrl, sizes: '192x192', type: 'image/jpeg' },
-            { src: artUrl, sizes: '256x256', type: 'image/jpeg' },
-            { src: artUrl, sizes: '384x384', type: 'image/jpeg' },
-            { src: artUrl, sizes: '512x512', type: 'image/jpeg' },
-          ],
-        });
-      }
-      
       if (!props.token || !preferHls) return;
       try {
         await requestHlsTranscode(props.token, props.nowPlaying.id);
-        for (let i = 0; i < 8 && !cancelled; i++) {
+        for (let i = 0; i < 20 && !cancelled; i++) {
           const s = await getHlsStatus(props.token, props.nowPlaying.id);
-          if (s?.ready) { const resume = a.currentTime || 0; await setHls(resume); break; }
+          if (s?.ready) {
+            // Never replace a direct stream that is already playing. A source
+            // swap can pause mobile playback and its follow-up play() no longer
+            // carries the original user gesture. HLS is only a media-error
+            // fallback, not an in-flight upgrade.
+            if (
+              a.dataset.mvbarPlaybackState === 'failed' &&
+              a.dataset.mvbarPlaybackError !== 'NotAllowedError'
+            ) {
+              const resume = a.currentTime || 0;
+              await setHls(resume);
+            }
+            break;
+          }
           await new Promise((r) => setTimeout(r, 500));
         }
       } catch {}
     })();
 
     return () => { cancelled = true; cleanupHls(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.nowPlaying.id, props.token, preferHls]);
 
   useEffect(() => {
@@ -559,12 +735,26 @@ function PlayerBar(props: {
   // Media Session action handlers for OS media controls
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
-    
-    const actionHandlers: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
-      ['play', () => { audioRef.current?.play(); }],
+
+    const actionHandlers: Array<[MediaSessionAction, MediaSessionActionHandler | null]> = [
+      ['play', () => { audioRef.current?.play().catch(reportMusicPlaybackFailure); }],
       ['pause', () => { audioRef.current?.pause(); }],
-      ['previoustrack', () => { props.onPrev(); }],
-      ['nexttrack', () => { props.onNext(); }],
+      ['stop', () => {
+        const a = audioRef.current;
+        if (a) {
+          a.pause();
+          a.currentTime = 0;
+        }
+        mediaSessionActionsRef.current.onClose();
+      }],
+      ['previoustrack', canGoPrevious ? () => { mediaSessionActionsRef.current.onPrev(); } : null],
+      ['nexttrack', canGoNext ? () => {
+        const a = audioRef.current;
+        mediaSessionActionsRef.current.onNext({
+          currentTime: a?.currentTime || 0,
+          duration: a && Number.isFinite(a.duration) ? a.duration : 0,
+        });
+      } : null],
       ['seekbackward', (details) => {
         const a = audioRef.current;
         if (a) a.currentTime = Math.max(0, a.currentTime - (details.seekOffset || 10));
@@ -590,13 +780,21 @@ function PlayerBar(props: {
         try { navigator.mediaSession.setActionHandler(action, null); } catch {}
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.onPrev, props.onNext]);
+  }, [canGoPrevious, canGoNext]);
+
+  // Do not leave stale track state in Windows after closing the player.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    return () => {
+      navigator.mediaSession.playbackState = 'none';
+      try { navigator.mediaSession.setPositionState(); } catch {}
+    };
+  }, []);
 
   const togglePlay = () => {
     const a = audioRef.current;
     if (!a) return;
-    if (a.paused) a.play();
+    if (a.paused) a.play().catch(reportMusicPlaybackFailure);
     else a.pause();
   };
 
@@ -616,12 +814,12 @@ function PlayerBar(props: {
 
   // Update Media Session position state for lock screen seek bar
   const updateMediaSessionPosition = (position: number, dur: number) => {
-    if ('mediaSession' in navigator && dur > 0) {
+    if ('mediaSession' in navigator && Number.isFinite(dur) && dur > 0) {
       try {
         navigator.mediaSession.setPositionState({
           duration: dur,
-          playbackRate: 1,
-          position: Math.min(position, dur),
+          playbackRate: audioRef.current?.playbackRate || 1,
+          position: Math.max(0, Math.min(Number.isFinite(position) ? position : 0, dur)),
         });
       } catch {}
     }
@@ -764,7 +962,7 @@ function PlayerBar(props: {
             </div>
 
             {/* Secondary Controls */}
-            <div className="flex items-center justify-center gap-4 mb-6 px-8">
+            <div className="flex flex-wrap items-center justify-center gap-3 mb-6 px-4 sm:px-8">
               <button
                 onClick={(e) => { e.stopPropagation(); props.onToggleFavorite(); }}
                 className={`flex items-center gap-2 px-4 py-2 rounded-full border ${props.isFavorite ? 'border-pink-500 text-pink-500' : 'border-white/30 text-white/70'}`}
@@ -778,6 +976,13 @@ function PlayerBar(props: {
               >
                 <Icons.Plus />
                 <span className="text-sm">Add to Playlist</span>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); props.onShare(); }}
+                className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/30 text-white/70"
+              >
+                <Icons.Share />
+                <span className="text-sm">Share</span>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); props.onClose(); }}
@@ -934,6 +1139,13 @@ function PlayerBar(props: {
                 title="Add to playlist"
               >
                 <Icons.Plus />
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); props.onShare(); }}
+                className="p-2 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition"
+                title="Share with a friend"
+              >
+                <Icons.Share />
               </button>
             </div>
 
@@ -1093,44 +1305,6 @@ function PlayerBar(props: {
         </div>
       </div>
 
-      <audio
-        ref={audioRef}
-        onPlay={() => {
-          setIsPlaying(true);
-          if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-        }}
-        onPause={() => {
-          setIsPlaying(false);
-          if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-        }}
-        onTimeUpdate={(e) => {
-          const a = e.currentTarget;
-          setCurrentTime(a.currentTime);
-          props.onTimeUpdate?.(a.currentTime);
-          updateMediaSessionPosition(a.currentTime, a.duration);
-          if (!playedSentRef.current && a.duration > 0 && a.currentTime / a.duration >= 0.8) {
-            playedSentRef.current = true;
-            props.onPlayed({ currentTime: a.currentTime, duration: a.duration });
-          }
-        }}
-        onLoadedMetadata={(e) => {
-          const dur = e.currentTarget.duration;
-          setDuration(dur);
-          updateMediaSessionPosition(0, dur);
-        }}
-        onEnded={() => {
-          // Handle repeat-one by replaying the same track
-          if (props.playMode === 'repeat-one') {
-            const a = audioRef.current;
-            if (a) {
-              a.currentTime = 0;
-              a.play().catch(() => {});
-            }
-          } else {
-            props.onEnded();
-          }
-        }}
-      />
     </>
   );
 }
@@ -1141,6 +1315,7 @@ function NavItem(props: {
   active: boolean; 
   onClick: () => void;
   mobile?: boolean;
+  badge?: number;
 }) {
   if (props.mobile) {
     return (
@@ -1150,7 +1325,10 @@ function NavItem(props: {
           props.active ? 'text-white' : 'text-white/50 hover:text-white/80'
         }`}
       >
-        <div className={props.active ? 'text-cyan-500' : ''}>{props.icon}</div>
+        <div className={`relative ${props.active ? 'text-cyan-500' : ''}`}>
+          {props.icon}
+          {!!props.badge && <span className="absolute -right-2 -top-1 h-4 min-w-4 rounded-full bg-red-500 px-1 text-[9px] font-bold leading-4 text-white">{props.badge > 99 ? '99+' : props.badge}</span>}
+        </div>
         <span className="text-xs">{props.label}</span>
       </button>
     );
@@ -1166,7 +1344,8 @@ function NavItem(props: {
       }`}
     >
       <div className={props.active ? 'text-cyan-500' : ''}>{props.icon}</div>
-      <span className="font-medium">{props.label}</span>
+      <span className="flex-1 text-left font-medium">{props.label}</span>
+      {!!props.badge && <span className="min-w-5 rounded-full bg-red-500 px-1.5 py-0.5 text-center text-[10px] font-bold text-white">{props.badge > 99 ? '99+' : props.badge}</span>}
     </button>
   );
 }
@@ -1182,21 +1361,12 @@ function MobileSidebar(props: {
   hasMusicPlayer: boolean;
   hasPodcastPlayer: boolean;
   hasAudiobookPlayer: boolean;
+  missingMusicEnabled: boolean;
+  socialBadge: number;
 }) {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const touchStartedInsideRef = useRef(false);
-
-  // Lock body scroll when sidebar is open
-  useEffect(() => {
-    if (props.isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, [props.isOpen]);
+  useBodyScrollLock(props.isOpen);
 
   // Close on click/scroll outside or Escape key
   useEffect(() => {
@@ -1297,9 +1467,11 @@ function MobileSidebar(props: {
             <NavItem icon={<Icons.Library />} label="Recently Added" active={props.tab === 'library' || props.tab === 'recently-added'} onClick={() => handleNavClick('recently-added')} />
             <NavItem icon={<Icons.Playlist />} label="Playlists" active={props.tab === 'playlists'} onClick={() => handleNavClick('playlists')} />
             <NavItem icon={<Icons.Heart />} label="Favorites" active={props.tab === 'favorites'} onClick={() => handleNavClick('favorites')} />
+            <NavItem icon={<Icons.Social />} label="Friends & Sharing" active={props.tab === 'social'} onClick={() => handleNavClick('social')} badge={props.socialBadge} />
             <NavItem icon={<Icons.Clock />} label="History" active={props.tab === 'history'} onClick={() => handleNavClick('history')} />
             <NavItem icon={<Icons.Podcast />} label="Podcasts" active={props.tab === 'podcasts'} onClick={() => handleNavClick('podcasts')} />
             <NavItem icon={<Icons.Audiobook />} label="Audiobooks" active={props.tab === 'audiobooks'} onClick={() => handleNavClick('audiobooks')} />
+            {props.missingMusicEnabled && <NavItem icon={<Icons.Search />} label="Missing Music" active={props.tab === 'missing-music'} onClick={() => handleNavClick('missing-music')} />}
             <NavItem icon={<Icons.Settings />} label="Settings" active={props.tab === 'settings'} onClick={() => handleNavClick('settings')} />
           </nav>
 
@@ -1336,7 +1508,7 @@ function MobileSidebar(props: {
   );
 }
 
-function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boolean; user: { email: string; role: string; avatar_path?: string | null } | null; onLogout: () => void }) {
+function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boolean; missingMusicEnabled: boolean; socialBadge: number; user: { email: string; role: string; avatar_path?: string | null } | null; onLogout: () => void }) {
   return (
     <aside className="hidden lg:flex flex-col w-64 h-screen fixed left-0 top-0 bg-black/50 border-r border-white/10 p-4">
       {/* Logo */}
@@ -1359,9 +1531,11 @@ function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boo
         <NavItem icon={<Icons.Library />} label="Recently Added" active={props.tab === 'library' || props.tab === 'recently-added'} onClick={() => props.setTab('recently-added')} />
         <NavItem icon={<Icons.Playlist />} label="Playlists" active={props.tab === 'playlists'} onClick={() => props.setTab('playlists')} />
         <NavItem icon={<Icons.Heart />} label="Favorites" active={props.tab === 'favorites'} onClick={() => props.setTab('favorites')} />
+        <NavItem icon={<Icons.Social />} label="Friends & Sharing" active={props.tab === 'social'} onClick={() => props.setTab('social')} badge={props.socialBadge} />
         <NavItem icon={<Icons.Clock />} label="History" active={props.tab === 'history'} onClick={() => props.setTab('history')} />
         <NavItem icon={<Icons.Podcast />} label="Podcasts" active={props.tab === 'podcasts'} onClick={() => props.setTab('podcasts')} />
         <NavItem icon={<Icons.Audiobook />} label="Audiobooks" active={props.tab === 'audiobooks'} onClick={() => props.setTab('audiobooks')} />
+        {props.missingMusicEnabled && <NavItem icon={<Icons.Search />} label="Missing Music" active={props.tab === 'missing-music'} onClick={() => props.setTab('missing-music')} />}
       </nav>
 
       <div className="mt-auto">
@@ -1405,13 +1579,30 @@ export function AppShellNew() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
+  const [trackToShare, setTrackToShare] = useState<QueueTrack | null>(null);
+  const [missingMusicEnabled, setMissingMusicEnabled] = useState(false);
+  const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, addManyToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
   const nowPlaying = isOpen ? queue[index] ?? null : null;
 
   const token = useAuth((s) => s.token);
   const user = useAuth((s) => s.user);
   const clearAuth = useAuth((s) => s.clear);
   const isAdmin = user?.role === 'admin';
+  const pluginUpdate = usePluginUpdates((state) => state.lastUpdate);
+  const unreadShares = useSocialUpdates((state) => state.unreadShares);
+  const incomingRequests = useSocialUpdates((state) => state.incomingRequests);
+  const refreshSocial = useSocialUpdates((state) => state.refresh);
+  const socialBadge = unreadShares + incomingRequests;
+
+  useEffect(() => {
+    if (!token) {
+      setMissingMusicEnabled(false);
+      return;
+    }
+    void apiFetch('/plugins/missing-music/status', {}, token)
+      .then((result: any) => setMissingMusicEnabled(Boolean(result.enabled)))
+      .catch(() => setMissingMusicEnabled(false));
+  }, [token, pluginUpdate]);
 
   // Podcast player state
   const podcastEpisode = useUi((s) => s.podcastEpisode);
@@ -1439,7 +1630,16 @@ export function AppShellNew() {
     if (token) loadPreferences(token);
   }, [token, loadPreferences]);
 
+  useEffect(() => {
+    void refreshSocial(token);
+  }, [token, refreshSocial]);
+
+  useEffect(() => {
+    if (token) void preparePushNotifications(token).catch(() => undefined);
+  }, [token]);
+
   const handleSignOut = async () => {
+    try { await unsubscribeCurrentPushDevice(token); } catch {}
     try { await logout(token ?? undefined); } catch {}
     finally { 
       resetPlayer();
@@ -1464,9 +1664,11 @@ export function AppShellNew() {
       case 'browse': navigate({ type: 'browse' }); break;
       case 'playlists': navigate({ type: 'playlists' }); break;
       case 'favorites': navigate({ type: 'favorites' }); break;
+      case 'social': navigate({ type: 'social' }); break;
       case 'history': navigate({ type: 'history' }); break;
       case 'podcasts': navigate({ type: 'podcasts' }); break;
       case 'audiobooks': navigate({ type: 'audiobooks' }); break;
+      case 'missing-music': navigate({ type: 'missing-music' }); break;
       case 'settings': navigate({ type: 'settings' }); break;
       case 'admin': navigate({ type: 'admin' }); break;
       default: navigate({ type: 'for-you' });
@@ -1520,7 +1722,8 @@ export function AppShellNew() {
   void favLastChange;
   
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
-  const [playlists, setPlaylists] = useState<{ id: number; name: string }[]>([]);
+  const [playlists, setPlaylists] = useState<{ id: number; name: string; ownerEmail?: string; isOwner: boolean }[]>([]);
+  useBodyScrollLock(showPlaylistModal);
   
   // Lyrics overlay state
   const [showLyrics, setShowLyrics] = useState(false);
@@ -1558,7 +1761,12 @@ export function AppShellNew() {
     if (!token) return;
     try {
       const data = await listPlaylists(token);
-      setPlaylists(data.playlists?.map(p => ({ id: parseInt(p.id), name: p.name })) ?? []);
+      setPlaylists(data.playlists?.map(p => ({
+        id: parseInt(p.id),
+        name: p.name,
+        ownerEmail: p.owner?.email,
+        isOwner: p.is_owner,
+      })) ?? []);
       setShowPlaylistModal(true);
     } catch {}
   };
@@ -1609,17 +1817,16 @@ export function AppShellNew() {
       const lastTrack = queue[queue.length - 1];
       fetchSimilarTracks(lastTrack.id, queue).then(similarTracks => {
         if (similarTracks.length > 0) {
-          // Add to queue without changing current playback
-          const newQueue = [...queue, ...similarTracks];
-          // Use addToQueue for each track to avoid disrupting playback
-          similarTracks.forEach(t => addToQueue(t));
+          // Add the recommendations as one operation so the user gets one
+          // compact summary notification instead of one toast per track.
+          addManyToQueue(similarTracks);
         }
         fetchingMoreRef.current = false;
       }).catch(() => {
         fetchingMoreRef.current = false;
       });
     }
-  }, [index, queue, preferences.auto_continue, nowPlaying, fetchSimilarTracks, addToQueue]);
+  }, [index, queue, preferences.auto_continue, nowPlaying, fetchSimilarTracks, addManyToQueue]);
 
   // Handle track ending based on play mode
   const handlePlayModeEnded = async () => {
@@ -1689,9 +1896,10 @@ export function AppShellNew() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-zinc-900 to-black overflow-x-hidden">
       <AutoLogin />
+      <audio id={MUSIC_AUDIO_ELEMENT_ID} preload="metadata" aria-hidden="true" />
       
       {/* Sidebar - Desktop */}
-      <Sidebar tab={tab} setTab={setTab} isAdmin={isAdmin} user={user} onLogout={handleSignOut} />
+      <Sidebar tab={tab} setTab={setTab} isAdmin={isAdmin} missingMusicEnabled={missingMusicEnabled} socialBadge={socialBadge} user={user} onLogout={handleSignOut} />
       
       {/* Mobile Sidebar */}
       <MobileSidebar 
@@ -1705,6 +1913,8 @@ export function AppShellNew() {
         hasMusicPlayer={!!(isOpen && nowPlaying)}
         hasPodcastPlayer={!!podcastEpisode}
         hasAudiobookPlayer={!!audiobookChapter}
+        missingMusicEnabled={missingMusicEnabled}
+        socialBadge={socialBadge}
       />
 
       {/* Sticky Mobile Header */}
@@ -1726,9 +1936,11 @@ export function AppShellNew() {
             {(tab === 'recently-added') && 'Recently Added'}
             {tab === 'playlists' && 'Playlists'}
             {tab === 'favorites' && 'Favorites'}
+            {tab === 'social' && 'Friends & Sharing'}
             {tab === 'history' && 'Recently Played'}
             {tab === 'podcasts' && 'Podcasts'}
             {tab === 'audiobooks' && 'Audiobooks'}
+            {tab === 'missing-music' && 'Missing Music'}
             {tab === 'settings' && 'Settings'}
             {tab === 'admin' && 'Admin'}
           </h2>
@@ -1774,9 +1986,11 @@ export function AppShellNew() {
                 {(tab === 'library' || tab === 'recently-added') && 'Recently Added'}
                 {tab === 'playlists' && 'Playlists'}
                 {tab === 'favorites' && 'Favorites'}
+                {tab === 'social' && 'Friends & Sharing'}
                 {tab === 'history' && 'Recently Played'}
                 {tab === 'podcasts' && 'Podcasts'}
                 {tab === 'audiobooks' && 'Audiobooks'}
+                {tab === 'missing-music' && 'Missing Music'}
                 {tab === 'settings' && 'Settings'}
                 {tab === 'admin' && 'Admin'}
               </h2>
@@ -1831,7 +2045,7 @@ export function AppShellNew() {
 
             {tab === 'playlists' && (
               <Playlists
-                onPlayTrack={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
+                onPlayTrack={(tracks, index) => setQueueAndPlay(tracks, index)}
                 onPlayAll={(tracks) => setQueueAndPlay(tracks, 0)}
               />
             )}
@@ -1843,6 +2057,8 @@ export function AppShellNew() {
               />
             )}
 
+            {tab === 'social' && <Social />}
+
             {tab === 'history' && (
               <History
                 onPlay={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
@@ -1853,6 +2069,14 @@ export function AppShellNew() {
             {tab === 'podcasts' && <Podcasts />}
 
             {tab === 'audiobooks' && <Audiobooks />}
+
+            {tab === 'missing-music' && missingMusicEnabled && <MissingMusic />}
+
+            {tab === 'missing-music' && !missingMusicEnabled && (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-8 text-center text-white/50">
+                Missing Music is not installed and enabled.
+              </div>
+            )}
 
             {tab === 'for-you' && <Recommendations />}
 
@@ -1877,6 +2101,7 @@ export function AppShellNew() {
           isFavorite={isFavorite}
           onToggleFavorite={toggleFavorite}
           onAddToPlaylist={openPlaylistModal}
+          onShare={() => setTrackToShare(nowPlaying)}
           showLyrics={showLyrics}
           onToggleLyrics={() => setShowLyrics((v) => !v)}
           onTimeUpdate={setPlayerCurrentTime}
@@ -1902,6 +2127,8 @@ export function AppShellNew() {
         />
       )}
 
+      <ShareTrackDialog track={trackToShare} onClose={() => setTrackToShare(null)} />
+
       {/* Add to Playlist Modal */}
       {showPlaylistModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60" onClick={() => setShowPlaylistModal(false)}>
@@ -1917,7 +2144,8 @@ export function AppShellNew() {
                     onClick={() => addToPlaylist(pl.id)}
                     className="w-full text-left px-4 py-3 rounded-lg hover:bg-white/10 transition text-white"
                   >
-                    {pl.name}
+                    <span className="block truncate">{pl.name}</span>
+                    {!pl.isOwner && <span className="block truncate text-xs text-white/45">Shared by {pl.ownerEmail || 'a friend'}</span>}
                   </button>
                 ))}
               </div>

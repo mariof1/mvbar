@@ -1,0 +1,23 @@
+[Unit]
+Description=MVBar Standalone (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+Environment=HOME=/home/%i
+Environment=MVBAR_HOME=/home/%i/.local/share/mvbar
+WorkingDirectory=/home/%i
+ExecStart=/usr/local/bin/mvbar foreground
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

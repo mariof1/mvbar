@@ -5,14 +5,12 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from './db.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
+import { resolveInside } from './pathSafety.js';
 
 const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
 
 function safeJoinArt(relPath: string) {
-  const abs = path.resolve(ART_DIR, relPath);
-  const base = path.resolve(ART_DIR);
-  if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(ART_DIR, relPath);
 }
 
 export const artPlugin: FastifyPluginAsync = fp(async (app) => {

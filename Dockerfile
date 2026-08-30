@@ -69,6 +69,7 @@ RUN apk add --no-cache \
 
 ENV NODE_ENV=production \
     TZ=Europe/London \
+    UV_THREADPOOL_SIZE=32 \
     API_PORT=3001 \
     WEB_PORT=3000 \
     MEILI_PORT=7700 \
@@ -101,7 +102,7 @@ COPY infra/wait-for-http.sh /app/infra/wait-for-http.sh
 RUN sed -i 's/\r$//' /entrypoint.sh /app/infra/wait-for-http.sh && \
     chmod +x /entrypoint.sh /app/infra/wait-for-http.sh
 
-VOLUME ["/var/lib/postgresql/data", "/data/redis", "/meili_data", "/data/caddy", "/config/caddy", "/data/cache", "/hls", "/podcasts"]
+VOLUME ["/var/lib/postgresql/data", "/data/redis", "/meili_data", "/data/caddy", "/config/caddy", "/data/cache", "/data/plugins", "/hls", "/podcasts"]
 
 EXPOSE 80 443
 

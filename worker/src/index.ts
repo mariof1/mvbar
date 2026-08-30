@@ -1,13 +1,19 @@
 import 'dotenv/config';
 
 import Redis from 'ioredis';
-import { db, initDb } from './db.js';
+import { audit, db, initDb } from './db.js';
 import * as transcodeJobs from './transcodeRepo.js';
 import { transcodeTrackToHls } from './transcoder.js';
 import { runFastScan } from './fastScan.js';
+import {
+  deactivateRemovedAudiobookLibraries,
+  retireRemovedMusicLibraries,
+} from './libraryReconciliation.js';
 import { runTempoBackfillBatch } from './tempoBackfill.js';
-import { startPodcastRefresh } from './podcastRefresh.js';
+import { refreshAllPodcasts, startPodcastRefresh } from './podcastRefresh.js';
 import { scanAudiobooks } from './audiobookScanner.js';
+import { ensureTracksIndex, getTrackIndexStatus, indexAllTracks } from './indexer.js';
+import { reconcileMusicArtwork } from './musicArtReconciliation.js';
 import logger from './logger.js';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
@@ -31,34 +37,127 @@ const tempoBackfillIntervalMs = parseInt(process.env.TEMPO_BACKFILL_INTERVAL_MS 
 logger.success('worker', 'Started', { musicDirs, useFastScan, rescanIntervalMs });
 
 await initDb();
+const recoveredTranscodes = await transcodeJobs.recoverInterruptedTranscodeJobs();
+if (recoveredTranscodes > 0) {
+  logger.info('transcode', `Recovered ${recoveredTranscodes} interrupted job${recoveredTranscodes === 1 ? '' : 's'}`);
+}
 
 // Ensure libraries exist in DB so we can link tracks
 for (const dir of musicDirs) {
   await db().query(
-    `INSERT INTO libraries (mount_path, created_at)
-     VALUES ($1, NOW())
-     ON CONFLICT (mount_path) DO NOTHING`,
+    `INSERT INTO libraries (mount_path, media_type, created_at)
+     VALUES ($1, 'music', NOW())
+     ON CONFLICT (mount_path) DO UPDATE
+       SET media_type = 'music', enabled = TRUE`,
     [dir]
   );
+}
+
+const retiredMusicLibraries = await retireRemovedMusicLibraries(db(), musicDirs);
+for (const library of retiredMusicLibraries) {
+  logger.info(
+    'scan',
+    `Removed music library from the active catalog: ${library.mountPath} (${library.retiredTracks} active track${library.retiredTracks === 1 ? '' : 's'} retired)`
+  );
+  await audit('music_library_unconfigured', {
+    libraryId: library.id,
+    mountPath: library.mountPath,
+    retiredTracks: library.retiredTracks,
+    deactivated: library.deactivated,
+  });
+}
+
+for (const dir of audiobookDirs) {
+  const inserted = await db().query<{ id: number | string }>(
+    `INSERT INTO libraries (mount_path, media_type, created_at)
+     VALUES ($1, 'audiobook', NOW())
+     ON CONFLICT (mount_path) DO NOTHING
+     RETURNING id`,
+    [dir]
+  );
+  if (inserted.rows[0]) {
+    await db().query(
+      `INSERT INTO user_libraries(user_id, library_id)
+       SELECT id, $1 FROM users
+       ON CONFLICT DO NOTHING`,
+      [inserted.rows[0].id]
+    );
+  } else {
+    await db().query(
+      `UPDATE libraries
+       SET media_type = 'audiobook', enabled = TRUE
+       WHERE mount_path = $1`,
+      [dir]
+    );
+  }
+}
+
+const deactivatedAudiobookLibraries =
+  await deactivateRemovedAudiobookLibraries(db(), audiobookDirs);
+for (const library of deactivatedAudiobookLibraries) {
+  logger.info(
+    'audiobook-scan',
+    `Removed audiobook library from the active catalog: ${library.mountPath}`
+  );
+  await audit('audiobook_library_unconfigured', {
+    libraryId: library.id,
+    mountPath: library.mountPath,
+  });
+}
+
+try {
+  await ensureTracksIndex();
+  let searchStatus = await getTrackIndexStatus();
+  if (!searchStatus.consistent) {
+    logger.info(
+      'search',
+      `Reconciling search index at startup (${searchStatus.index} indexed, ${searchStatus.database} active)`
+    );
+    await indexAllTracks();
+    searchStatus = await getTrackIndexStatus();
+  }
+  if (!searchStatus.consistent) {
+    throw new Error(
+      `Search index startup check failed (${searchStatus.index} indexed, ${searchStatus.database} active)`
+    );
+  }
+  logger.success('search', `Search index ready (${searchStatus.index} documents)`);
+} catch (error) {
+  logger.warn('search', `Startup search reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
 }
 
 // Periodic rescan function - more reliable than real-time watching on NFS
 let scanInProgress = false;
 let cancelRequested = false;
+let pendingRescanForce: boolean | null = null;
+let musicArtReconciliationInProgress = true;
 
 // Listen for rescan/cancel commands from API (must be active during long scans)
 const subscriber = new Redis(REDIS_URL);
-subscriber.subscribe('library:commands', (err) => {
+subscriber.subscribe('library:commands', 'podcast:commands', (err) => {
   if (err) logger.error('worker', `Failed to subscribe to commands: ${err.message}`);
-  else logger.info('worker', 'Listening for rescan commands');
+  else logger.info('worker', 'Listening for library and podcast commands');
 });
 
 subscriber.on('message', async (channel, message) => {
   try {
     const cmd = JSON.parse(message);
+    if (channel === 'podcast:commands') {
+      if (cmd.command === 'refresh') {
+        logger.info('podcast', `Manual refresh triggered by ${cmd.by || 'unknown'}`);
+        void refreshAllPodcasts();
+      }
+      return;
+    }
     if (cmd.command === 'rescan') {
-      logger.info('scan', `Manual rescan triggered by ${cmd.by || 'unknown'}${cmd.force ? ' (FORCE FULL)' : ''}`);
-      periodicRescan(cmd.force === true);
+      const force = cmd.force === true;
+      if (scanInProgress) {
+        pendingRescanForce = pendingRescanForce === true || force;
+        logger.info('scan', `Manual rescan queued by ${cmd.by || 'unknown'}${force ? ' (FORCE FULL)' : ''}`);
+      } else {
+        logger.info('scan', `Manual rescan triggered by ${cmd.by || 'unknown'}${force ? ' (FORCE FULL)' : ''}`);
+        void periodicRescan(force);
+      }
     } else if (cmd.command === 'cancel_scan') {
       cancelRequested = true;
       logger.info('scan', `Scan cancel requested by ${cmd.by || 'unknown'}`);
@@ -70,6 +169,11 @@ subscriber.on('message', async (channel, message) => {
 
 async function periodicRescan(force: boolean = false) {
   if (!useFastScan) return;
+  if (musicArtReconciliationInProgress) {
+    pendingRescanForce = pendingRescanForce === true || force;
+    logger.info('scan', `Library scan queued until music artwork reconciliation finishes${force ? ' (FORCE FULL)' : ''}`);
+    return;
+  }
   if (scanInProgress) {
     logger.info('scan', 'Scan already in progress, skipping');
     return;
@@ -105,16 +209,53 @@ async function periodicRescan(force: boolean = false) {
       }
     }
   } catch (e) {
-    logger.error('scan', `Periodic scan failed: ${e instanceof Error ? e.message : String(e)}`);
+    const message = e instanceof Error ? e.message : String(e);
+    logger.error('scan', `Periodic scan failed: ${message}`);
+    let previousProgress: Record<string, unknown> = {};
+    try {
+      const raw = await publisher.get('scan:progress');
+      if (raw) previousProgress = JSON.parse(raw);
+    } catch { /* ignore malformed or unavailable progress state */ }
+    const progress = {
+      ...previousProgress,
+      status: 'error',
+      currentFile: 'Scan failed',
+      error: message,
+    };
+    try {
+      await publisher.set('scan:progress', JSON.stringify(progress));
+      await publisher.publish('library:updates', JSON.stringify({ event: 'scan:progress', ...progress, ts: Date.now() }));
+    } catch { /* ignore reporting failures */ }
   } finally {
+    const queuedForce = pendingRescanForce;
+    pendingRescanForce = null;
     scanInProgress = false;
     cancelRequested = false;
     try { publisher.disconnect(); } catch { /* */ }
+    if (queuedForce !== null) {
+      setImmediate(() => void periodicRescan(queuedForce));
+    }
   }
 }
 
-// Kick off an initial scan on startup
-setTimeout(() => periodicRescan(false), 0);
+// Reconcile the existing artwork cache before the initial scan so artist-art
+// discovery cannot race with transactional path replacement.
+const musicArtworkReconciliation = reconcileMusicArtwork()
+  .catch((error) => {
+    logger.warn('music-art', `Startup artwork reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+  })
+  .finally(() => {
+    musicArtReconciliationInProgress = false;
+  });
+
+// Kick off the initial scan as soon as the one-time reconciliation is done.
+setTimeout(() => {
+  void musicArtworkReconciliation.then(() => {
+    const initialForce = pendingRescanForce ?? false;
+    pendingRescanForce = null;
+    return periodicRescan(initialForce);
+  });
+}, 0);
 
 // Schedule periodic rescans
 logger.info('worker', `Scheduling periodic library scan every ${rescanIntervalMs / 1000}s`);

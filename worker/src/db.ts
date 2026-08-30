@@ -23,6 +23,7 @@ export async function initDb() {
 
   // Best-effort schema ensures (worker may start before API migrations)
   try {
+    await pool.query('alter table libraries add column if not exists enabled boolean not null default true');
     await pool.query('alter table tracks add column if not exists genre text');
     await pool.query('alter table tracks add column if not exists country text');
     await pool.query('alter table tracks add column if not exists language text');

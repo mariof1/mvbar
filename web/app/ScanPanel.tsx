@@ -1,34 +1,40 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { scanNow, scanStatus } from './apiClient';
 import { useAuth } from './store';
 import { useScanProgress } from './useWebSocket';
 
 export function ScanPanel(props: { onScanFinished?: () => void }) {
+  const { onScanFinished } = props;
   const token = useAuth((s) => s.token);
   const user = useAuth((s) => s.user);
   const clear = useAuth((s) => s.clear);
   const [job, setJob] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const previousStateRef = useRef<string | null>(null);
 
   // Live updates from WebSocket
   const scanProgress = useScanProgress();
 
   const isAdmin = user?.role === 'admin';
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!token || !isAdmin) return;
     try {
       const r = await scanStatus(token);
       setJob(r.job);
-      if (r.job?.state === 'done' || r.job?.state === 'failed') props.onScanFinished?.();
+      const nextState = r.job?.state ?? null;
+      if (previousStateRef.current === 'running' && (nextState === 'done' || nextState === 'failed')) {
+        onScanFinished?.();
+      }
+      previousStateRef.current = nextState;
     } catch (e: any) {
       if (e?.status === 401) clear();
       setError(e?.message ?? 'error');
     }
-  }
+  }, [clear, isAdmin, onScanFinished, token]);
 
   async function handleScanNow() {
     if (!token) return;
@@ -47,9 +53,16 @@ export function ScanPanel(props: { onScanFinished?: () => void }) {
 
   // Initial load
   useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, isAdmin]);
+    void refresh();
+  }, [refresh]);
+
+  // WebSockets keep this responsive; polling while a job is active guarantees
+  // convergence if a completion message is lost while the tab or network sleeps.
+  useEffect(() => {
+    if (job?.state !== 'running') return;
+    const timer = window.setInterval(() => void refresh(), 2000);
+    return () => window.clearInterval(timer);
+  }, [job?.state, refresh]);
 
   // Update job state from WebSocket scan progress
   useEffect(() => {
@@ -66,12 +79,13 @@ export function ScanPanel(props: { onScanFinished?: () => void }) {
       filesProcessed: scanProgress.filesProcessed,
       currentFile: scanProgress.currentFile,
     }));
+    previousStateRef.current = scanProgress.scanning || scanProgress.status === 'indexing' ? 'running' : 'done';
 
     // Notify when scan finishes
     if (!scanProgress.scanning && scanProgress.status === 'idle') {
-      props.onScanFinished?.();
+      onScanFinished?.();
     }
-  }, [scanProgress, props]);
+  }, [onScanFinished, scanProgress]);
 
   if (!token || !isAdmin) return null;
 

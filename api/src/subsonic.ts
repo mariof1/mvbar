@@ -8,14 +8,17 @@
 
 import fp from 'fastify-plugin';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import { pluginSimilarArtistIds, pluginSimilarSongIds } from './pluginSystem/capabilities.js';
 import crypto from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { resolveInside } from './pathSafety.js';
 import { audit, db, redis } from './db.js';
 import logger from './logger.js';
 import { allowedLibrariesForUser } from './access.js';
 import { normalizeEmail, verifyPassword } from './security.js';
+import * as regularPlaylists from './playlistsRepo.js';
 import { buildSmartPlaylistQuery, normalizeFilters } from './smartPlaylists.js';
 import type { Role } from './store.js';
 
@@ -181,10 +184,7 @@ function sendResponse(reply: FastifyReply, data: SubsonicResponse, format = 'xml
 }
 
 function safeJoin(baseDir: string, relPath: string) {
-  const abs = path.resolve(baseDir, relPath);
-  const base = path.resolve(baseDir);
-  if (abs !== base && !abs.startsWith(base + path.sep)) throw new Error('invalid path');
-  return abs;
+  return resolveInside(baseDir, relPath, true);
 }
 
 function mimeFromExt(ext: string | null | undefined) {
@@ -362,6 +362,24 @@ function trackAccessCondition(user: SubsonicUser, params: unknown[], alias = 't'
   return `${alias}.library_id = any($${params.length}::bigint[])`;
 }
 
+function regularPlaylistAccessCondition(userParameter = '$1', alias = 'p') {
+  return `(
+    ${alias}.user_id=${userParameter}
+    or exists (
+      select 1
+        from playlist_collaborators member
+        join friendships friendship on friendship.id=member.friendship_id
+       where member.playlist_id=${alias}.id
+         and member.user_id=${userParameter}
+         and friendship.status='accepted'
+         and (
+           (friendship.requester_id=${alias}.user_id and friendship.addressee_id=${userParameter})
+           or (friendship.addressee_id=${alias}.user_id and friendship.requester_id=${userParameter})
+         )
+    )
+  )`;
+}
+
 function smartPlaylistAllowedLibraries(user: SubsonicUser, musicFolderId?: string) {
   const folderId = musicFolderId ? decodeLibraryDirectoryId(musicFolderId) : null;
   if (folderId !== null) {
@@ -373,12 +391,14 @@ function smartPlaylistAllowedLibraries(user: SubsonicUser, musicFolderId?: strin
 
 async function listAllowedLibraries(user: SubsonicUser) {
   if (user.allowedLibraries === null) {
-    const r = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries order by mount_path asc');
+    const r = await db().query<{ id: number; mount_path: string }>(
+      'select id, mount_path from libraries where enabled = true order by mount_path asc'
+    );
     return r.rows;
   }
   if (user.allowedLibraries.length === 0) return [];
   const r = await db().query<{ id: number; mount_path: string }>(
-    'select id, mount_path from libraries where id = any($1::bigint[]) order by mount_path asc',
+    'select id, mount_path from libraries where enabled = true and id = any($1::bigint[]) order by mount_path asc',
     [user.allowedLibraries]
   );
   return r.rows;
@@ -1560,18 +1580,60 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     const params = getParams(req);
     sendResponse(reply, createResponse({ albumInfo: { notes: '', musicBrainzId: '', smallImageUrl: '', mediumImageUrl: '', largeImageUrl: '' } }), params.f, params.callback);
   });
-  rest('getArtistInfo', async (req, reply) => {
+  async function sendArtistInfo(req: FastifyRequest, reply: FastifyReply, responseKey: 'artistInfo' | 'artistInfo2') {
     const params = getParams(req);
-    sendResponse(reply, createResponse({ artistInfo: { biography: '', musicBrainzId: '', smallImageUrl: '', mediumImageUrl: '', largeImageUrl: '' } }), params.f, params.callback);
-  });
-  rest('getArtistInfo2', async (req, reply) => {
-    const params = getParams(req);
-    sendResponse(reply, createResponse({ artistInfo2: { biography: '', musicBrainzId: '', smallImageUrl: '', mediumImageUrl: '', largeImageUrl: '' } }), params.f, params.callback);
-  });
-  rest('getArtistInfoID3', async (req, reply) => {
-    const params = getParams(req);
-    sendResponse(reply, createResponse({ artistInfo2: { biography: '', musicBrainzId: '', smallImageUrl: '', mediumImageUrl: '', largeImageUrl: '' } }), params.f, params.callback);
-  });
+    if (!params.id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f, params.callback);
+    const user = currentUser(req);
+    const rawId = decodeArtistId(params.id) ?? (/^\d+$/.test(params.id) ? Number(params.id) : null);
+    if (rawId === null) return sendResponse(reply, createError(ERROR.NOT_FOUND.code, 'Artist not found'), params.f, params.callback);
+    const artistArgs: unknown[] = [rawId];
+    const artistAccess = trackAccessCondition(user, artistArgs, 't', params.musicFolderId);
+    const artistResult = await db().query(
+      `select a.id,a.name,a.musicbrainz_id
+         from artists a
+        where a.id=$1 and exists (
+          select 1 from track_artists ta join active_tracks t on t.id=ta.track_id
+           where ta.artist_id=a.id and ${artistAccess}
+        )`,
+      artistArgs
+    );
+    const artist = artistResult.rows[0];
+    if (!artist) return sendResponse(reply, createError(ERROR.NOT_FOUND.code, 'Artist not found'), params.f, params.callback);
+    const recommendation = await pluginSimilarArtistIds(artist, 20);
+    let similarArtist: Record<string, unknown>[] = [];
+    if (recommendation?.ids.length) {
+      const resultArgs: unknown[] = [recommendation.ids];
+      const resultAccess = trackAccessCondition(user, resultArgs, 't', params.musicFolderId);
+      const similar = await db().query(
+        `select a.id,a.name,count(distinct nullif(t.album,''))::int as album_count,
+                min(t.id) filter (where t.art_path is not null) as art_track_id,
+                min(wanted.ord)::int as ord
+           from unnest($1::bigint[]) with ordinality wanted(id,ord)
+           join artists a on a.id=wanted.id
+           join track_artists ta on ta.artist_id=a.id
+           join active_tracks t on t.id=ta.track_id
+          where ${resultAccess}
+          group by a.id,a.name
+          order by ord`,
+        resultArgs
+      );
+      similarArtist = similar.rows.map(formatArtist);
+    }
+    sendResponse(reply, createResponse({
+      [responseKey]: {
+        biography: '',
+        musicBrainzId: artist.musicbrainz_id || '',
+        smallImageUrl: '',
+        mediumImageUrl: '',
+        largeImageUrl: '',
+        similarArtist,
+      },
+    }), params.f, params.callback);
+  }
+
+  rest('getArtistInfo', async (req, reply) => sendArtistInfo(req, reply, 'artistInfo'));
+  rest('getArtistInfo2', async (req, reply) => sendArtistInfo(req, reply, 'artistInfo2'));
+  rest('getArtistInfoID3', async (req, reply) => sendArtistInfo(req, reply, 'artistInfo2'));
 
   rest('getPodcasts', async (req, reply) => {
     const params = getParams(req);
@@ -1938,11 +2000,12 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     const args: unknown[] = [user.userId];
     const access = trackAccessCondition(user, args, 't', params.musicFolderId);
     const r = await db().query(`
-      select p.id, p.name, p.created_at,
+      select p.id, p.name, p.created_at, owner.email as owner_email,
              (select count(*)::int from playlist_items pi join active_tracks t on t.id=pi.track_id where pi.playlist_id=p.id and ${access}) as song_count,
              (select sum(t.duration_ms) from playlist_items pi join active_tracks t on t.id=pi.track_id where pi.playlist_id=p.id and ${access}) as duration
         from playlists p
-       where p.user_id = $1
+        join users owner on owner.id=p.user_id
+       where ${regularPlaylistAccessCondition()}
        order by p.name
     `, args);
 
@@ -1973,7 +2036,7 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     const regularPlaylists = r.rows.map((p) => ({
       id: String(p.id),
       name: p.name,
-      owner: user.username,
+      owner: p.owner_email,
       public: false,
       songCount: Number(p.song_count) || 0,
       duration: Math.round((Number(p.duration) || 0) / 1000),
@@ -2025,7 +2088,13 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
       }), params.f, params.callback);
     }
 
-    const pr = await db().query('select id, name, user_id, created_at from playlists where id=$1 and user_id=$2', [params.id, user.userId]);
+    const pr = await db().query(
+      `select p.id, p.name, p.user_id, p.created_at, owner.email as owner_email
+         from playlists p
+         join users owner on owner.id=p.user_id
+        where p.id=$1 and ${regularPlaylistAccessCondition('$2')}`,
+      [params.id, user.userId]
+    );
     if (!pr.rows[0]) return sendResponse(reply, createError(ERROR.NOT_FOUND.code, 'Playlist not found'), params.f, params.callback);
 
     const args: unknown[] = [user.userId, params.id];
@@ -2043,7 +2112,7 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
       playlist: {
         id: String(playlist.id),
         name: playlist.name,
-        owner: user.username,
+        owner: playlist.owner_email,
         public: false,
         songCount: songs.rows.length,
         duration: Math.round(songs.rows.reduce((sum: number, s: any) => sum + Number(s.duration_ms || 0), 0) / 1000),
@@ -2054,18 +2123,42 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     }), params.f, params.callback);
   });
 
-  rest('getSimilarSongs', async (req, reply) => {
+  async function sendSimilarSongs(req: FastifyRequest, reply: FastifyReply, responseKey: 'similarSongs' | 'similarSongs2') {
     const params = getParams(req);
-    sendResponse(reply, createResponse({ similarSongs: { song: [] } }), params.f, params.callback);
-  });
-  rest('getSimilarSongs2', async (req, reply) => {
-    const params = getParams(req);
-    sendResponse(reply, createResponse({ similarSongs2: { song: [] } }), params.f, params.callback);
-  });
-  rest('getSimilarSongsID3', async (req, reply) => {
-    const params = getParams(req);
-    sendResponse(reply, createResponse({ similarSongs2: { song: [] } }), params.f, params.callback);
-  });
+    if (!params.id) return sendResponse(reply, createError(ERROR.MISSING_PARAM.code, 'Missing id parameter'), params.f, params.callback);
+    const user = currentUser(req);
+    const count = parseCount(params.count, 50);
+    const seedArgs: unknown[] = [params.id];
+    const seedAccess = trackAccessCondition(user, seedArgs, 't', params.musicFolderId);
+    const seedResult = await db().query(
+      `select t.id,t.title,t.artist,t.musicbrainz_track_id
+         from active_tracks t where t.id=$1 and ${seedAccess}`,
+      seedArgs
+    );
+    const seed = seedResult.rows[0];
+    if (!seed) return sendResponse(reply, createError(ERROR.NOT_FOUND.code, 'Song not found'), params.f, params.callback);
+
+    const recommendation = await pluginSimilarSongIds(seed, count);
+    if (!recommendation?.ids.length) {
+      return sendResponse(reply, createResponse({ [responseKey]: { song: [] } }), params.f, params.callback);
+    }
+    const resultArgs: unknown[] = [user.userId, recommendation.ids];
+    const resultAccess = trackAccessCondition(user, resultArgs, 't', params.musicFolderId);
+    const songs = await db().query(
+      `select t.*, f.added_at as starred_at
+         from unnest($2::bigint[]) with ordinality wanted(id,ord)
+         join active_tracks t on t.id=wanted.id
+         left join favorite_tracks f on f.track_id=t.id and f.user_id=$1
+        where ${resultAccess}
+        order by wanted.ord`,
+      resultArgs
+    );
+    sendResponse(reply, createResponse({ [responseKey]: { song: songs.rows.map(formatSong) } }), params.f, params.callback);
+  }
+
+  rest('getSimilarSongs', async (req, reply) => sendSimilarSongs(req, reply, 'similarSongs'));
+  rest('getSimilarSongs2', async (req, reply) => sendSimilarSongs(req, reply, 'similarSongs2'));
+  rest('getSimilarSongsID3', async (req, reply) => sendSimilarSongs(req, reply, 'similarSongs2'));
   rest('getPandoraSongs', async (req, reply) => {
     const params = getParams(req);
     sendResponse(reply, createResponse({ similarSongs: { song: [] } }), params.f, params.callback);
@@ -2121,10 +2214,11 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (params.songId && playlistId !== null) {
       const trackIds = await resolveTrackIds({ ...params, id: params.songId }, user);
       if (trackIds.includes(Number(params.songId))) {
-        const pos = await db().query<{ p: number }>('select coalesce(max(position), -1) + 1 as p from playlist_items where playlist_id=$1', [playlistId]);
-        await db().query(
-          'insert into playlist_items (playlist_id, track_id, position) values ($1, $2, $3) on conflict (playlist_id, track_id) do nothing',
-          [playlistId, Number(params.songId), Number(pos.rows[0]?.p ?? 0)]
+        await regularPlaylists.addItem(
+          user.userId,
+          playlistId,
+          Number(params.songId),
+          user.allowedLibraries
         );
       }
     }
@@ -2144,21 +2238,20 @@ export const subsonicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (params.songIdToAdd) {
       const trackIds = await resolveTrackIds({ ...params, id: params.songIdToAdd }, user);
       if (trackIds.includes(Number(params.songIdToAdd))) {
-        const pos = await db().query<{ p: number }>('select coalesce(max(position), -1) + 1 as p from playlist_items where playlist_id=$1', [playlistId]);
-        await db().query(
-          `insert into playlist_items (playlist_id, track_id, position)
-           select $1, $2, $3 where exists (select 1 from playlists where id=$1 and user_id=$4)
-           on conflict (playlist_id, track_id) do nothing`,
-          [playlistId, Number(params.songIdToAdd), Number(pos.rows[0]?.p ?? 0), user.userId]
+        await regularPlaylists.addItem(
+          user.userId,
+          playlistId,
+          Number(params.songIdToAdd),
+          user.allowedLibraries
         );
       }
     }
     if (params.songIdToRemove) {
-      await db().query(
-        `delete from playlist_items
-          where playlist_id=$1 and track_id=$2
-            and exists (select 1 from playlists where id=$1 and user_id=$3)`,
-        [playlistId, Number(params.songIdToRemove), user.userId]
+      await regularPlaylists.removeItem(
+        user.userId,
+        playlistId,
+        Number(params.songIdToRemove),
+        user.allowedLibraries
       );
     }
     sendResponse(reply, createResponse(), params.f, params.callback);

@@ -8,12 +8,26 @@ import * as users from './userRepo.js';
 import { db } from './db.js';
 import cookie from '@fastify/cookie';
 import { notifyAdmins } from './telegram.js';
+import { clientInfoFromRequest, type ClientInfo } from './clientInfo.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     auth: {
-      signToken: (userId: string, role: Role, sessionVersion: number) => string;
-      verifyToken: (token: string) => { userId: string; role: Role; sessionVersion: number } | null;
+      signToken: (
+        userId: string,
+        role: Role,
+        sessionVersion: number,
+        authMethod?: 'password' | 'google',
+        issuedAt?: number
+      ) => string;
+      verifyToken: (token: string) => {
+        userId: string;
+        role: Role;
+        sessionVersion: number;
+        authMethod?: 'password' | 'google';
+        issuedAt?: number;
+        email?: string;
+      } | null;
     };
   }
 
@@ -24,10 +38,18 @@ declare module 'fastify' {
 
 import crypto from 'node:crypto';
 
-function signToken(userId: string, role: Role, sessionVersion: number) {
+const ACTIVE_WRITE_INTERVAL_MS = 5 * 60_000;
+
+function signToken(
+  userId: string,
+  role: Role,
+  sessionVersion: number,
+  authMethod: 'password' | 'google' = 'password',
+  issuedAt = Math.floor(Date.now() / 1000)
+) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const payload = Buffer.from(
-    JSON.stringify({ sub: userId, role, sv: sessionVersion, iat: Math.floor(Date.now() / 1000) })
+    JSON.stringify({ sub: userId, role, sv: sessionVersion, amr: authMethod, iat: issuedAt })
   ).toString('base64url');
   const data = `${header}.${payload}`;
   const sig = crypto.createHmac('sha256', config.jwtSecret).update(data).digest('base64url');
@@ -35,18 +57,78 @@ function signToken(userId: string, role: Role, sessionVersion: number) {
 }
 
 function verifyToken(token: string) {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-  const [h, p, s] = parts;
-  const data = `${h}.${p}`;
-  const expected = crypto.createHmac('sha256', config.jwtSecret).update(data).digest('base64url');
-  if (expected !== s) return null;
-  const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8')) as { sub: string; role: Role; sv?: number };
-  return { userId: payload.sub, role: payload.role, sessionVersion: payload.sv ?? 0 };
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [h, p, s] = parts;
+    const data = `${h}.${p}`;
+    const expected = crypto.createHmac('sha256', config.jwtSecret).update(data).digest('base64url');
+    const expectedBuffer = Buffer.from(expected);
+    const suppliedBuffer = Buffer.from(s);
+    if (
+      expectedBuffer.length !== suppliedBuffer.length
+      || !crypto.timingSafeEqual(expectedBuffer, suppliedBuffer)
+    ) return null;
+    const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8')) as {
+      sub: string;
+      role: Role;
+      sv?: number;
+      amr?: 'password' | 'google';
+      iat?: number;
+      email?: string;
+    };
+    if (!payload.sub || (payload.role !== 'admin' && payload.role !== 'user')) return null;
+    return {
+      userId: payload.sub,
+      role: payload.role,
+      sessionVersion: payload.sv ?? 0,
+      authMethod: payload.amr,
+      issuedAt: payload.iat,
+      email: payload.email,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export const authPlugin: FastifyPluginAsync = fp(async (app) => {
   await app.register(cookie);
+  const lastActiveWrites = new Map<string, number>();
+  const clientActivityWrites = new Map<string, number>();
+  const recordedLoginSessions = new Map<string, number>();
+
+  function pruneActivityCache(cache: Map<string, number>, now: number) {
+    if (cache.size < 10_000) return;
+    const cutoff = now - 24 * 60 * 60_000;
+    for (const [key, timestamp] of cache) {
+      if (timestamp < cutoff) cache.delete(key);
+    }
+  }
+
+  async function markActive(userId: string, ip: string, client: ClientInfo, force = false) {
+    const now = Date.now();
+    const clientKey = `${userId}:${client.id}`;
+    const updateUser = force || now - (lastActiveWrites.get(userId) ?? 0) >= ACTIVE_WRITE_INTERVAL_MS;
+    const trackClient = client.reported || client.type === 'web';
+    const updateClient = trackClient
+      && (force || now - (clientActivityWrites.get(clientKey) ?? 0) >= ACTIVE_WRITE_INTERVAL_MS);
+    if (!updateUser && !updateClient) return;
+
+    if (updateUser) lastActiveWrites.set(userId, now);
+    if (updateClient) clientActivityWrites.set(clientKey, now);
+    pruneActivityCache(lastActiveWrites, now);
+    pruneActivityCache(clientActivityWrites, now);
+    try {
+      await Promise.all([
+        updateUser ? users.markUserActive(userId, ip) : Promise.resolve(),
+        updateClient ? users.touchClientActivity(userId, ip, client) : Promise.resolve(),
+      ]);
+    } catch (error) {
+      if (updateUser) lastActiveWrites.delete(userId);
+      if (updateClient) clientActivityWrites.delete(clientKey);
+      app.log.warn({ err: error, userId }, 'failed to update user activity');
+    }
+  }
 
   function isSecureCookie(req: any) {
     if (config.cookieSecure === 'true') return true;
@@ -99,6 +181,24 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     if (user.session_version !== verified.sessionVersion) return;
 
     req.user = verified;
+    const client = clientInfoFromRequest(req);
+    const inferredMethod = verified.authMethod
+      ?? (user.google_id && (verified.email || !user.password_hash) ? 'google' : undefined);
+    if (inferredMethod && verified.issuedAt) {
+      const sessionKey = `${user.id}:${verified.issuedAt}`;
+      if (!recordedLoginSessions.has(sessionKey)) {
+        await users.ensureSessionLogin({
+          email: user.email,
+          method: inferredMethod,
+          sessionIat: verified.issuedAt,
+          ip: req.ip,
+          client,
+        });
+        recordedLoginSessions.set(sessionKey, Date.now());
+        pruneActivityCache(recordedLoginSessions, Date.now());
+      }
+    }
+    await markActive(verified.userId, req.ip, client);
   });
 
   // routes
@@ -110,18 +210,16 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     const ip = req.ip;
     const now = Date.now();
 
-    // Check if IP is whitelisted (bypass rate limiting)
-    if (!store.rateLimitBypassIPs.has(ip)) {
-      // lightweight rate limit (per IP)
-      const rlKey = `rl:${ip}`;
-      const rl = store.failedLoginsByKey.get(rlKey);
-      if (!rl || now - rl.lastFailedAt > 60_000) {
-        store.failedLoginsByKey.set(rlKey, { count: 1, lastFailedAt: now });
-      } else {
-        rl.count += 1;
-        rl.lastFailedAt = now;
-        if (rl.count > 5) return reply.code(429).send({ ok: false, error: 'rate_limited' });
-      }
+    const bypassRateLimit = store.rateLimitBypassIPs.has(ip);
+    const rlKey = `rl:${ip}`;
+    const ipFailures = store.failedLoginsByKey.get(rlKey);
+    if (
+      !bypassRateLimit
+      && ipFailures
+      && now - ipFailures.lastFailedAt <= 60_000
+      && ipFailures.count >= 5
+    ) {
+      return reply.code(429).send({ ok: false, error: 'rate_limited' });
     }
 
     // account lockout (per IP + email)
@@ -134,7 +232,15 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const user = await users.getUserByEmail(email);
 
-    if (!user || !verifyPassword(password, user.password_hash)) {
+    if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
+      if (!bypassRateLimit) {
+        if (!ipFailures || now - ipFailures.lastFailedAt > 60_000) {
+          store.failedLoginsByKey.set(rlKey, { count: 1, lastFailedAt: now });
+        } else {
+          ipFailures.count += 1;
+          ipFailures.lastFailedAt = now;
+        }
+      }
       const next = state ?? { count: 0, lastFailedAt: 0 };
       next.count += 1;
       next.lastFailedAt = now;
@@ -146,8 +252,12 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     store.failedLoginsByKey.delete(key);
-    const token = signToken(user.id, user.role, user.session_version);
-    await audit('login_ok', { email, ip });
+    store.failedLoginsByKey.delete(rlKey);
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const token = signToken(user.id, user.role, user.session_version, 'password', issuedAt);
+    const client = clientInfoFromRequest(req);
+    await users.ensureSessionLogin({ email, method: 'password', sessionIat: issuedAt, ip, client });
+    await markActive(user.id, ip, client, true);
     notifyAdmins('user_login', `User logged in:\n• Email: ${email}\n• IP: ${ip}`);
 
     // Save password for Subsonic token auth
@@ -223,7 +333,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
 
     // Default access: all current libraries (admin can later restrict).
     try {
-      const r = await db().query<{ id: number }>('select id from libraries');
+      const r = await db().query<{ id: number }>('select id from libraries where enabled = true');
       for (const lib of r.rows) {
         await db().query('insert into user_libraries(user_id, library_id) values ($1,$2) on conflict do nothing', [id, lib.id]);
       }
@@ -283,7 +393,14 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     const u = await users.getUserById(id);
     if (!u) return reply.code(404).send({ ok: false });
 
-    const r = await db().query<{ library_id: number }>('select library_id from user_libraries where user_id=$1 order by library_id asc', [id]);
+    const r = await db().query<{ library_id: number }>(
+      `select user_library.library_id
+       from user_libraries as user_library
+       join libraries as library on library.id = user_library.library_id
+       where user_library.user_id = $1 and library.enabled = true
+       order by user_library.library_id asc`,
+      [id]
+    );
     return { ok: true, libraryIds: r.rows.map((x) => Number(x.library_id)) };
   });
 
@@ -302,7 +419,12 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
       await client.query('BEGIN');
       await client.query('delete from user_libraries where user_id=$1', [id]);
       for (const lid of libraryIds) {
-        await client.query('insert into user_libraries(user_id, library_id) values ($1,$2) on conflict do nothing', [id, lid]);
+        await client.query(
+          `insert into user_libraries(user_id, library_id)
+           select $1, id from libraries where id = $2 and enabled = true
+           on conflict do nothing`,
+          [id, lid]
+        );
       }
       await client.query('COMMIT');
     } catch (e) {

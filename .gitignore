@@ -21,6 +21,12 @@ infra/caddy/Caddyfile.lan
 # Build artifacts (do not commit)
 /worker/dist
 /api/dist
+/windows/standalone/out
+/windows/standalone/staging
+/windows/standalone/generated
+/linux/standalone/out
+/linux/standalone/staging
+/linux/standalone/generated
 
 # Local scripts (do not commit)
 /web/*airsonic*test*.js

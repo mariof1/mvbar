@@ -1,0 +1,36 @@
+MVBar Standalone for Linux includes redistributable runtime software.
+The payload also contains license or copyright files supplied by the runtime
+packages available on the build host.
+
+Node.js
+Copyright Node.js contributors.
+License: MIT and component licenses
+https://nodejs.org/
+
+PostgreSQL
+Copyright PostgreSQL Global Development Group.
+License: PostgreSQL License
+https://www.postgresql.org/
+
+Redis
+Copyright Redis contributors.
+License: BSD 3-Clause for the Debian 12 Redis 7 runtime bundled by this build
+https://redis.io/
+
+Meilisearch
+Copyright Meilisearch.
+License: MIT
+https://www.meilisearch.com/
+
+Caddy
+Copyright Matthew Holt and The Caddy Authors.
+License: Apache License 2.0
+https://caddyserver.com/
+
+FFmpeg
+Copyright FFmpeg contributors.
+License: LGPL/GPL according to the Debian build configuration
+https://ffmpeg.org/
+
+JavaScript package notices are available in the package metadata and license
+files under the bundled application directories.

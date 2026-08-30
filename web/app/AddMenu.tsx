@@ -6,10 +6,11 @@ import { useAuth } from './store';
 import { usePlayer, type QueueTrack } from './playerStore';
 import { listPlaylists, createPlaylist, addTracksToPlaylist } from './apiClient';
 import { useToastStore } from './Toast';
+import { ShareTrackDialog } from './ShareTrackDialog';
 
 export type AddMenuTrack = QueueTrack;
 
-type Playlist = { id: string; name: string };
+type Playlist = { id: string; name: string; ownerEmail?: string; isOwner: boolean };
 
 interface AddMenuProps {
   // Returns the tracks this menu acts upon. Async so we can lazily fetch
@@ -46,6 +47,7 @@ export function AddMenu({
   const [plistOpen, setPlistOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
+  const [trackToShare, setTrackToShare] = useState<AddMenuTrack | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
@@ -60,14 +62,14 @@ export function AddMenu({
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const menuW = 224;
-    const menuH = 200;
+    const menuH = label === 'track' ? 244 : 200;
     let left = rect.right - menuW;
     let top = rect.bottom + 6;
     if (left < 8) left = 8;
     if (left + menuW > window.innerWidth - 8) left = window.innerWidth - menuW - 8;
     if (top + menuH > window.innerHeight - 8) top = rect.top - menuH - 6;
     setCoords({ top, left });
-  }, []);
+  }, [label]);
 
   useEffect(() => {
     if (!open) return;
@@ -101,7 +103,12 @@ export function AddMenu({
     if (!token) return;
     try {
       const r = await listPlaylists(token);
-      setPlaylists((r.playlists ?? []).map((p) => ({ id: String(p.id), name: p.name })));
+      setPlaylists((r.playlists ?? []).map((p) => ({
+        id: String(p.id),
+        name: p.name,
+        ownerEmail: p.owner?.email,
+        isOwner: p.is_owner,
+      })));
     } catch (e: any) {
       if (e?.status === 401) clear();
     }
@@ -143,6 +150,24 @@ export function AddMenu({
       } else {
         player.addManyToQueue(tracks);
       }
+    } finally {
+      setBusy(false);
+      setOpen(false);
+    }
+  };
+
+  const doShare = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const tracks = await resolveTracks();
+      if (tracks.length !== 1) {
+        showToast('Share one song at a time', 'error');
+        return;
+      }
+      setTrackToShare(tracks[0]);
+    } catch {
+      showToast('Could not prepare this song for sharing', 'error');
     } finally {
       setBusy(false);
       setOpen(false);
@@ -281,6 +306,20 @@ export function AddMenu({
                   </svg>
                   Add to queue
                 </button>
+                {label === 'track' && (
+                  <button
+                    type="button"
+                    onClick={doShare}
+                    disabled={busy}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-white/10 disabled:opacity-50 text-left"
+                  >
+                    <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M8.684 13.342C8.886 12.938 9 12.482 9 12s-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684 6.632 3.316m-6.632-6 6.632-3.316m0 0a3 3 0 105.368-2.684 3 3 0 00-5.368 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                    </svg>
+                    Share with a friend
+                  </button>
+                )}
                 <div className="my-1 h-px bg-white/10" />
                 <button
                   type="button"
@@ -331,7 +370,10 @@ export function AddMenu({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                           d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" />
                       </svg>
-                      <span className="truncate">{p.name}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate">{p.name}</span>
+                        {!p.isOwner && <span className="block truncate text-[10px] text-slate-500">Shared by {p.ownerEmail || 'a friend'}</span>}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -374,6 +416,7 @@ export function AddMenu({
           </>,
           document.body
         )}
+      <ShareTrackDialog track={trackToShare} onClose={() => setTrackToShare(null)} />
     </>
   );
 }

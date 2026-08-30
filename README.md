@@ -12,6 +12,7 @@ It’s designed to be simple to deploy: **one Docker container** includes the we
 - Fast library search and browsing (Meilisearch)
 - Background scanning/indexing (worker)
 - Single-container deployment (easy backups + portability)
+- Sandboxed, removable `.ndp` plugins with Navidrome package compatibility
 
 ## Deployment (Docker Compose)
 
@@ -69,6 +70,10 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL:-}
 
+      # Sandboxed plugins
+      PLUGINS_ENABLED: ${PLUGINS_ENABLED:-true}
+      PLUGINS_DIR: /data/plugins
+
       # Worker
       # Mount your music below and list the container paths here.
       MUSIC_DIRS: /music,/music2
@@ -88,6 +93,7 @@ services:
       - caddy_data:/data/caddy
       - caddy_config:/config/caddy
       - cache:/data/cache
+      - plugins:/data/plugins
       - hls:/hls
       - podcasts:/podcasts
 
@@ -104,6 +110,7 @@ volumes:
   caddy_data:
   caddy_config:
   cache:
+  plugins:
   hls:
   podcasts:
 ```
@@ -141,6 +148,25 @@ curl -fsS http://localhost/api/health
 ```
 
 ### Backup / restore
+
+Administrators can create and restore portable `.mvbar-backup` archives from
+**Admin → Settings**. Database-only is the default and is portable between Docker,
+Windows standalone, and Linux standalone. Generated artwork, lyrics, avatars,
+HLS output, and podcast downloads can be included explicitly; Redis sessions,
+the Meilisearch index, deployment secrets, and source media files are never
+included. Backup files contain sensitive account data and should be stored
+securely.
+
+### Plugins
+
+Administrators can install, configure, validate, enable, disable, and remove
+sandboxed `.ndp` packages from **Admin → Plugins**. Packages can also be dropped
+into the persistent `/data/plugins` volume and discovered with a rescan. See the
+[plugin guide](docs/plugins.md) for AudioMuse-AI setup, permissions, runtime
+limits, and the custom action manifest.
+
+The deployment-level Docker volume scripts remain available for full container
+snapshots:
 
 ```bash
 ./scripts/backup.sh

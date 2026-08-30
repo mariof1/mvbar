@@ -1,4 +1,5 @@
 import { db } from './db.js';
+import { asciiFold } from './tagRules.js';
 
 const cleanStr = (s: string) => s.replace(/\0/g, '');
 const cleanOpt = (s?: string | null) => (s == null ? null : cleanStr(s));
@@ -254,13 +255,15 @@ export async function upsertTrack(params: {
       // Batch insert artists - first insert all artist names at once
       if (artistsToInsert.length > 0) {
         const uniqueNames = [...new Set(artistsToInsert.map(a => a.name))];
+        const asciiNames = uniqueNames.map(name => asciiFold(name));
         // Batch upsert all artists and get their IDs
         const artistIdRes = await client.query<{ id: number; name: string }>(
-          `insert into artists(name) 
-           select unnest($1::text[]) 
-           on conflict (name) do update set name=excluded.name 
+          `insert into artists(name, ascii_name)
+           select name, ascii_name
+           from unnest($1::text[], $2::text[]) as incoming(name, ascii_name)
+           on conflict (name) do update set ascii_name = coalesce(artists.ascii_name, excluded.ascii_name)
            returning id, name`,
-          [uniqueNames]
+          [uniqueNames, asciiNames]
         );
         const nameToId = new Map(artistIdRes.rows.map(r => [r.name, r.id]));
         

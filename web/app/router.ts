@@ -27,11 +27,13 @@ export type Route =
   | { type: 'playlists'; sub?: 'regular' | 'smart' }
   | { type: 'playlist'; playlistId: string }
   | { type: 'favorites' }
+  | { type: 'social' }
   | { type: 'history' }
   | { type: 'podcasts'; sub?: 'subscriptions' | 'new' }
   | { type: 'podcast'; podcastId: number }
   | { type: 'audiobooks' }
   | { type: 'audiobook'; audiobookId: number }
+  | { type: 'missing-music' }
   | { type: 'settings' }
   | { type: 'admin' };
 
@@ -68,11 +70,13 @@ function routeToHash(route: Route): string {
     case 'playlists': return route.sub ? `#/playlists/${route.sub}` : '#/playlists';
     case 'playlist': return `#/playlist/${route.playlistId}`;
     case 'favorites': return '#/favorites';
+    case 'social': return '#/social';
     case 'history': return '#/history';
     case 'podcasts': return route.sub ? `#/podcasts/${route.sub}` : '#/podcasts';
     case 'podcast': return `#/podcast/${route.podcastId}`;
     case 'audiobooks': return '#/audiobooks';
     case 'audiobook': return `#/audiobook/${route.audiobookId}`;
+    case 'missing-music': return '#/missing-music';
     case 'settings': return '#/settings';
     case 'admin': return '#/admin';
     default: return '#/for-you';
@@ -90,9 +94,11 @@ function hashToRoute(hash: string): Route {
   if (path === 'for-you') return { type: 'for-you' };
   if (path === 'recently-added') return { type: 'recently-added' };
   if (path === 'favorites') return { type: 'favorites' };
+  if (path === 'social') return { type: 'social' };
   if (path === 'history') return { type: 'history' };
   if (path === 'settings') return { type: 'settings' };
   if (path === 'admin') return { type: 'admin' };
+  if (path === 'missing-music') return { type: 'missing-music' };
   
   // Browse routes
   if (parts[0] === 'browse') {
@@ -334,6 +340,7 @@ export function getTabFromRoute(route: Route): string {
     case 'playlist':
       return 'playlists';
     case 'favorites': return 'favorites';
+    case 'social': return 'social';
     case 'history': return 'history';
     case 'podcasts':
     case 'podcast':
@@ -341,6 +348,7 @@ export function getTabFromRoute(route: Route): string {
     case 'audiobooks':
     case 'audiobook':
       return 'audiobooks';
+    case 'missing-music': return 'missing-music';
     case 'settings': return 'settings';
     case 'admin': return 'admin';
     default: return 'for-you';

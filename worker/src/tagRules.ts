@@ -2,8 +2,12 @@
  * Sanitize and normalize text for database storage.
  * Normalizes to NFC for consistent storage and comparison.
  */
-export function sanitize(str: string | undefined | null): string | null {
-  if (!str) return null;
+export function sanitize(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+    return null;
+  }
+  const str = String(value);
   
   // Remove null bytes and replacement characters
   const s = str.replace(/\0/g, '').replace(/\uFFFD/g, '');

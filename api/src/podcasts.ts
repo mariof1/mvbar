@@ -9,9 +9,15 @@ import type { FastifyPluginAsync } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { resolveInside } from './pathSafety.js';
 import { db } from './db.js';
 import { XMLParser } from 'fast-xml-parser';
 import crypto from 'crypto';
+import {
+  boundedPosition,
+  continuousListeningDelta,
+  recordMediaActivity,
+} from './mediaActivity.js';
 
 const PODCAST_DIR = process.env.PODCAST_DIR ?? '/podcasts';
 const PODCAST_ART_DIR = process.env.PODCAST_ART_DIR ?? '/data/cache/podcast-art';
@@ -97,6 +103,39 @@ function parseDuration(val: any): number | null {
   return null;
 }
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function normalizePodcastAudioUrl(raw: string): string {
+  const value = raw.trim();
+  if (!value) return value;
+
+  if (value.startsWith('//')) {
+    const candidate = `https:${value}`;
+    return isHttpUrl(candidate) ? candidate : value;
+  }
+
+  const singleSlashProtocol = value.match(/^(https?):\/(?!\/)(.+)$/i);
+  if (singleSlashProtocol) {
+    const candidate = `${singleSlashProtocol[1]}://${singleSlashProtocol[2]}`;
+    return isHttpUrl(candidate) ? candidate : value;
+  }
+
+  const embeddedAbsoluteUrl = value.match(/^https?:\/\/[^/?#]+\/((?:https?:)?\/{1,2}.+)$/i);
+  if (embeddedAbsoluteUrl) {
+    const candidate = normalizePodcastAudioUrl(embeddedAbsoluteUrl[1]);
+    return isHttpUrl(candidate) ? candidate : value;
+  }
+
+  return value;
+}
+
 async function fetchAndParseRSS(feedUrl: string): Promise<ParsedPodcast> {
   const response = await fetch(feedUrl, {
     headers: { 'User-Agent': 'mvbar/1.0 Podcast Client' }
@@ -140,7 +179,7 @@ async function fetchAndParseRSS(feedUrl: string): Promise<ParsedPodcast> {
       guid: String(guid),
       title: item.title?.['#text'] || item.title || 'Untitled Episode',
       description: item.description?.['#text'] || item.description || item['itunes:summary'] || null,
-      audioUrl: enclosure['@_url'] || item.link || '',
+      audioUrl: normalizePodcastAudioUrl(enclosure['@_url'] || item.link || ''),
       audioType: enclosure['@_type'] || 'audio/mpeg',
       durationMs: parseDuration(item['itunes:duration']),
       fileSizeBytes: enclosure['@_length'] ? parseInt(enclosure['@_length'], 10) : null,
@@ -223,11 +262,47 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       return reply.code(500).send({ ok: false, error: 'Search failed' });
     }
   });
-  
+
+  // ========================================================================
+  // PREVIEW PODCAST DETAILS BEFORE SUBSCRIBING
+  // ========================================================================
+
+  app.get('/api/podcasts/preview', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+
+    const { feedUrl } = req.query as { feedUrl?: string };
+    if (!feedUrl) return reply.code(400).send({ ok: false, error: 'feedUrl is required' });
+
+    try {
+      const parsedUrl = new URL(feedUrl);
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        return reply.code(400).send({ ok: false, error: 'Only HTTP and HTTPS feeds are supported' });
+      }
+
+      const parsed = await fetchAndParseRSS(feedUrl);
+      return {
+        ok: true,
+        preview: {
+          title: parsed.title,
+          author: parsed.author,
+          description: parsed.description,
+          imageUrl: parsed.imageUrl,
+          link: parsed.link,
+          language: parsed.language,
+          lastBuildDate: parsed.lastBuildDate,
+          episodeCount: parsed.episodes.length
+        }
+      };
+    } catch (error: any) {
+      req.log.warn({ error, feedUrl }, 'Podcast preview failed');
+      return reply.code(500).send({ ok: false, error: error.message || 'Preview failed' });
+    }
+  });
+
   // ========================================================================
   // SUBSCRIBE TO PODCAST
   // ========================================================================
-  
+
   app.post('/api/podcasts/subscribe', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     
@@ -414,16 +489,40 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     const episodeId = Number((req.params as { episodeId: string }).episodeId);
     if (!Number.isFinite(episodeId)) return reply.code(400).send({ ok: false });
     
-    const { positionMs, played } = req.body as { positionMs?: number; played?: boolean };
+    const { positionMs, played } = (req.body ?? {}) as { positionMs?: unknown; played?: unknown };
+    if (positionMs === undefined && played === undefined) {
+      return reply.code(400).send({ ok: false, error: 'positionMs or played is required' });
+    }
+    if (played !== undefined && typeof played !== 'boolean') {
+      return reply.code(400).send({ ok: false, error: 'played must be a boolean' });
+    }
     
     // Verify episode exists and user is subscribed
-    const checkR = await db().query(
-      `SELECT 1 FROM podcast_episodes e
+    const checkR = await db().query<{
+      podcast_id: number;
+      duration_ms: number | null;
+      previous_position_ms: number | null;
+      previous_played: boolean | null;
+    }>(
+      `SELECT
+         e.podcast_id,
+         e.duration_ms,
+         uep.position_ms as previous_position_ms,
+         uep.played as previous_played
+       FROM podcast_episodes e
        JOIN user_podcast_subscriptions ups ON ups.podcast_id = e.podcast_id AND ups.user_id = $1
+       LEFT JOIN user_episode_progress uep ON uep.episode_id = e.id AND uep.user_id = $1
        WHERE e.id = $2`,
       [req.user.userId, episodeId]
     );
     if (checkR.rows.length === 0) return reply.code(404).send({ ok: false });
+    const episode = checkR.rows[0];
+    const normalizedPosition = positionMs === undefined
+      ? null
+      : boundedPosition(positionMs, episode.duration_ms);
+    if (positionMs !== undefined && normalizedPosition == null) {
+      return reply.code(400).send({ ok: false, error: 'positionMs must be a non-negative finite number' });
+    }
     
     await db().query(
       `INSERT INTO user_episode_progress (user_id, episode_id, position_ms, played, updated_at)
@@ -432,8 +531,23 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
          position_ms = COALESCE($3, user_episode_progress.position_ms),
          played = COALESCE($4, user_episode_progress.played),
          updated_at = now()`,
-      [req.user.userId, episodeId, positionMs ?? null, played ?? null]
+      [req.user.userId, episodeId, normalizedPosition, played ?? null]
     );
+
+    const activityPosition = normalizedPosition
+      ?? (played === true && episode.duration_ms ? episode.duration_ms : episode.previous_position_ms ?? 0);
+    const listenedMs = normalizedPosition == null
+      ? 0
+      : continuousListeningDelta(episode.previous_position_ms, normalizedPosition);
+    await recordMediaActivity({
+      req,
+      mediaType: 'podcast',
+      itemId: episodeId,
+      parentId: episode.podcast_id,
+      positionMs: activityPosition,
+      listenedMs,
+      completed: played === true && episode.previous_played !== true,
+    });
     
     return { ok: true };
   });
@@ -446,7 +560,30 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     
     const episodeId = Number((req.params as { episodeId: string }).episodeId);
-    const { played } = req.body as { played: boolean };
+    const { played } = (req.body ?? {}) as { played?: unknown };
+    if (typeof played !== 'boolean') {
+      return reply.code(400).send({ ok: false, error: 'played must be a boolean' });
+    }
+
+    const episodeR = await db().query<{
+      podcast_id: number;
+      duration_ms: number | null;
+      position_ms: number | null;
+      previous_played: boolean | null;
+    }>(
+      `SELECT
+         e.podcast_id,
+         e.duration_ms,
+         uep.position_ms,
+         uep.played as previous_played
+       FROM podcast_episodes e
+       JOIN user_podcast_subscriptions ups ON ups.podcast_id = e.podcast_id AND ups.user_id = $1
+       LEFT JOIN user_episode_progress uep ON uep.episode_id = e.id AND uep.user_id = $1
+       WHERE e.id = $2`,
+      [req.user.userId, episodeId]
+    );
+    const episode = episodeR.rows[0];
+    if (!episode) return reply.code(404).send({ ok: false });
     
     await db().query(
       `INSERT INTO user_episode_progress (user_id, episode_id, played, updated_at)
@@ -454,6 +591,18 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
        ON CONFLICT (user_id, episode_id) DO UPDATE SET played = $3, updated_at = now()`,
       [req.user.userId, episodeId, played]
     );
+
+    if (played && episode.previous_played !== true) {
+      await recordMediaActivity({
+        req,
+        mediaType: 'podcast',
+        itemId: episodeId,
+        parentId: episode.podcast_id,
+        positionMs: episode.duration_ms ?? episode.position_ms ?? 0,
+        listenedMs: 0,
+        completed: true,
+      });
+    }
     
     return { ok: true };
   });
@@ -512,7 +661,12 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     }
     
     // Otherwise redirect to audio URL
-    return reply.redirect(302, episode.audio_url);
+    const audioUrl = normalizePodcastAudioUrl(episode.audio_url);
+    if (audioUrl !== episode.audio_url) {
+      await db().query('UPDATE podcast_episodes SET audio_url = $1 WHERE id = $2', [audioUrl, episodeId]);
+      req.log.info({ episodeId }, 'Repaired malformed podcast episode audio URL');
+    }
+    return reply.redirect(audioUrl, 302);
   });
   
   // ========================================================================
@@ -609,7 +763,13 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       await fs.mkdir(podcastDir, { recursive: true });
       
       // Determine file extension from URL or content type
-      const url = new URL(episode.audio_url);
+      const audioUrl = normalizePodcastAudioUrl(episode.audio_url);
+      if (audioUrl !== episode.audio_url) {
+        await db().query('UPDATE podcast_episodes SET audio_url = $1 WHERE id = $2', [audioUrl, episodeId]);
+        req.log.info({ episodeId }, 'Repaired malformed podcast episode audio URL before download');
+      }
+
+      const url = new URL(audioUrl);
       let ext = path.extname(url.pathname) || '.mp3';
       if (!ext.match(/^\.(mp3|m4a|ogg|opus|wav|aac)$/i)) ext = '.mp3';
       
@@ -617,9 +777,9 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       const filePath = path.join(podcastDir, filename);
       
       // Download the file
-      req.log.info({ episodeId, url: episode.audio_url }, 'Downloading podcast episode');
+      req.log.info({ episodeId, url: audioUrl }, 'Downloading podcast episode');
       
-      const response = await fetch(episode.audio_url, {
+      const response = await fetch(audioUrl, {
         headers: { 'User-Agent': 'mvbar/1.0 Podcast Client' }
       });
       
@@ -687,10 +847,7 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
   // ========================================================================
   
   function safeJoinPodcastArt(relPath: string) {
-    const abs = path.resolve(PODCAST_ART_DIR, relPath);
-    const base = path.resolve(PODCAST_ART_DIR);
-    if (!abs.startsWith(base + path.sep)) throw new Error('invalid path');
-    return abs;
+    return resolveInside(PODCAST_ART_DIR, relPath);
   }
 
   // Canonical endpoint for cached podcast art (stable URL so browser caches once per hash)
@@ -747,8 +904,9 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
       // If we have cached image, redirect to canonical URL so browser caches once per hash
       if (row.image_path) {
         try {
-          safeJoinPodcastArt(row.image_path); // validate path
-          return reply.redirect(302, `/api/podcast-art/${row.image_path}`);
+          const cachedPath = safeJoinPodcastArt(row.image_path);
+          const cachedStat = await stat(cachedPath);
+          if (cachedStat.isFile()) return reply.redirect(`/api/podcast-art/${row.image_path}`, 302);
         } catch {
           // Fall through to redirect
         }
@@ -756,7 +914,7 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     
     // Fallback: redirect to original URL if available
     if (row.image_url) {
-      return reply.redirect(302, row.image_url);
+      return reply.redirect(row.image_url, 302);
     }
     
     return reply.code(404).send({ ok: false });
@@ -783,21 +941,24 @@ export const podcastsPlugin: FastifyPluginAsync = fp(async (app) => {
     const row = r.rows[0];
     if (!row) return reply.code(404).send({ ok: false });
     
-    // Try episode image first, then podcast image
-    const imagePath = row.image_path || row.podcast_image_path;
+    // Try episode image first, then podcast image. A restored database may
+    // reference files that were intentionally omitted from a database-only
+    // backup, so verify each candidate before redirecting to the cache route.
+    const imagePaths = [row.image_path, row.podcast_image_path].filter((value): value is string => Boolean(value));
     const imageUrl = row.image_url || row.podcast_image_url;
     
-    if (imagePath) {
+    for (const imagePath of imagePaths) {
       try {
-        safeJoinPodcastArt(imagePath); // validate path
-        return reply.redirect(302, `/api/podcast-art/${imagePath}`);
+        const cachedPath = safeJoinPodcastArt(imagePath);
+        const cachedStat = await stat(cachedPath);
+        if (cachedStat.isFile()) return reply.redirect(`/api/podcast-art/${imagePath}`, 302);
       } catch {
-        // Fall through to redirect
+        // Try the next cached candidate, then fall back to its external URL.
       }
     }
     
     if (imageUrl) {
-      return reply.redirect(302, imageUrl);
+      return reply.redirect(imageUrl, 302);
     }
     
     return reply.code(404).send({ ok: false });

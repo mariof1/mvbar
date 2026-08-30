@@ -6,7 +6,7 @@ import Redis from 'ioredis';
 import { db, audit } from './db.js';
 import { upsertTrack, getTrackByPath } from './scanRepo.js';
 import { readTagsAsync } from './metadata.js';
-import { writeArt } from './art.js';
+import { writeMusicArt } from './art.js';
 import { indexAllTracks, ensureTracksIndex } from './indexer.js';
 import logger from './logger.js';
 
@@ -256,7 +256,7 @@ export class LibraryWatcher {
       let art: { relPath: string; mime: string; hash: string } | null = null;
       if (tags.artData && tags.artMime) {
         try {
-          const w = await writeArt(ART_DIR, tags.artData, tags.artMime);
+          const w = await writeMusicArt(ART_DIR, tags.artData);
           art = { relPath: w.relPath, mime: w.mime, hash: w.hash };
         } catch {
           logger.warn('scan', `Failed to write art: ${relPath}`);

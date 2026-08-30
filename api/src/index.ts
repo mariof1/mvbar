@@ -25,9 +25,17 @@ import { audiobooksPlugin } from './audiobooks.js';
 import { preferencesPlugin } from './preferences.js';
 import { deviceLogsPlugin } from './deviceLogs.js';
 import { telegramPlugin } from './telegram.js';
+import { userAuditPlugin } from './userAudit.js';
+import { socialPlugin } from './social.js';
+import { initializeWebPush, pushNotificationsPlugin } from './pushNotifications.js';
 import googleAuthPlugin, { startAvatarSyncScheduler } from './googleAuth.js';
+import { backupPlugin } from './backup.js';
 import { initDb } from './db.js';
 import logger from './logger.js';
+import { initializePluginSystem } from './pluginSystem/registry.js';
+import { pluginUploadLimitBytes } from './pluginSystem/package.js';
+import { pluginsAdminPlugin } from './pluginSystem/routes.js';
+import { missingMusicPlugin, startMissingMusicScheduler } from './pluginSystem/missingMusic.js';
 
 // Use pino-pretty for human-readable logs
 const app = Fastify({
@@ -84,10 +92,12 @@ function sanitizeUrlForLog(url: string) {
 }
 
 await initDb();
+await initializeWebPush();
+await initializePluginSystem();
 logger.success('api', `Server starting on port ${config.port}`);
 
 // Register multipart for file uploads
-await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB max
+await app.register(multipart, { limits: { fileSize: Math.max(5 * 1024 * 1024, pluginUploadLimitBytes()) } });
 
 app.addHook('onResponse', async (req, reply) => {
   const method = req.method;
@@ -112,6 +122,10 @@ app.get('/api/version', async () => ({
 }));
 
 await app.register(authPlugin);
+await app.register(userAuditPlugin);
+await app.register(pushNotificationsPlugin);
+await app.register(socialPlugin);
+await app.register(backupPlugin);
 await app.register(googleAuthPlugin);
 await app.register(libraryPlugin);
 await app.register(smartSearchPlugin);
@@ -126,6 +140,8 @@ await app.register(statsPlugin);
 await app.register(recommendationsPlugin);
 await app.register(hlsPlugin);
 await app.register(websocketPlugin);
+await app.register(pluginsAdminPlugin);
+await app.register(missingMusicPlugin);
 await app.register(smartPlaylistsPlugin);
 await app.register(listenbrainzPlugin);
 await app.register(subsonicPlugin);
@@ -135,8 +151,9 @@ await app.register(preferencesPlugin);
 await app.register(deviceLogsPlugin);
 await app.register(telegramPlugin);
 
-const host = '0.0.0.0';
+const host = process.env.HOST ?? '0.0.0.0';
 await app.listen({ port: config.port, host });
 
 // Start avatar sync scheduler for Google users
 startAvatarSyncScheduler(app.log);
+startMissingMusicScheduler();
