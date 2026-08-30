@@ -119,6 +119,12 @@ ensure_config_schema() {
     "GOOGLE_CLIENT_SECRET=" \
     "GOOGLE_CALLBACK_URL="
 
+  append_config_section "Web Push notifications" \
+    "WEB_PUSH_ENABLED=true" \
+    "WEB_PUSH_VAPID_PUBLIC_KEY=" \
+    "WEB_PUSH_VAPID_PRIVATE_KEY=" \
+    "WEB_PUSH_VAPID_SUBJECT="
+
   append_config_section "HTTP, cookies, proxy handling, and timezone" \
     "COOKIE_NAME=mvbar_token" \
     "COOKIE_SECURE=auto" \
@@ -230,6 +236,10 @@ load_config() {
   GOOGLE_CALLBACK_URL=${configured_google_callback_url:-${GOOGLE_CALLBACK_URL:-}}
   configured_lastfm_api_key=$(config_get LASTFM_API_KEY)
   LASTFM_API_KEY=${configured_lastfm_api_key:-${LASTFM_API_KEY:-}}
+  WEB_PUSH_ENABLED=$(config_get WEB_PUSH_ENABLED)
+  WEB_PUSH_VAPID_PUBLIC_KEY=$(config_get WEB_PUSH_VAPID_PUBLIC_KEY)
+  WEB_PUSH_VAPID_PRIVATE_KEY=$(config_get WEB_PUSH_VAPID_PRIVATE_KEY)
+  WEB_PUSH_VAPID_SUBJECT=$(config_get WEB_PUSH_VAPID_SUBJECT)
   COOKIE_NAME=$(config_get COOKIE_NAME)
   COOKIE_SECURE=$(config_get COOKIE_SECURE)
   TRUST_PROXY=$(config_get TRUST_PROXY)
@@ -409,6 +419,8 @@ export_application_environment() {
   export MEILI_HOST="http://127.0.0.1:$MEILI_PORT"
   export MEILI_MASTER_KEY JWT_SECRET ADMIN_EMAIL ADMIN_PASSWORD MUSIC_DIRS AUDIOBOOK_DIRS
   export LASTFM_API_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_CALLBACK_URL
+  export WEB_PUSH_ENABLED WEB_PUSH_VAPID_PUBLIC_KEY WEB_PUSH_VAPID_PRIVATE_KEY
+  export WEB_PUSH_VAPID_SUBJECT
   export COOKIE_NAME COOKIE_SECURE TRUST_PROXY TZ
   export DB_POOL_SIZE MEILI_TASK_TIMEOUT_MS BACKUP_MAX_UPLOAD_MB LOG_LEVEL DEBUG
   export PLUGINS_ENABLED PLUGIN_MAX_UPLOAD_MB PLUGIN_TIMEOUT_MS PLUGIN_MEMORY_MB

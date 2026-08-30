@@ -74,6 +74,9 @@ They are grouped as follows:
   `TRUST_PROXY`;
 - integrations: `LASTFM_API_KEY`, `GOOGLE_CLIENT_ID`,
   `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`;
+- Web Push: `WEB_PUSH_ENABLED`, optional externally managed
+  `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, and
+  `WEB_PUSH_VAPID_SUBJECT`;
 - libraries and scanning: `MUSIC_DIRS`, `AUDIOBOOK_DIRS`, `LIBRARY_READ_ONLY`,
   `FAST_SCAN`, `SCAN_CONCURRENCY`, `ARTIST_ART_CONCURRENCY`, `SCAN_MAX_QUEUE`,
   `SCAN_REFRESH_META`, `METADATA_TIMEOUT_MS`, `RESCAN_INTERVAL_MS`,
@@ -111,6 +114,11 @@ Google sign-in remains disabled when any of these values is empty. Existing
 standalone installations automatically receive every newly exposed setting
 with the standalone defaults on their next launch; existing values and secrets
 are left unchanged.
+
+Web Push is enabled by default for standalone installations. When explicit
+VAPID keys are left empty, MVBar generates them once and stores them in the
+persistent PostgreSQL data directory. This keeps browser subscriptions valid
+across executable upgrades without placing the private key in `config.env`.
 
 ## systemd
 
