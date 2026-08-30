@@ -91,8 +91,15 @@ type CacheCategory = {
   root: string;
 };
 
+type RegularFile = {
+  absolutePath: string;
+  relativePath: string;
+  size: number;
+};
+
 export type RestoreContext = {
   restoreCaches: boolean;
+  avatarFiles: Set<string>;
   libraryMapping: Map<string, string>;
   podcastRoot: string;
 };
@@ -198,7 +205,7 @@ export function sortTablesByDependencies(tables: TableInfo[]) {
 }
 
 async function listRegularFiles(root: string) {
-  const files: Array<{ absolutePath: string; relativePath: string; size: number }> = [];
+  const files: RegularFile[] = [];
   let rootStat;
   try {
     rootStat = await lstat(root);
@@ -223,6 +230,32 @@ async function listRegularFiles(root: string) {
   return files;
 }
 
+export function isSafeAvatarFilename(filename: string) {
+  return filename.length > 0
+    && filename.length <= 255
+    && filename !== '.'
+    && filename !== '..'
+    && !filename.includes('\\')
+    && path.basename(filename) === filename;
+}
+
+async function listNamedRegularFiles(root: string, filenames: Iterable<string>) {
+  const files: RegularFile[] = [];
+  for (const filename of [...new Set(filenames)].sort()) {
+    if (!isSafeAvatarFilename(filename)) continue;
+    const absolutePath = path.join(root, filename);
+    try {
+      const fileStat = await lstat(absolutePath);
+      if (!fileStat.isFile() || fileStat.isSymbolicLink()) continue;
+      files.push({ absolutePath, relativePath: filename, size: fileStat.size });
+    } catch {
+      // A stale database reference must not make the backup fail. Restore will
+      // clear the reference because no matching file is present in the archive.
+    }
+  }
+  return files;
+}
+
 function portablePath(...parts: string[]) {
   return parts.map((part) => part.replaceAll('\\', '/')).join('/');
 }
@@ -237,6 +270,7 @@ export function isSafeArchivePath(entryPath: string) {
 async function createBackupArchive(includeCaches: boolean, output: PassThrough): Promise<BackupManifest> {
   const client = await db().connect();
   const archive = new ZipArchive({ zlib: { level: 6 } });
+  let accountAvatarFilenames: string[] = [];
   archive.pipe(output);
   archive.on('warning', (error: Error) => {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') output.destroy(error);
@@ -265,21 +299,30 @@ async function createBackupArchive(includeCaches: boolean, output: PassThrough):
       archive.append(stream, { name: `database/${table}.jsonl` });
       await finished(stream);
     }
+    const accountAvatars = await client.query<{ avatar_path: string }>(`
+      SELECT avatar_path
+      FROM users
+      WHERE google_id IS NULL AND avatar_path IS NOT NULL
+      ORDER BY avatar_path
+    `);
+    accountAvatarFilenames = accountAvatars.rows.map((row) => row.avatar_path);
     await client.query('COMMIT');
 
     const cacheManifest: CacheManifest = { included: includeCaches, categories: [] };
-    if (includeCaches) {
-      for (const category of cacheCategories()) {
-        const files = await listRegularFiles(category.root);
-        let bytes = 0;
-        for (const file of files) {
-          bytes += file.size;
-          archive.file(file.absolutePath, {
-            name: portablePath('cache', category.key, file.relativePath),
-          });
-        }
-        cacheManifest.categories.push({ key: category.key, files: files.length, bytes });
+    const categories = cacheCategories();
+    for (const category of categories) {
+      if (!includeCaches && category.key !== 'avatars') continue;
+      const files = !includeCaches && category.key === 'avatars'
+        ? await listNamedRegularFiles(category.root, accountAvatarFilenames)
+        : await listRegularFiles(category.root);
+      let bytes = 0;
+      for (const file of files) {
+        bytes += file.size;
+        archive.file(file.absolutePath, {
+          name: portablePath('cache', category.key, file.relativePath),
+        });
       }
+      cacheManifest.categories.push({ key: category.key, files: files.length, bytes });
     }
 
     const manifest: BackupManifest = {
@@ -579,10 +622,9 @@ export function transformRestoreRow(table: string, row: Record<string, unknown>,
     }
   }
 
-  // A database-only backup intentionally contains no files from cache-backed
-  // storage. Do not restore references which would make the destination think
-  // those files exist. Background scanners and refresh jobs will recreate the
-  // derived files which can be reproduced; user-uploaded avatars remain unset.
+  // A database-only backup intentionally contains no derived cache files. Do
+  // not restore references which would make the destination think those files
+  // exist. Background scanners and refresh jobs recreate derived files.
   if (!context.restoreCaches) {
     if (table === 'tracks') {
       row.art_path = null;
@@ -592,12 +634,21 @@ export function transformRestoreRow(table: string, row: Record<string, unknown>,
     } else if (table === 'artists') {
       row.art_path = null;
       row.art_hash = null;
-    } else if (table === 'users') {
-      row.avatar_path = null;
     } else if (table === 'podcasts' || table === 'podcast_episodes') {
       row.image_path = null;
     } else if (table === 'audiobooks') {
       row.cover_path = null;
+    }
+  }
+
+  // Uploaded account avatars are essential user data and restore regardless of
+  // the optional cache setting. Only retain a reference when its safe, regular
+  // file was actually present in the archive. This also keeps older database-
+  // only backups (which omitted avatars) safe to restore.
+  if (table === 'users') {
+    const avatarPath = row.avatar_path;
+    if (typeof avatarPath !== 'string' || !context.avatarFiles.has(avatarPath)) {
+      row.avatar_path = null;
     }
   }
 
@@ -689,12 +740,16 @@ async function ensureSafeDirectory(root: string, relativeDirectory: string) {
   return current;
 }
 
-async function restoreCacheFiles(stagingRoot: string, manifest: BackupManifest) {
+async function restoreCacheFiles(
+  stagingRoot: string,
+  manifest: BackupManifest,
+  shouldRestore: (category: CacheCategory) => boolean,
+) {
   const configured = new Map(cacheCategories().map((category) => [category.key, category.root]));
   let copied = 0;
   for (const category of manifest.caches.categories) {
     const destinationRoot = configured.get(category.key);
-    if (!destinationRoot) continue;
+    if (!destinationRoot || !shouldRestore({ key: category.key, root: destinationRoot })) continue;
     const sourceRoot = path.join(stagingRoot, 'cache', category.key);
     const files = await listRegularFiles(sourceRoot);
     for (const file of files) {
@@ -713,7 +768,23 @@ async function restoreCacheFiles(stagingRoot: string, manifest: BackupManifest) 
   return copied;
 }
 
-async function restoreDatabase(stagingRoot: string, manifest: BackupManifest, restoreCaches: boolean) {
+async function archivedAvatarFiles(stagingRoot: string, manifest: BackupManifest) {
+  if (!manifest.caches.categories.some((category) => category.key === 'avatars')) return new Set<string>();
+  const sourceRoot = path.join(stagingRoot, 'cache', 'avatars');
+  const files = await listRegularFiles(sourceRoot);
+  return new Set(
+    files
+      .map((file) => file.relativePath)
+      .filter(isSafeAvatarFilename),
+  );
+}
+
+async function restoreDatabase(
+  stagingRoot: string,
+  manifest: BackupManifest,
+  restoreCaches: boolean,
+  avatarFiles: Set<string>,
+) {
   const client = await db().connect();
   try {
     const targetTables = await getTableInfo(client);
@@ -729,6 +800,7 @@ async function restoreDatabase(stagingRoot: string, manifest: BackupManifest, re
       : new Map<string, string>();
     const context: RestoreContext = {
       restoreCaches,
+      avatarFiles,
       libraryMapping,
       podcastRoot: process.env.PODCAST_DIR ?? '/podcasts',
     };
@@ -793,13 +865,25 @@ async function restoreArchiveFile(archivePath: string, requestedCaches: boolean,
       if (!entries.has(`database/${table.name}.jsonl`)) throw new Error(`Backup table is missing: ${table.name}`);
     }
     const restoreCaches = requestedCaches && manifest.caches.included;
-    const databaseResult = await restoreDatabase(extractedRoot, manifest, restoreCaches);
+    const avatarFiles = await archivedAvatarFiles(extractedRoot, manifest);
+    // Account avatars are restored before the database replacement so a copy
+    // failure cannot commit user rows that point at missing files.
+    const avatarFilesRestored = await restoreCacheFiles(
+      extractedRoot,
+      manifest,
+      (category) => category.key === 'avatars',
+    );
+    const databaseResult = await restoreDatabase(extractedRoot, manifest, restoreCaches, avatarFiles);
     await rescanPlugins();
     let cacheFiles = 0;
     let cacheWarning: string | undefined;
     if (restoreCaches) {
       try {
-        cacheFiles = await restoreCacheFiles(extractedRoot, manifest);
+        cacheFiles = await restoreCacheFiles(
+          extractedRoot,
+          manifest,
+          (category) => category.key !== 'avatars',
+        );
       } catch (error) {
         cacheWarning = error instanceof Error ? error.message : 'Cache restore failed';
         log.error({ err: error }, 'Database restored but optional cache restore failed');
@@ -840,6 +924,7 @@ async function restoreArchiveFile(archivePath: string, requestedCaches: boolean,
       ...databaseResult,
       cachesRestored: restoreCaches,
       cacheFiles,
+      avatarFilesRestored,
       reindexQueued,
       warning: warnings.length > 0 ? warnings.join(' ') : undefined,
       sessionsInvalidated: true as const,

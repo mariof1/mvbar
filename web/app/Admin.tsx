@@ -1377,7 +1377,7 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
   async function restoreBackup(backup: AdminBackup) {
     const confirmed = await showConfirm({
       title: 'Replace the MVBar database?',
-      message: `This restores ${backup.name}, replacing the current database. Library roots will be mapped to this server's configured folders. ${restoreCaches && backup.includesCaches ? 'Included cache files will also be copied.' : 'Cache files will not be restored.'} Everyone will be signed out.`,
+      message: `This restores ${backup.name}, replacing the current database. Library roots will be mapped to this server's configured folders. Uploaded account avatars restore automatically. ${restoreCaches && backup.includesCaches ? 'Included cache files will also be copied.' : 'Optional cache files will not be restored.'} Everyone will be signed out.`,
       confirmLabel: 'Restore backup',
       danger: true,
     });
@@ -1389,7 +1389,7 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
       const result = await restoreAdminBackup(token, backup.name, restoreCaches);
       await showConfirm({
         title: 'Restore complete',
-        message: `Restored ${result.rows.toLocaleString()} database rows across ${result.tables} tables${result.cachesRestored ? ` and ${result.cacheFiles.toLocaleString()} cache files` : ''}.${result.reindexQueued ? ' A full library scan was queued to rebuild search.' : ''}${result.warning ? ` Warning: ${result.warning}.` : ''} Sign in with an administrator account from the restored backup.`,
+        message: `Restored ${result.rows.toLocaleString()} database rows across ${result.tables} tables, including ${result.avatarFilesRestored.toLocaleString()} avatar files${result.cachesRestored ? ` and ${result.cacheFiles.toLocaleString()} optional cache files` : ''}.${result.reindexQueued ? ' A full library scan was queued to rebuild search.' : ''}${result.warning ? ` Warning: ${result.warning}.` : ''} Sign in with an administrator account from the restored backup.`,
         confirmLabel: 'Go to sign in',
         cancelLabel: '',
       });
@@ -1428,7 +1428,7 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
           <div>
             <h4 className="font-semibold text-white">Create server backup</h4>
             <p className="text-sm text-slate-400 mt-1">
-              The database is always included: users, settings, playlists, listening data, podcasts, and the library catalog.
+              The database and uploaded account avatars are always included: users, settings, playlists, listening data, podcasts, and the library catalog.
             </p>
           </div>
 
@@ -1442,7 +1442,7 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
             <span>
               <span className="block text-sm font-medium text-slate-200">Include generated and downloaded caches</span>
               <span className="block text-xs text-slate-500 mt-1">
-                Optional and disabled by default. Includes artwork, lyrics, avatars, HLS, and downloaded podcast files; it can make the backup much larger.
+                Optional and disabled by default. Includes generated artwork, Google avatars, lyrics, HLS, and downloaded podcast files; it can make the backup much larger.
               </span>
             </span>
           </label>
@@ -1536,7 +1536,7 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
                     <span>{formatDate(backup.createdAt)}</span>
                     <span>{formatBytes(backup.size)}</span>
-                    <span>{backup.includesCaches ? `Caches included (${formatBytes(backup.cacheBytes)})` : 'Database only'}</span>
+                    <span>{backup.includesCaches ? `Caches included (${formatBytes(backup.cacheBytes)})` : `Database + account avatars (${formatBytes(backup.cacheBytes)})`}</span>
                     <span>MVBar {backup.appVersion}</span>
                   </div>
                 </div>

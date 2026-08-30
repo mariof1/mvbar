@@ -291,6 +291,7 @@ export async function restoreAdminBackup(token: string, name: string, restoreCac
     librariesRemapped: number;
     cachesRestored: boolean;
     cacheFiles: number;
+    avatarFilesRestored: number;
     reindexQueued: boolean;
     warning?: string;
     sessionsInvalidated: true;

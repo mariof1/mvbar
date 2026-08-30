@@ -151,8 +151,9 @@ curl -fsS http://localhost/api/health
 
 Administrators can create and restore portable `.mvbar-backup` archives from
 **Admin → Settings**. Database-only is the default and is portable between Docker,
-Windows standalone, and Linux standalone. Generated artwork, lyrics, avatars,
-HLS output, and podcast downloads can be included explicitly; Redis sessions,
+Windows standalone, and Linux standalone. User-uploaded account avatars are
+always preserved. Generated artwork, Google avatars, lyrics, HLS output, and
+podcast downloads can be included explicitly; Redis sessions,
 the Meilisearch index, deployment secrets, and source media files are never
 included. Backup files contain sensitive account data and should be stored
 securely.

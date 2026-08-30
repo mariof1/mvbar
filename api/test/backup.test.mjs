@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
   isSafeArchivePath,
+  isSafeAvatarFilename,
   isSafeBackupName,
   sortTablesByDependencies,
   transformRestoreRow,
@@ -39,9 +40,18 @@ test('server backup names cannot escape the configured backup directory', () => 
   assert.equal(isSafeBackupName('mvbar-backup.zip'), false);
 });
 
+test('account avatar filenames cannot escape the avatar directory', () => {
+  assert.equal(isSafeAvatarFilename('u_123.jpg'), true);
+  assert.equal(isSafeAvatarFilename('../u_123.jpg'), false);
+  assert.equal(isSafeAvatarFilename('nested/u_123.jpg'), false);
+  assert.equal(isSafeAvatarFilename('nested\\u_123.jpg'), false);
+  assert.equal(isSafeAvatarFilename('..'), false);
+});
+
 test('database-only restores remove references to omitted cache files', () => {
   const context = {
     restoreCaches: false,
+    avatarFiles: new Set(),
     libraryMapping: new Map(),
     podcastRoot: '/podcasts',
   };
@@ -62,9 +72,22 @@ test('database-only restores remove references to omitted cache files', () => {
   assert.equal(transformRestoreRow('audiobooks', { cover_path: 'books/cover.jpg' }, context).cover_path, null);
 });
 
+test('database-only restores retain account avatars included in the archive', () => {
+  const context = {
+    restoreCaches: false,
+    avatarFiles: new Set(['u_123.jpg']),
+    libraryMapping: new Map(),
+    podcastRoot: '/podcasts',
+  };
+
+  assert.equal(transformRestoreRow('users', { avatar_path: 'u_123.jpg' }, context).avatar_path, 'u_123.jpg');
+  assert.equal(transformRestoreRow('users', { avatar_path: 'missing.jpg' }, context).avatar_path, null);
+});
+
 test('cache-inclusive restores retain cache references and remap podcast downloads', () => {
   const context = {
     restoreCaches: true,
+    avatarFiles: new Set(),
     libraryMapping: new Map(),
     podcastRoot: '/srv/podcasts',
   };
