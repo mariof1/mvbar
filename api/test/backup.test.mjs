@@ -5,6 +5,8 @@ import {
   isSafeArchivePath,
   isSafeAvatarFilename,
   isSafeBackupName,
+  sessionPreservationError,
+  sessionSigningKeyFingerprint,
   sortTablesByDependencies,
   transformRestoreRow,
 } from '../dist/backup.js';
@@ -46,6 +48,21 @@ test('account avatar filenames cannot escape the avatar directory', () => {
   assert.equal(isSafeAvatarFilename('nested/u_123.jpg'), false);
   assert.equal(isSafeAvatarFilename('nested\\u_123.jpg'), false);
   assert.equal(isSafeAvatarFilename('..'), false);
+});
+
+test('session preservation requires a matching signing key and cookie name', () => {
+  const secret = 'a-long-random-session-signing-secret';
+  const auth = {
+    tokenFormat: 'mvbar-hs256-v1',
+    signingKeyFingerprint: sessionSigningKeyFingerprint(secret),
+    cookieName: 'mvbar_token',
+  };
+
+  assert.equal(sessionPreservationError(auth, secret, 'mvbar_token'), null);
+  assert.match(sessionPreservationError(undefined, secret, 'mvbar_token'), /predates/);
+  assert.match(sessionPreservationError(auth, 'different-secret', 'mvbar_token'), /JWT_SECRET/);
+  assert.match(sessionPreservationError(auth, secret, 'other_cookie'), /COOKIE_NAME/);
+  assert.match(sessionPreservationError({ ...auth, cookieName: 'bad cookie' }, secret, 'mvbar_token'), /invalid/);
 });
 
 test('database-only restores remove references to omitted cache files', () => {
