@@ -98,6 +98,7 @@ type SocialUpdate =
   | { type: 'social:friend_request_removed'; data: { relationshipId: number } }
   | { type: 'social:friend_removed'; data: { userId: string } }
   | { type: 'social:track_shared'; data: { shareId: number; sender: { id: string; email: string }; track: { id: number; title: string | null } } }
+  | { type: 'social:playlist_shared'; data: { playlist: { id: number; name: string }; sender: { id: string; email: string }; sharedAt: string } }
   | { type: 'social:share_read'; data: { shareId: number } }
   | { type: 'social:shares_read_all'; data: Record<string, never> }
   | { type: 'social:share_removed'; data: { shareId: number } };
@@ -358,13 +359,6 @@ export function useWebSocket(isAdmin = false) {
               lastUpdate: Date.now(),
               lastEvent: msg.data,
             });
-            if (
-              msg.type === 'playlist:collaborator_added'
-              && msg.data.user?.id === useAuth.getState().user?.id
-              && !systemSocialNotificationsEnabled()
-            ) {
-              useToastStore.getState().show(`You can now contribute to “${msg.data.name || 'a shared playlist'}”`, 'queue');
-            }
           } else if (msg.type === 'history:added') {
             // History update
             useHistoryUpdates.setState({
@@ -388,8 +382,12 @@ export function useWebSocket(isAdmin = false) {
           } else if (msg.type.startsWith('social:')) {
             const social = msg as SocialUpdate;
             const auth = useAuth.getState();
-            useSocialUpdates.getState().trigger();
-            void useSocialUpdates.getState().refresh(auth.token);
+            if (social.type === 'social:playlist_shared') {
+              usePlaylistUpdates.getState().triggerRefresh();
+            } else {
+              useSocialUpdates.getState().trigger();
+              void useSocialUpdates.getState().refresh(auth.token);
+            }
             if (systemSocialNotificationsEnabled()) {
               // The service worker displays these events as system notifications.
             } else if (social.type === 'social:friend_request') {
@@ -400,6 +398,11 @@ export function useWebSocket(isAdmin = false) {
               useToastStore.getState().show(
                 `${social.data.sender.email} shared “${social.data.track.title || 'a song'}” with you`,
                 'playing',
+              );
+            } else if (social.type === 'social:playlist_shared') {
+              useToastStore.getState().show(
+                `${social.data.sender.email || 'A friend'} shared playlist “${social.data.playlist.name || 'Untitled'}” with you`,
+                'queue',
               );
             }
           } else if (

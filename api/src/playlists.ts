@@ -11,9 +11,27 @@ async function broadcastPlaylist(playlistId: number, type: string, data: Record<
   for (const userId of new Set(recipients)) broadcastToUser(userId, type, data);
 }
 
-async function playlistName(playlistId: number) {
-  const result = await db().query<{ name: string }>('select name from playlists where id=$1', [playlistId]);
-  return result.rows[0]?.name ?? 'a playlist';
+async function playlistShareDetails(playlistId: number) {
+  const result = await db().query<{
+    name: string;
+    owner_id: string;
+    owner_email: string;
+    owner_avatar_path: string | null;
+  }>(
+    `select p.name, owner.id as owner_id, owner.email as owner_email, owner.avatar_path as owner_avatar_path
+       from playlists p
+       join users owner on owner.id=p.user_id
+      where p.id=$1`,
+    [playlistId],
+  );
+  const row = result.rows[0];
+  return row ? {
+    name: row.name,
+    owner: { id: row.owner_id, email: row.owner_email, avatarPath: row.owner_avatar_path },
+  } : {
+    name: 'a playlist',
+    owner: { id: '', email: '', avatarPath: null },
+  };
 }
 
 export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
@@ -166,17 +184,22 @@ export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const collaborator = await playlists.addCollaborator(req.user.userId, playlistId, userId);
     if (!collaborator) return reply.code(409).send({ ok: false, error: 'friend_unavailable' });
-    const name = await playlistName(playlistId);
+    const details = await playlistShareDetails(playlistId);
     await audit('playlist_collaborator_added', { by: req.user.userId, playlistId, userId });
     await broadcastPlaylist(playlistId, 'playlist:collaborator_added', {
       playlistId,
-      name,
+      name: details.name,
       user: collaborator.user,
       by: req.user.userId,
     });
+    broadcastToUser(userId, 'social:playlist_shared', {
+      playlist: { id: playlistId, name: details.name },
+      sender: details.owner,
+      sharedAt: collaborator.addedAt,
+    });
     void sendWebPushToUser(userId, {
       title: 'Playlist shared with you',
-      body: `You can now add songs to “${name}”.`,
+      body: `${details.owner.email || 'A friend'} shared “${details.name}” with you.`,
       tag: `playlist-collaboration-${playlistId}`,
       url: `/#/playlist/${playlistId}`,
     });

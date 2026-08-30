@@ -76,7 +76,7 @@ export function PushNotificationSettings({ token }: { token: string }) {
         <div className="min-w-0 flex-1">
           <h2 className="text-lg font-semibold text-white">Friends &amp; sharing notifications</h2>
           <p className="mt-1 text-sm text-slate-400">
-            Receive a device notification when someone sends a friend request, accepts your request, or shares a song with you—even when mvbar is closed.
+            Receive a device notification when someone sends a friend request, accepts your request, or shares a song or playlist with you—even when mvbar is closed.
           </p>
         </div>
       </div>

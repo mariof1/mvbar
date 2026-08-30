@@ -104,6 +104,7 @@ test('collaborative playlists are limited to accepted friends and visible librar
   assert.equal(friendPlaylists.json().playlists.length, 1);
   assert.equal(friendPlaylists.json().playlists[0].is_owner, false);
   assert.equal(friendPlaylists.json().playlists[0].owner.email, 'playlist-owner@example.test');
+  assert.ok(friendPlaylists.json().playlists[0].shared_at);
 
   const addVisible = await app.inject({
     method: 'POST',

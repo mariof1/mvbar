@@ -13,6 +13,7 @@ export type Playlist = {
   id: number;
   name: string;
   created_at: string;
+  shared_at?: string | null;
   item_count?: number;
   owner?: PublicUser;
   is_owner?: boolean;
@@ -76,6 +77,12 @@ export async function listPlaylists(userId: string, allowedLibraries: number[] |
        ), 0)::int as item_count,
        json_build_object('id', owner.id, 'email', owner.email, 'avatarPath', owner.avatar_path) as owner,
        (p.user_id=$1) as is_owner,
+       (
+         select member.created_at
+           from playlist_collaborators member
+          where member.playlist_id=p.id and member.user_id=$1
+          limit 1
+       ) as shared_at,
        exists (
          select 1 from playlist_collaborators any_member where any_member.playlist_id=p.id
        ) as is_collaborative,

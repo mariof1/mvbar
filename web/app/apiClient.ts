@@ -547,6 +547,7 @@ export type Playlist = {
   id: string;
   name: string;
   created_at: string;
+  shared_at: string | null;
   item_count: number;
   owner: SocialUser;
   is_owner: boolean;
