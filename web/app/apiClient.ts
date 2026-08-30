@@ -279,9 +279,14 @@ export async function deleteAdminBackup(token: string, name: string) {
   }, token)) as { ok: true };
 }
 
-export async function restoreAdminBackup(token: string, name: string, restoreCaches = false) {
+export async function restoreAdminBackup(
+  token: string,
+  name: string,
+  restoreCaches = false,
+  preserveSessions = false,
+) {
   return (await apiFetch(
-    `/admin/backups/${encodeURIComponent(name)}/restore?restoreCaches=${restoreCaches}`,
+    `/admin/backups/${encodeURIComponent(name)}/restore?restoreCaches=${restoreCaches}&preserveSessions=${preserveSessions}`,
     { method: 'POST' },
     token,
   )) as {
@@ -294,7 +299,8 @@ export async function restoreAdminBackup(token: string, name: string, restoreCac
     avatarFilesRestored: number;
     reindexQueued: boolean;
     warning?: string;
-    sessionsInvalidated: true;
+    sessionsInvalidated: boolean;
+    sessionsPreserved: boolean;
   };
 }
 

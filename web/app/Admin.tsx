@@ -1266,6 +1266,7 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
 function BackupSettings({ token, clear }: { token: string; clear: () => void }) {
   const [includeCaches, setIncludeCaches] = useState(false);
   const [restoreCaches, setRestoreCaches] = useState(false);
+  const [preserveSessions, setPreserveSessions] = useState(false);
   const [backups, setBackups] = useState<AdminBackup[]>([]);
   const [creating, setCreating] = useState<AdminBackupJob | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -1377,7 +1378,7 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
   async function restoreBackup(backup: AdminBackup) {
     const confirmed = await showConfirm({
       title: 'Replace the MVBar database?',
-      message: `This restores ${backup.name}, replacing the current database. Library roots will be mapped to this server's configured folders. Uploaded account avatars restore automatically. ${restoreCaches && backup.includesCaches ? 'Included cache files will also be copied.' : 'Optional cache files will not be restored.'} Everyone will be signed out.`,
+      message: `This restores ${backup.name}, replacing the current database. Library roots will be mapped to this server's configured folders. Uploaded account avatars restore automatically. ${restoreCaches && backup.includesCaches ? 'Included cache files will also be copied.' : 'Optional cache files will not be restored.'} ${preserveSessions ? 'Existing sessions will be preserved only after the server verifies matching JWT signing and cookie settings.' : 'Everyone will be signed out.'}`,
       confirmLabel: 'Restore backup',
       danger: true,
     });
@@ -1386,17 +1387,21 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
     setRestoring(backup.name);
     setError(null);
     try {
-      const result = await restoreAdminBackup(token, backup.name, restoreCaches);
+      const result = await restoreAdminBackup(token, backup.name, restoreCaches, preserveSessions);
+      const sessionMessage = result.sessionsPreserved
+        ? ' Existing sessions from the source server were preserved. This browser may still need to sign in if its current administrator session was not part of the backup.'
+        : ' Everyone was signed out.';
       await showConfirm({
         title: 'Restore complete',
-        message: `Restored ${result.rows.toLocaleString()} database rows across ${result.tables} tables, including ${result.avatarFilesRestored.toLocaleString()} avatar files${result.cachesRestored ? ` and ${result.cacheFiles.toLocaleString()} optional cache files` : ''}.${result.reindexQueued ? ' A full library scan was queued to rebuild search.' : ''}${result.warning ? ` Warning: ${result.warning}.` : ''} Sign in with an administrator account from the restored backup.`,
-        confirmLabel: 'Go to sign in',
+        message: `Restored ${result.rows.toLocaleString()} database rows across ${result.tables} tables, including ${result.avatarFilesRestored.toLocaleString()} avatar files${result.cachesRestored ? ` and ${result.cacheFiles.toLocaleString()} optional cache files` : ''}.${sessionMessage}${result.reindexQueued ? ' A full library scan was queued to rebuild search.' : ''}${result.warning ? ` Warning: ${result.warning}.` : ''}`,
+        confirmLabel: result.sessionsInvalidated ? 'Go to sign in' : 'Continue',
         cancelLabel: '',
       });
-      clear();
+      if (result.sessionsInvalidated) clear();
       window.location.reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Restore failed');
+      const apiError = (err as { data?: { error?: string } })?.data?.error;
+      setError(apiError || (err instanceof Error ? err.message : 'Restore failed'));
       setRestoring(null);
     }
   }
@@ -1511,6 +1516,21 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
           <span className="block text-sm font-medium text-slate-200">Restore caches when available</span>
           <span className="block text-xs text-slate-500 mt-1">
             Disabled by default. This applies when Restore is selected below; database data is always restored.
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={preserveSessions}
+          onChange={(event) => setPreserveSessions(event.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-amber-500"
+        />
+        <span>
+          <span className="block text-sm font-medium text-slate-200">Preserve existing logins during migration</span>
+          <span className="block text-xs text-slate-500 mt-1">
+            Disabled by default. Requires a backup created with this feature, the same JWT_SECRET and COOKIE_NAME on both servers, and the same public URL for browser cookies. The secret itself is never included in the backup.
           </span>
         </span>
       </label>

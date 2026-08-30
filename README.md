@@ -158,6 +158,12 @@ the Meilisearch index, deployment secrets, and source media files are never
 included. Backup files contain sensitive account data and should be stored
 securely.
 
+For server migrations, restore can optionally preserve existing Android and web
+logins. The destination must use the same `JWT_SECRET` and `COOKIE_NAME`; the
+backup contains only a signing-key fingerprint and never the secret itself.
+Browser sessions also require the same public MVBar URL. Session invalidation
+remains the default for ordinary restores.
+
 ### Plugins
 
 Administrators can install, configure, validate, enable, disable, and remove

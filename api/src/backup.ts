@@ -19,12 +19,13 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Transform } from 'node:stream';
 import { finished, pipeline } from 'node:stream/promises';
 import { createInterface } from 'node:readline';
+import { config } from './config.js';
 import { db, redis } from './db.js';
 import { broadcastToAdmins } from './websocket.js';
 
@@ -41,6 +42,9 @@ const INSERT_BATCH_SIZE = 500;
 const BACKUP_DIRECTORY = process.env.BACKUP_DIR ?? '/data/backups';
 const BACKUP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.mvbar-backup$/;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
+const SESSION_KEY_FINGERPRINT_RE = /^[a-f0-9]{64}$/;
+const SESSION_COOKIE_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,200}$/;
+const SESSION_TOKEN_FORMAT = 'mvbar-hs256-v1';
 
 type TableInfo = {
   name: string;
@@ -51,6 +55,12 @@ type TableInfo = {
 type CacheManifest = {
   included: boolean;
   categories: Array<{ key: string; files: number; bytes: number }>;
+};
+
+type AuthManifest = {
+  tokenFormat: typeof SESSION_TOKEN_FORMAT;
+  signingKeyFingerprint: string;
+  cookieName: string;
 };
 
 type BackupManifest = {
@@ -65,6 +75,7 @@ type BackupManifest = {
     format: 'postgres-jsonl-v2';
     tables: TableInfo[];
   };
+  auth?: AuthManifest;
   caches: CacheManifest;
 };
 
@@ -109,6 +120,35 @@ let backupInProgress: BackupJob | null = null;
 
 export function isSafeBackupName(name: string) {
   return BACKUP_NAME_RE.test(name) && path.basename(name) === name;
+}
+
+export function sessionSigningKeyFingerprint(secret: string) {
+  return createHash('sha256')
+    .update('mvbar-session-signing-key\0')
+    .update(secret)
+    .digest('hex');
+}
+
+export function sessionPreservationError(
+  auth: AuthManifest | undefined,
+  secret: string,
+  cookieName: string,
+) {
+  if (!auth) return 'This backup predates session-preserving restores';
+  if (auth.tokenFormat !== SESSION_TOKEN_FORMAT) return 'This backup uses an unsupported session token format';
+  if (!SESSION_COOKIE_NAME_RE.test(auth.cookieName)) return 'This backup has an invalid session cookie name';
+  if (auth.cookieName !== cookieName) {
+    return `The destination COOKIE_NAME must be ${auth.cookieName} to preserve browser sessions`;
+  }
+  if (!SESSION_KEY_FINGERPRINT_RE.test(auth.signingKeyFingerprint)) {
+    return 'This backup has an invalid session signing-key fingerprint';
+  }
+  const expected = Buffer.from(auth.signingKeyFingerprint, 'hex');
+  const current = Buffer.from(sessionSigningKeyFingerprint(secret), 'hex');
+  if (!timingSafeEqual(expected, current)) {
+    return 'The destination JWT_SECRET does not match the server that created this backup';
+  }
+  return null;
 }
 
 function qident(value: string) {
@@ -334,6 +374,11 @@ async function createBackupArchive(includeCaches: boolean, output: PassThrough):
         commit: process.env.GIT_COMMIT ?? 'unknown',
       },
       database: { format: 'postgres-jsonl-v2', tables },
+      auth: {
+        tokenFormat: SESSION_TOKEN_FORMAT,
+        signingKeyFingerprint: sessionSigningKeyFingerprint(config.jwtSecret),
+        cookieName: config.cookieName,
+      },
       caches: cacheManifest,
     };
     archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
@@ -407,6 +452,15 @@ function validateManifest(value: unknown): asserts value is BackupManifest {
     ) {
       throw new Error('Backup contains an invalid database schema');
     }
+  }
+  if (manifest.auth !== undefined && (
+    !manifest.auth
+    || typeof manifest.auth !== 'object'
+    || manifest.auth.tokenFormat !== SESSION_TOKEN_FORMAT
+    || !SESSION_KEY_FINGERPRINT_RE.test(manifest.auth.signingKeyFingerprint)
+    || !SESSION_COOKIE_NAME_RE.test(manifest.auth.cookieName)
+  )) {
+    throw new Error('Backup authentication manifest is invalid');
   }
   if (!manifest.caches || !Array.isArray(manifest.caches.categories)) {
     throw new Error('Backup cache manifest is invalid');
@@ -784,6 +838,7 @@ async function restoreDatabase(
   manifest: BackupManifest,
   restoreCaches: boolean,
   avatarFiles: Set<string>,
+  preserveSessions: boolean,
 ) {
   const client = await db().connect();
   try {
@@ -835,11 +890,17 @@ async function restoreDatabase(
       await client.query('DELETE FROM lastfm_cache');
     }
 
-    await client.query('UPDATE users SET session_version = session_version + 1');
+    if (!preserveSessions) {
+      await client.query('UPDATE users SET session_version = session_version + 1');
+    }
     if (targetByName.has('audit_events')) {
       await client.query(
         `INSERT INTO audit_events(event, meta) VALUES ('portable_backup_restored', $1::jsonb)`,
-        [JSON.stringify({ sourceCreatedAt: manifest.createdAt, sourceVersion: manifest.app.version })],
+        [JSON.stringify({
+          sourceCreatedAt: manifest.createdAt,
+          sourceVersion: manifest.app.version,
+          sessionsPreserved: preserveSessions,
+        })],
       );
     }
     await client.query('COMMIT');
@@ -852,7 +913,12 @@ async function restoreDatabase(
   }
 }
 
-async function restoreArchiveFile(archivePath: string, requestedCaches: boolean, log: FastifyBaseLogger) {
+async function restoreArchiveFile(
+  archivePath: string,
+  requestedCaches: boolean,
+  preserveSessions: boolean,
+  log: FastifyBaseLogger,
+) {
   const stagingRoot = await mkdtemp(path.join(os.tmpdir(), 'mvbar-restore-'));
   try {
     const extractedRoot = path.join(stagingRoot, 'extracted');
@@ -864,6 +930,10 @@ async function restoreArchiveFile(archivePath: string, requestedCaches: boolean,
     for (const table of manifest.database.tables) {
       if (!entries.has(`database/${table.name}.jsonl`)) throw new Error(`Backup table is missing: ${table.name}`);
     }
+    if (preserveSessions) {
+      const incompatibility = sessionPreservationError(manifest.auth, config.jwtSecret, config.cookieName);
+      if (incompatibility) throw new Error(`Cannot preserve sessions: ${incompatibility}`);
+    }
     const restoreCaches = requestedCaches && manifest.caches.included;
     const avatarFiles = await archivedAvatarFiles(extractedRoot, manifest);
     // Account avatars are restored before the database replacement so a copy
@@ -873,7 +943,13 @@ async function restoreArchiveFile(archivePath: string, requestedCaches: boolean,
       manifest,
       (category) => category.key === 'avatars',
     );
-    const databaseResult = await restoreDatabase(extractedRoot, manifest, restoreCaches, avatarFiles);
+    const databaseResult = await restoreDatabase(
+      extractedRoot,
+      manifest,
+      restoreCaches,
+      avatarFiles,
+      preserveSessions,
+    );
     await rescanPlugins();
     let cacheFiles = 0;
     let cacheWarning: string | undefined;
@@ -911,8 +987,7 @@ async function restoreArchiveFile(archivePath: string, requestedCaches: boolean,
       log.error({ err: error }, 'Database restored but search reconciliation could not be queued');
     }
 
-    // Google-only users must sign in again after session invalidation. Start an
-    // avatar refresh immediately as well, so accounts whose portable refresh
+    // Refresh Google avatars immediately so accounts whose portable refresh
     // tokens are valid for this server do not need to wait for the daily job.
     void import('./googleAuth.js')
       .then(({ syncGoogleAvatars }) => syncGoogleAvatars(log))
@@ -927,7 +1002,8 @@ async function restoreArchiveFile(archivePath: string, requestedCaches: boolean,
       avatarFilesRestored,
       reindexQueued,
       warning: warnings.length > 0 ? warnings.join(' ') : undefined,
-      sessionsInvalidated: true as const,
+      sessionsInvalidated: !preserveSessions,
+      sessionsPreserved: preserveSessions,
     };
   } finally {
     await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -1028,11 +1104,18 @@ export const backupPlugin: FastifyPluginAsync = fp(async (app) => {
     if (backupInProgress) return reply.code(409).send({ ok: false, error: 'A backup is currently running' });
     if (restoreInProgress) return reply.code(409).send({ ok: false, error: 'A restore is already running' });
     const { name } = req.params as { name: string };
-    const requestedCaches = (req.query as { restoreCaches?: string }).restoreCaches === 'true';
+    const query = req.query as { restoreCaches?: string; preserveSessions?: string };
+    const requestedCaches = query.restoreCaches === 'true';
+    const preserveSessions = query.preserveSessions === 'true';
     restoreInProgress = true;
     try {
       const backup = await getStoredBackup(name);
-      return await restoreArchiveFile(path.join(BACKUP_DIRECTORY, backup.name), requestedCaches, req.log);
+      return await restoreArchiveFile(
+        path.join(BACKUP_DIRECTORY, backup.name),
+        requestedCaches,
+        preserveSessions,
+        req.log,
+      );
     } catch (error) {
       req.log.error({ err: error }, 'Stored backup restore failed');
       const message = error instanceof Error ? error.message : 'Restore failed';
@@ -1086,6 +1169,7 @@ export const backupPlugin: FastifyPluginAsync = fp(async (app) => {
       return await restoreArchiveFile(
         archivePath,
         (req.query as { restoreCaches?: string }).restoreCaches === 'true',
+        (req.query as { preserveSessions?: string }).preserveSessions === 'true',
         req.log,
       );
     } catch (error) {
