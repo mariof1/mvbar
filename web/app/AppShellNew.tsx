@@ -27,6 +27,12 @@ import { MissingMusic } from './MissingMusic';
 import { useAuth } from './store';
 import { useFavorites } from './favoritesStore';
 import { usePlayer, type QueueTrack } from './playerStore';
+import {
+  MUSIC_AUDIO_ELEMENT_ID,
+  directMusicStreamUrl,
+  getMusicAudioElement,
+  reportMusicPlaybackFailure,
+} from './musicAudio';
 import { useUi } from './uiStore';
 import { useRouter, useRoute, initRouter, getTabFromRoute, type Route } from './router';
 import { NavigationHeader } from './NavigationHeader';
@@ -431,6 +437,8 @@ function PlayerBar(props: {
     onNext: props.onNext,
     onClose: props.onClose,
   });
+  const playerEventPropsRef = useRef(props);
+  playerEventPropsRef.current = props;
   mediaSessionActionsRef.current = {
     onPrev: props.onPrev,
     onNext: props.onNext,
@@ -525,11 +533,89 @@ function PlayerBar(props: {
   useEffect(() => {
     try {
       const v = localStorage.getItem('mvbar_prefer_hls');
-      if (v === null) return;
-      setPreferHls(v !== '0');
+      if (v !== null) setPreferHls(v !== '0');
       const vol = localStorage.getItem('mvbar_volume');
       if (vol) setVolume(parseFloat(vol));
     } catch {}
+  }, []);
+
+  // The audio element lives at AppShell level so it already exists when a
+  // mobile user taps a track. PlayerBar only binds its controls and events.
+  useEffect(() => {
+    const a = getMusicAudioElement();
+    audioRef.current = a;
+    if (!a) return;
+
+    const onPlay = () => {
+      a.dataset.mvbarPlaybackState = 'playing';
+      delete a.dataset.mvbarPlaybackError;
+      setIsPlaying(true);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+    };
+    const onPause = () => {
+      if (a.dataset.mvbarPlaybackState !== 'failed') {
+        a.dataset.mvbarPlaybackState = 'paused';
+      }
+      setIsPlaying(false);
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    };
+    const onTimeUpdate = () => {
+      setCurrentTime(a.currentTime);
+      playerEventPropsRef.current.onTimeUpdate?.(a.currentTime);
+      updateMediaSessionPosition(a.currentTime, a.duration);
+      if (!playedSentRef.current && a.duration > 0 && a.currentTime / a.duration >= 0.8) {
+        playedSentRef.current = true;
+        playerEventPropsRef.current.onPlayed({ currentTime: a.currentTime, duration: a.duration });
+      }
+    };
+    const onLoadedMetadata = () => {
+      setDuration(a.duration);
+      updateMediaSessionPosition(a.currentTime, a.duration);
+    };
+    const onDurationChange = () => {
+      setDuration(a.duration);
+      updateMediaSessionPosition(a.currentTime, a.duration);
+    };
+    const onRateChange = () => updateMediaSessionPosition(a.currentTime, a.duration);
+    const onError = () => {
+      a.dataset.mvbarPlaybackState = 'failed';
+      a.dataset.mvbarPlaybackError = 'MediaError';
+      reportMusicPlaybackFailure(a.error);
+    };
+    const onEnded = () => {
+      const currentProps = playerEventPropsRef.current;
+      if (currentProps.playMode === 'repeat-one') {
+        a.currentTime = 0;
+        a.play().catch(reportMusicPlaybackFailure);
+      } else {
+        currentProps.onEnded();
+      }
+    };
+
+    a.addEventListener('play', onPlay);
+    a.addEventListener('pause', onPause);
+    a.addEventListener('timeupdate', onTimeUpdate);
+    a.addEventListener('loadedmetadata', onLoadedMetadata);
+    a.addEventListener('durationchange', onDurationChange);
+    a.addEventListener('ratechange', onRateChange);
+    a.addEventListener('error', onError);
+    a.addEventListener('ended', onEnded);
+
+    setIsPlaying(!a.paused);
+    setCurrentTime(a.currentTime || 0);
+    setDuration(Number.isFinite(a.duration) ? a.duration : 0);
+
+    return () => {
+      a.removeEventListener('play', onPlay);
+      a.removeEventListener('pause', onPause);
+      a.removeEventListener('timeupdate', onTimeUpdate);
+      a.removeEventListener('loadedmetadata', onLoadedMetadata);
+      a.removeEventListener('durationchange', onDurationChange);
+      a.removeEventListener('ratechange', onRateChange);
+      a.removeEventListener('error', onError);
+      a.removeEventListener('ended', onEnded);
+      if (audioRef.current === a) audioRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -544,10 +630,30 @@ function PlayerBar(props: {
       }
     };
 
-    const setStream = async () => {
+    const setStream = async (): Promise<boolean> => {
       cleanupHls();
-      a.src = `/api/stream/${props.nowPlaying.id}`;
-      try { await a.play(); } catch {}
+      const streamUrl = directMusicStreamUrl(props.nowPlaying.id);
+      const sourceChanged = a.getAttribute('src') !== streamUrl;
+      if (sourceChanged) a.src = streamUrl;
+
+      // The store normally starts this source synchronously from the tap. Do
+      // not issue a second, asynchronous play() for that same source.
+      if (!sourceChanged) return !a.paused;
+
+      a.dataset.mvbarPlaybackState = 'pending';
+      delete a.dataset.mvbarPlaybackError;
+      try {
+        await a.play();
+        a.dataset.mvbarPlaybackState = 'playing';
+        return true;
+      } catch (error) {
+        a.dataset.mvbarPlaybackState = 'failed';
+        a.dataset.mvbarPlaybackError = error && typeof error === 'object' && 'name' in error
+          ? String((error as { name?: unknown }).name || '')
+          : 'PlaybackError';
+        reportMusicPlaybackFailure(error);
+        return false;
+      }
     };
 
     const setHls = async (seekTo?: number) => {
@@ -559,21 +665,31 @@ function PlayerBar(props: {
         if (typeof seekTo === 'number' && seekTo > 0) {
           a.addEventListener('loadedmetadata', () => { try { a.currentTime = seekTo; } catch {} }, { once: true });
         }
-        try { await a.play(); } catch {}
-        return true;
+        try {
+          await a.play();
+          return true;
+        } catch (error) {
+          reportMusicPlaybackFailure(error);
+          return false;
+        }
       }
       if (!Hls.isSupported()) { await setStream(); return false; }
       cleanupHls();
       const hls = new Hls({ enableWorker: true });
       hlsRef.current = hls;
-      hls.on(Hls.Events.ERROR, (_evt, data) => { if (data?.fatal) setStream(); });
+      hls.on(Hls.Events.ERROR, (_evt, data) => { if (data?.fatal) void setStream(); });
       hls.loadSource(`/api/hls/${id}`);
       hls.attachMedia(a);
       if (typeof seekTo === 'number' && seekTo > 0) {
         a.addEventListener('loadedmetadata', () => { try { a.currentTime = seekTo; } catch {} }, { once: true });
       }
-      try { await a.play(); } catch {}
-      return true;
+      try {
+        await a.play();
+        return true;
+      } catch (error) {
+        reportMusicPlaybackFailure(error);
+        return false;
+      }
     };
 
     (async () => {
@@ -588,9 +704,22 @@ function PlayerBar(props: {
       if (!props.token || !preferHls) return;
       try {
         await requestHlsTranscode(props.token, props.nowPlaying.id);
-        for (let i = 0; i < 8 && !cancelled; i++) {
+        for (let i = 0; i < 20 && !cancelled; i++) {
           const s = await getHlsStatus(props.token, props.nowPlaying.id);
-          if (s?.ready) { const resume = a.currentTime || 0; await setHls(resume); break; }
+          if (s?.ready) {
+            // Never replace a direct stream that is already playing. A source
+            // swap can pause mobile playback and its follow-up play() no longer
+            // carries the original user gesture. HLS is only a media-error
+            // fallback, not an in-flight upgrade.
+            if (
+              a.dataset.mvbarPlaybackState === 'failed' &&
+              a.dataset.mvbarPlaybackError !== 'NotAllowedError'
+            ) {
+              const resume = a.currentTime || 0;
+              await setHls(resume);
+            }
+            break;
+          }
           await new Promise((r) => setTimeout(r, 500));
         }
       } catch {}
@@ -608,7 +737,7 @@ function PlayerBar(props: {
     if (!('mediaSession' in navigator)) return;
 
     const actionHandlers: Array<[MediaSessionAction, MediaSessionActionHandler | null]> = [
-      ['play', () => { audioRef.current?.play().catch(() => {}); }],
+      ['play', () => { audioRef.current?.play().catch(reportMusicPlaybackFailure); }],
       ['pause', () => { audioRef.current?.pause(); }],
       ['stop', () => {
         const a = audioRef.current;
@@ -665,7 +794,7 @@ function PlayerBar(props: {
   const togglePlay = () => {
     const a = audioRef.current;
     if (!a) return;
-    if (a.paused) a.play();
+    if (a.paused) a.play().catch(reportMusicPlaybackFailure);
     else a.pause();
   };
 
@@ -1176,54 +1305,6 @@ function PlayerBar(props: {
         </div>
       </div>
 
-      <audio
-        ref={audioRef}
-        preload="metadata"
-        onPlay={() => {
-          setIsPlaying(true);
-          if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-        }}
-        onPause={() => {
-          setIsPlaying(false);
-          if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-        }}
-        onTimeUpdate={(e) => {
-          const a = e.currentTarget;
-          setCurrentTime(a.currentTime);
-          props.onTimeUpdate?.(a.currentTime);
-          updateMediaSessionPosition(a.currentTime, a.duration);
-          if (!playedSentRef.current && a.duration > 0 && a.currentTime / a.duration >= 0.8) {
-            playedSentRef.current = true;
-            props.onPlayed({ currentTime: a.currentTime, duration: a.duration });
-          }
-        }}
-        onLoadedMetadata={(e) => {
-          const dur = e.currentTarget.duration;
-          setDuration(dur);
-          updateMediaSessionPosition(0, dur);
-        }}
-        onDurationChange={(e) => {
-          const a = e.currentTarget;
-          setDuration(a.duration);
-          updateMediaSessionPosition(a.currentTime, a.duration);
-        }}
-        onRateChange={(e) => {
-          const a = e.currentTarget;
-          updateMediaSessionPosition(a.currentTime, a.duration);
-        }}
-        onEnded={() => {
-          // Handle repeat-one by replaying the same track
-          if (props.playMode === 'repeat-one') {
-            const a = audioRef.current;
-            if (a) {
-              a.currentTime = 0;
-              a.play().catch(() => {});
-            }
-          } else {
-            props.onEnded();
-          }
-        }}
-      />
     </>
   );
 }
@@ -1815,6 +1896,7 @@ export function AppShellNew() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-zinc-900 to-black overflow-x-hidden">
       <AutoLogin />
+      <audio id={MUSIC_AUDIO_ELEMENT_ID} preload="metadata" aria-hidden="true" />
       
       {/* Sidebar - Desktop */}
       <Sidebar tab={tab} setTab={setTab} isAdmin={isAdmin} missingMusicEnabled={missingMusicEnabled} socialBadge={socialBadge} user={user} onLogout={handleSignOut} />
