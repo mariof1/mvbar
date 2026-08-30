@@ -8,6 +8,7 @@ import { useToastStore } from './Toast';
 import { useRouter } from './router';
 import { useSocialUpdates } from './socialStore';
 import type { QueueTrack } from './playerStore';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 function Avatar({ user }: { user: SocialUser }) {
   if (user.avatarPath) {
@@ -32,6 +33,7 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
   const [loading, setLoading] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useBodyScrollLock(Boolean(track));
 
   useEffect(() => {
     if (!track || !token) return;

@@ -31,6 +31,7 @@ import { showConfirm } from './ConfirmModal';
 import { useScanProgress, useLibraryUpdates, useAdminPending, useBackupUpdates } from './useWebSocket';
 import { AdminUserAudit } from './AdminUserAudit';
 import { AdminPlugins } from './AdminPlugins';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 type Tab = 'library' | 'users' | 'user-audit' | 'plugins' | 'settings' | 'device-logs' | 'notifications';
 
@@ -133,6 +134,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
   const [showForceConfirm, setShowForceConfirm] = useState(false);
   const [showDeleteLibraryConfirm, setShowDeleteLibraryConfirm] = useState(false);
   const [libraryToDelete, setLibraryToDelete] = useState<any | null>(null);
+  useBodyScrollLock(showForceConfirm || (showDeleteLibraryConfirm && Boolean(libraryToDelete)));
 
   // Live updates from WebSocket
   const wsScanProgress = useScanProgress();

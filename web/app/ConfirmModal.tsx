@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import { create } from 'zustand';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 type ConfirmOptions = {
   title: string;
@@ -47,6 +48,7 @@ export const showAlert = (title: string, message: string) =>
 export function ConfirmModal() {
   const { open, options, close } = useConfirmStore();
   const confirmRef = useRef<HTMLButtonElement>(null);
+  useBodyScrollLock(open);
 
   useEffect(() => {
     if (open) confirmRef.current?.focus();

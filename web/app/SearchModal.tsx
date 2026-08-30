@@ -8,6 +8,7 @@ import { useRouter } from './router';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { useUi, type PodcastEpisode } from './uiStore';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 type Hit = {
   id: number;
@@ -112,6 +113,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
   const [error, setError] = useState<string | null>(null);
   const lastRefreshRef = useRef<number>(0);
   const prevLastUpdateRef = useRef(0);
+  useBodyScrollLock(isOpen);
 
   // Auto-focus input when opened
   useEffect(() => {
@@ -147,16 +149,6 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [isOpen, onClose]);
-
-  // Lock body scroll when open
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-    return () => { document.body.style.overflow = ''; };
-  }, [isOpen]);
 
   // Search API call (debounced)
   useEffect(() => {

@@ -35,6 +35,7 @@ import { getHlsStatus, logout, recordPlay, recordSkip, requestHlsTranscode, scro
 import { useWebSocket, useAdminPending, usePluginUpdates } from './useWebSocket';
 import { useSocialUpdates } from './socialStore';
 import { preparePushNotifications, unsubscribeCurrentPushDevice } from './pushNotifications';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 // Icons as simple SVG components
 const Icons = {
@@ -224,6 +225,7 @@ function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: (
   const [lyricsType, setLyricsType] = useState<'synced' | 'unsynced' | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const activeLineRef = useRef<HTMLDivElement>(null);
+  useBodyScrollLock(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -414,6 +416,7 @@ function PlayerBar(props: {
   const [showVolume, setShowVolume] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  useBodyScrollLock(expanded);
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
   const volumeRef = useRef<HTMLDivElement>(null);
   const queueRef = useRef<HTMLDivElement>(null);
@@ -1282,18 +1285,7 @@ function MobileSidebar(props: {
 }) {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const touchStartedInsideRef = useRef(false);
-
-  // Lock body scroll when sidebar is open
-  useEffect(() => {
-    if (props.isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, [props.isOpen]);
+  useBodyScrollLock(props.isOpen);
 
   // Close on click/scroll outside or Escape key
   useEffect(() => {
@@ -1650,6 +1642,7 @@ export function AppShellNew() {
   
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [playlists, setPlaylists] = useState<{ id: number; name: string; ownerEmail?: string; isOwner: boolean }[]>([]);
+  useBodyScrollLock(showPlaylistModal);
   
   // Lyrics overlay state
   const [showLyrics, setShowLyrics] = useState(false);

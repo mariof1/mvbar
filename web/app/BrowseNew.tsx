@@ -21,6 +21,7 @@ import { useAuth } from './store';
 import { useLibraryUpdates } from './useWebSocket';
 import { useRouter, useRoute } from './router';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 type Tab = 'artists' | 'albums' | 'genres' | 'countries' | 'languages';
 
@@ -350,16 +351,7 @@ export function BrowseNew(props: {
     country: string;
     language: string;
   } | null>(null);
-
-  // Prevent background scrolling while modal is open.
-  useEffect(() => {
-    if (!editOpen) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [editOpen]);
+  useBodyScrollLock(editOpen);
 
   const [genreTracks, setGenreTracks] = useState<Track[]>([]);
 
@@ -968,7 +960,7 @@ export function BrowseNew(props: {
             }}
           >
             <div
-              className="bg-slate-800 border border-slate-700 rounded-xl p-5 w-full max-w-xl shadow-2xl"
+              className="max-h-[calc(100dvh-2rem)] w-full max-w-xl overflow-y-auto overscroll-contain rounded-xl border border-slate-700 bg-slate-800 p-5 shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-4">

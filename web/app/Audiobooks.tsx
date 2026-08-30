@@ -5,6 +5,7 @@ import { useAuth } from './store';
 import { useUi, AudiobookChapter as AudiobookPlayerChapter } from './uiStore';
 import { usePlayer } from './playerStore';
 import { apiFetch } from './apiClient';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 // ============================================================================
 // TYPES
@@ -140,6 +141,7 @@ export function AudiobookPlayer({
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [expanded, setExpanded] = useState(false);
+  useBodyScrollLock(expanded);
   const chapterRef = useRef(chapter);
   chapterRef.current = chapter;
   const onCloseRef = useRef(onClose);
@@ -641,6 +643,7 @@ function AudiobookDetailView({
   const [editChapter, setEditChapter] = useState<AudiobookChapter | null>(null);
   const [editChapterTitle, setEditChapterTitle] = useState('');
   const [editChapterSaving, setEditChapterSaving] = useState(false);
+  useBodyScrollLock(editBookOpen || Boolean(editChapter));
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -938,7 +941,7 @@ function AudiobookDetailView({
       {/* Edit Book Modal */}
       {editBookOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditBookOpen(false)}>
-          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 w-full max-w-lg mx-4" onClick={(e) => e.stopPropagation()}>
+          <div className="mx-4 max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto overscroll-contain rounded-xl border border-slate-700 bg-slate-800 p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-white mb-4">Edit Audiobook</h3>
             <div className="space-y-3">
               <label className="block">

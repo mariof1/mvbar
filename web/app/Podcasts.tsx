@@ -8,6 +8,7 @@ import { useRouter } from './router';
 import { apiFetch } from './apiClient';
 import { showConfirm, showAlert } from './ConfirmModal';
 import { sendWebSocketMessage, usePodcastProgress, updateLocalPodcastProgress } from './useWebSocket';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 // ============================================================================
 // TYPES
@@ -92,6 +93,7 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
     preview?: PodcastPreview;
     error?: string;
   } | null>(null);
+  useBodyScrollLock(true);
 
   // Search podcasts via iTunes API
   const handleSearch = useCallback(async () => {
@@ -619,6 +621,8 @@ function PodcastTextDialog({
   footer?: ReactNode;
   onClose: () => void;
 }) {
+  useBodyScrollLock(true);
+
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
       <div
@@ -1167,6 +1171,7 @@ export function PodcastPlayer({
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [expanded, setExpanded] = useState(false);
+  useBodyScrollLock(expanded);
   const lastBroadcastRef = useRef(0);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
