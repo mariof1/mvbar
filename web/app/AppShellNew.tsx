@@ -1963,7 +1963,7 @@ export function AppShellNew() {
 
             {tab === 'playlists' && (
               <Playlists
-                onPlayTrack={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
+                onPlayTrack={(tracks, index) => setQueueAndPlay(tracks, index)}
                 onPlayAll={(tracks) => setQueueAndPlay(tracks, 0)}
               />
             )}

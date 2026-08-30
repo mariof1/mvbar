@@ -163,10 +163,7 @@ function SmartPicker({
   );
 }
 
-export function SmartPlaylists(props: {
-  onPlayTrack?: (t: { id: number; title: string; artist: string }) => void;
-  onPlayAll?: (tracks: Array<{ id: number; title: string; artist: string }>) => void;
-}) {
+export function SmartPlaylists() {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
   const { setQueueAndPlay } = usePlayer();
@@ -446,6 +443,19 @@ export function SmartPlaylists(props: {
     setQueueAndPlay(
       tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist })),
       0
+    );
+  }
+
+  function playTrackAt(index: number) {
+    if (index < 0 || index >= tracks.length) return;
+    setQueueAndPlay(
+      tracks.map((track) => ({
+        id: track.id,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+      })),
+      index
     );
   }
 
@@ -927,21 +937,21 @@ export function SmartPlaylists(props: {
               ) : (
                 <div className="space-y-1 max-h-[60vh] lg:max-h-96 overflow-y-auto">
                   {tracks.map((t, idx) => (
-                    <div
+                    <button
+                      type="button"
                       key={t.id}
-                      className="group flex items-center gap-2 sm:gap-3 p-2 sm:p-3 rounded-lg hover:bg-slate-800/50 transition-colors"
+                      onClick={() => playTrackAt(idx)}
+                      className="group flex w-full items-center gap-2 rounded-lg p-2 text-left transition-colors hover:bg-slate-800/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 sm:gap-3 sm:p-3"
+                      aria-label={`Play ${t.title || `track ${idx + 1}`}`}
                     >
-                      {/* Track number / play button */}
+                      {/* Track number / play indicator */}
                       <div className="w-8 flex-shrink-0 text-center">
                         <span className="text-sm text-slate-500 sm:group-hover:hidden">{idx + 1}</span>
-                        <button
-                          onClick={() => props.onPlayTrack?.({ id: t.id, title: t.title, artist: t.artist })}
-                          className="sm:hidden sm:group-hover:block text-cyan-400"
-                        >
+                        <span className="hidden text-cyan-400 sm:group-hover:block">
                           <svg className="w-5 h-5 mx-auto" fill="currentColor" viewBox="0 0 24 24">
                             <path d="M8 5v14l11-7z" />
                           </svg>
-                        </button>
+                        </span>
                       </div>
                       {/* Track info */}
                       <div className="flex-1 min-w-0">
@@ -956,7 +966,7 @@ export function SmartPlaylists(props: {
                           {Math.floor(t.duration / 60)}:{String(t.duration % 60).padStart(2, '0')}
                         </div>
                       )}
-                    </div>
+                    </button>
                   ))}
                   {tracks.length === 0 && (
                     <div className="text-center py-8 text-slate-400">

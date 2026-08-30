@@ -38,6 +38,13 @@ type PlaylistItem = {
   added_by: SocialUser | null;
 };
 
+type PlayablePlaylistTrack = {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+};
+
 function Avatar({ user }: { user: SocialUser }) {
   if (user.avatarPath) {
     return <img src={`/api/avatars/${user.avatarPath}`} alt="" className="h-8 w-8 flex-none rounded-full object-cover" />;
@@ -58,8 +65,8 @@ function swap<T>(arr: T[], i: number, j: number) {
 }
 
 export function Playlists(props: {
-  onPlayTrack?: (t: { id: number; title: string | null; artist: string | null }) => void;
-  onPlayAll?: (tracks: Array<{ id: number; title: string | null; artist: string | null }>) => void;
+  onPlayTrack?: (tracks: PlayablePlaylistTrack[], index: number) => void;
+  onPlayAll?: (tracks: PlayablePlaylistTrack[]) => void;
 }) {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
@@ -381,7 +388,7 @@ export function Playlists(props: {
       </div>
 
       {tab === 'smart' ? (
-        <SmartPlaylists onPlayTrack={props.onPlayTrack} onPlayAll={props.onPlayAll} />
+        <SmartPlaylists />
       ) : selectedId && selectedPlaylist ? (
         /* Playlist Detail View */
         <div className="space-y-4">
@@ -402,7 +409,12 @@ export function Playlists(props: {
             <button
               onClick={() =>
                 props.onPlayAll?.(
-                  items.map((it) => ({ id: Number(it.track_id), title: it.title, artist: it.artist }))
+                  items.map((it) => ({
+                    id: Number(it.track_id),
+                    title: it.title,
+                    artist: it.artist,
+                    album: it.album,
+                  }))
                 )
               }
               disabled={items.length === 0}
@@ -542,26 +554,35 @@ export function Playlists(props: {
                 key={it.track_id}
                 className="group flex items-center gap-2 sm:gap-3 p-2 sm:p-3 rounded-lg hover:bg-slate-800/50 transition-colors"
               >
-                {/* Play button - always visible on mobile */}
                 <button
-                  onClick={() => props.onPlayTrack?.({ id: Number(it.track_id), title: it.title, artist: it.artist })}
-                  className="w-8 h-8 flex items-center justify-center flex-shrink-0 text-cyan-400"
-                >
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M8 5v14l11-7z" />
-                  </svg>
-                </button>
-
-                {/* Track Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-white truncate text-sm sm:text-base">{it.title ?? `Track #${it.track_id}`}</div>
-                  <div className="text-xs sm:text-sm text-slate-400 truncate">
-                    {[it.artist, it.album].filter(Boolean).join(' • ') || 'Unknown'}
-                  </div>
-                  {selectedPlaylist.is_collaborative && it.added_by && (
-                    <div className="mt-0.5 truncate text-[11px] text-slate-500">Added by {it.added_by.email}</div>
+                  type="button"
+                  onClick={() => props.onPlayTrack?.(
+                    items.map((item) => ({
+                      id: Number(item.track_id),
+                      title: item.title,
+                      artist: item.artist,
+                      album: item.album,
+                    })),
+                    idx,
                   )}
-                </div>
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 sm:gap-3"
+                  aria-label={`Play ${it.title || `track ${idx + 1}`}`}
+                >
+                  <span className="flex h-8 w-8 flex-none items-center justify-center text-cyan-400">
+                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-white sm:text-base">{it.title ?? `Track #${it.track_id}`}</span>
+                    <span className="block truncate text-xs text-slate-400 sm:text-sm">
+                      {[it.artist, it.album].filter(Boolean).join(' • ') || 'Unknown'}
+                    </span>
+                    {selectedPlaylist.is_collaborative && it.added_by && (
+                      <span className="mt-0.5 block truncate text-[11px] text-slate-500">Added by {it.added_by.email}</span>
+                    )}
+                  </span>
+                </button>
 
                 {/* Actions - always visible on mobile, hover on desktop */}
                 <div className="flex items-center gap-0.5 sm:gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
