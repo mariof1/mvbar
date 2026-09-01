@@ -6,6 +6,7 @@ import { audit, db } from './db.js';
 import { collaborationPlaylistIds } from './playlistsRepo.js';
 import { broadcastToUser } from './websocket.js';
 import { sendWebPushToUser } from './pushNotifications.js';
+import { artistDisplay } from './artistDisplay.js';
 
 type PublicUserRow = {
   id: string;
@@ -430,6 +431,7 @@ export const socialPlugin: FastifyPluginAsync = fp(async (app) => {
           id: Number(track.id),
           title: track.title,
           artist: track.artist,
+          display_artist: artistDisplay(track.artist),
           album: track.album,
         },
         message,
@@ -484,6 +486,7 @@ export const socialPlugin: FastifyPluginAsync = fp(async (app) => {
           id: Number(row.track_id),
           title: row.title,
           artist: row.artist,
+          display_artist: artistDisplay(row.artist),
           album: row.album,
           durationMs: row.duration_ms,
           artPath: row.art_path,

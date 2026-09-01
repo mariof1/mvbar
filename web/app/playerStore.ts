@@ -9,6 +9,7 @@ import {
   startMusicPlayback,
   stopMusicPlayback,
 } from './musicAudio';
+import { formatArtistValue } from './artistDisplay';
 
 export type QueueTrack = {
   id: number;
@@ -53,6 +54,13 @@ function playImmediately(track: QueueTrack | undefined): void {
   });
 }
 
+function normalizeQueueTrack(track: QueueTrack): QueueTrack {
+  return {
+    ...track,
+    artist: formatArtistValue(track.artist) ?? 'Unknown Artist',
+  };
+}
+
 export const usePlayer = create<PlayerState>((set, get) => ({
   queue: [],
   index: 0,
@@ -65,15 +73,17 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       set({ queue: [], index: 0, isOpen: false });
       return;
     }
-    const idx = Math.max(0, Math.min(startIndex, tracks.length - 1));
-    set({ queue: tracks, index: idx, isOpen: true });
-    playImmediately(tracks[idx]);
+    const normalizedTracks = tracks.map(normalizeQueueTrack);
+    const idx = Math.max(0, Math.min(startIndex, normalizedTracks.length - 1));
+    set({ queue: normalizedTracks, index: idx, isOpen: true });
+    playImmediately(normalizedTracks[idx]);
   },
   playTrackNow: (t) => {
     closePodcastPlayer();
     closeAudiobookPlayer();
-    set({ queue: [t], index: 0, isOpen: true });
-    playImmediately(t);
+    const track = normalizeQueueTrack(t);
+    set({ queue: [track], index: 0, isOpen: true });
+    playImmediately(track);
   },
   playIndex: (idx) => {
     const s = get();
@@ -86,12 +96,13 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
   addToQueue: (t) => {
     const s = get();
-    const nextQueue = [...s.queue, t];
+    const track = normalizeQueueTrack(t);
+    const nextQueue = [...s.queue, track];
     set({ queue: nextQueue, isOpen: true });
     if (s.queue.length === 0) {
       closePodcastPlayer();
       closeAudiobookPlayer();
-      playImmediately(t);
+      playImmediately(track);
     }
     useToastStore.getState().show(
       `Added "${t.title || 'Track'}" to queue`,
@@ -101,12 +112,13 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   addManyToQueue: (tracks) => {
     if (tracks.length === 0) return;
     const s = get();
-    const nextQueue = [...s.queue, ...tracks];
+    const normalizedTracks = tracks.map(normalizeQueueTrack);
+    const nextQueue = [...s.queue, ...normalizedTracks];
     set({ queue: nextQueue, isOpen: true });
     if (s.queue.length === 0) {
       closePodcastPlayer();
       closeAudiobookPlayer();
-      playImmediately(tracks[0]);
+      playImmediately(normalizedTracks[0]);
     }
     useToastStore.getState().show(
       `Added ${tracks.length} track${tracks.length === 1 ? '' : 's'} to queue`,
@@ -115,14 +127,15 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
   playNext: (t) => {
     const s = get();
+    const track = normalizeQueueTrack(t);
     if (s.queue.length === 0) {
       closePodcastPlayer();
       closeAudiobookPlayer();
-      set({ queue: [t], index: 0, isOpen: true });
-      playImmediately(t);
+      set({ queue: [track], index: 0, isOpen: true });
+      playImmediately(track);
     } else {
       const insertAt = s.index + 1;
-      const newQueue = [...s.queue.slice(0, insertAt), t, ...s.queue.slice(insertAt)];
+      const newQueue = [...s.queue.slice(0, insertAt), track, ...s.queue.slice(insertAt)];
       set({ queue: newQueue, isOpen: true });
     }
     useToastStore.getState().show(
@@ -133,14 +146,15 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   playNextMany: (tracks) => {
     if (tracks.length === 0) return;
     const s = get();
+    const normalizedTracks = tracks.map(normalizeQueueTrack);
     if (s.queue.length === 0) {
       closePodcastPlayer();
       closeAudiobookPlayer();
-      set({ queue: tracks, index: 0, isOpen: true });
-      playImmediately(tracks[0]);
+      set({ queue: normalizedTracks, index: 0, isOpen: true });
+      playImmediately(normalizedTracks[0]);
     } else {
       const insertAt = s.index + 1;
-      const newQueue = [...s.queue.slice(0, insertAt), ...tracks, ...s.queue.slice(insertAt)];
+      const newQueue = [...s.queue.slice(0, insertAt), ...normalizedTracks, ...s.queue.slice(insertAt)];
       set({ queue: newQueue, isOpen: true });
     }
     useToastStore.getState().show(

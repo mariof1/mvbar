@@ -23,6 +23,7 @@ import { useRouter } from './router';
 import { showConfirm } from './ConfirmModal';
 import { usePlaylistUpdates, useLibraryUpdates } from './useWebSocket';
 import { useToastStore } from './Toast';
+import { trackArtistLabel } from './artistDisplay';
 
 type PlaylistTab = 'regular' | 'smart';
 
@@ -32,6 +33,7 @@ type PlaylistItem = {
   position: number;
   title: string | null;
   artist: string | null;
+  display_artist?: string | null;
   album: string | null;
   duration_ms: number | null;
   added_at: string;
@@ -412,7 +414,7 @@ export function Playlists(props: {
                   items.map((it) => ({
                     id: Number(it.track_id),
                     title: it.title,
-                    artist: it.artist,
+                    artist: trackArtistLabel(it),
                     album: it.album,
                   }))
                 )
@@ -560,7 +562,7 @@ export function Playlists(props: {
                     items.map((item) => ({
                       id: Number(item.track_id),
                       title: item.title,
-                      artist: item.artist,
+                      artist: trackArtistLabel(item),
                       album: item.album,
                     })),
                     idx,
@@ -576,7 +578,7 @@ export function Playlists(props: {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-white sm:text-base">{it.title ?? `Track #${it.track_id}`}</span>
                     <span className="block truncate text-xs text-slate-400 sm:text-sm">
-                      {[it.artist, it.album].filter(Boolean).join(' • ') || 'Unknown'}
+                      {[trackArtistLabel(it), it.album].filter(Boolean).join(' • ')}
                     </span>
                     {selectedPlaylist.is_collaborative && it.added_by && (
                       <span className="mt-0.5 block truncate text-[11px] text-slate-500">Added by {it.added_by.email}</span>

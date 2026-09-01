@@ -5,11 +5,13 @@ import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { getRecommendations } from './apiClient';
 import { useHistoryUpdates } from './useWebSocket';
+import { trackArtistLabel } from './artistDisplay';
 
 type Track = {
   id: number;
   title: string;
   artist: string;
+  display_artist?: string | null;
   album: string | null;
   art_path: string | null;
   art_hash: string | null;
@@ -208,7 +210,10 @@ export function Recommendations() {
 
   const playBucket = (bucket: Bucket) => {
     if (bucket.tracks.length > 0) {
-      setQueueAndPlay(bucket.tracks, 0);
+      setQueueAndPlay(
+        bucket.tracks.map((track) => ({ ...track, artist: trackArtistLabel(track) })),
+        0,
+      );
     }
   };
 

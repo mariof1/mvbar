@@ -5,6 +5,7 @@ import * as hist from './historyRepo.js';
 import * as stats from './statsRepo.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import { broadcastToUser } from './websocket.js';
+import { artistDisplay } from './artistDisplay.js';
 
 export const historyPlugin: FastifyPluginAsync = fp(async (app) => {
   app.post('/api/history/:trackId', async (req, reply) => {
@@ -32,7 +33,10 @@ export const historyPlugin: FastifyPluginAsync = fp(async (app) => {
     const offset = Math.max(0, Number(q.offset ?? 0));
 
     const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
-    const tracks = await hist.listHistory(req.user.userId, limit, offset, allowed);
+    const tracks = (await hist.listHistory(req.user.userId, limit, offset, allowed)).map((track: any) => ({
+      ...track,
+      display_artist: artistDisplay(track.artist, track.album_artist),
+    }));
     return { ok: true, tracks, limit, offset };
   });
 });

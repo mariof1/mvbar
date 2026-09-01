@@ -373,6 +373,32 @@ export async function initDb() {
   await pool.query('create index if not exists track_artists_track_role_idx on track_artists(track_id, role)');
   await pool.query('create index if not exists track_artists_track_role_pos_idx on track_artists(track_id, role, position)');
 
+  // Keep the legacy scalar columns aligned with the normalized artist
+  // relations. This backfills existing libraries and makes every API surface,
+  // including older endpoints, return the same complete ordered credits.
+  await pool.query(`
+    with canonical_artists as (
+      select
+        ta.track_id,
+        string_agg(a.name, '; ' order by ta.position, a.name)
+          filter (where ta.role = 'artist') as artist,
+        string_agg(a.name, '; ' order by ta.position, a.name)
+          filter (where ta.role = 'albumartist') as album_artist
+      from track_artists ta
+      join artists a on a.id = ta.artist_id
+      group by ta.track_id
+    )
+    update tracks t
+       set artist = coalesce(c.artist, t.artist),
+           album_artist = coalesce(c.album_artist, t.album_artist)
+      from canonical_artists c
+     where t.id = c.track_id
+       and (
+         (c.artist is not null and t.artist is distinct from c.artist)
+         or (c.album_artist is not null and t.album_artist is distinct from c.album_artist)
+       )
+  `);
+
   // Track credits table for composer, conductor, etc.
   await pool.query(`
     create table if not exists track_credits (

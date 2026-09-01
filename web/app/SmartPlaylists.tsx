@@ -16,6 +16,7 @@ import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { useLibraryUpdates } from './useWebSocket';
 import { showConfirm } from './ConfirmModal';
+import { trackArtistLabel } from './artistDisplay';
 
 const SORT_OPTIONS = [
   { value: 'random', label: 'Random' },
@@ -60,6 +61,7 @@ type Track = {
   id: number;
   title: string;
   artist: string;
+  display_artist?: string | null;
   album: string;
   duration: number | null;
   art_path: string | null;
@@ -441,7 +443,7 @@ export function SmartPlaylists() {
   function playAll() {
     if (tracks.length === 0) return;
     setQueueAndPlay(
-      tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist })),
+      tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t) })),
       0
     );
   }
@@ -452,7 +454,7 @@ export function SmartPlaylists() {
       tracks.map((track) => ({
         id: track.id,
         title: track.title,
-        artist: track.artist,
+        artist: trackArtistLabel(track),
         album: track.album,
       })),
       index
@@ -463,7 +465,7 @@ export function SmartPlaylists() {
     if (tracks.length === 0) return;
     const shuffled = [...tracks].sort(() => Math.random() - 0.5);
     setQueueAndPlay(
-      shuffled.map((t) => ({ id: t.id, title: t.title, artist: t.artist })),
+      shuffled.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t) })),
       0
     );
   }
@@ -957,7 +959,7 @@ export function SmartPlaylists() {
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-white text-sm sm:text-base truncate">{t.title ?? `Track #${t.id}`}</div>
                         <div className="text-xs sm:text-sm text-slate-400 truncate">
-                          {[t.artist, t.album].filter(Boolean).join(' • ') || 'Unknown'}
+                          {[trackArtistLabel(t), t.album].filter(Boolean).join(' • ')}
                         </div>
                       </div>
                       {/* Duration */}

@@ -4,7 +4,7 @@ import { asciiFold, stripPunctuation } from './tagRules.js';
 
 const INDEX_TASK_TIMEOUT_MS = Math.max(5000, Number(process.env.MEILI_TASK_TIMEOUT_MS ?? '300000'));
 // Bump when rowToDoc or indexed search fields change so startup rebuilds stale documents.
-export const TRACK_INDEX_VERSION = 1;
+export const TRACK_INDEX_VERSION = 2;
 
 export function meiliErrorCode(error: unknown) {
   if (typeof error !== 'object' || error === null) return '';

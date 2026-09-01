@@ -6,6 +6,7 @@ import { usePlayer } from './playerStore';
 import { apiFetch, browseAlbum } from './apiClient';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
+import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 
 type Album = {
   album: string;
@@ -20,6 +21,7 @@ type Track = {
   id: number;
   title: string;
   artist: string;
+  display_artist?: string | null;
   album: string;
   track_num: number | null;
   disc_num: number | null;
@@ -131,7 +133,7 @@ export function RecentlyAdded({
         const albumTracks = (data.tracks || []).map((t: Track) => ({
           id: t.id,
           title: t.title,
-          artist: t.artist,
+          artist: trackArtistLabel(t),
           album: t.album,
         }));
         if (albumTracks.length > 0) {
@@ -175,7 +177,7 @@ export function RecentlyAdded({
           />
           <div className="flex-1">
             <h2 className="text-2xl font-bold text-white">{selectedAlbum.album}</h2>
-            <p className="text-slate-400 mt-1">{selectedAlbum.display_artist}</p>
+            <p className="text-slate-400 mt-1">{formatArtistValue(selectedAlbum.display_artist) ?? 'Unknown Artist'}</p>
             <p className="text-slate-500 text-sm mt-1">{selectedAlbum.track_count} tracks</p>
             <div className="flex gap-3 mt-4">
               <button
@@ -205,14 +207,14 @@ export function RecentlyAdded({
                 </span>
                 <div className="flex-1 min-w-0">
                   <div className="text-white truncate">{track.title}</div>
-                  <div className="text-slate-400 text-sm truncate">{track.artist}</div>
+                  <div className="text-slate-400 text-sm truncate">{trackArtistLabel(track)}</div>
                 </div>
                 <span className="text-slate-500 text-sm">{formatDuration(track.duration_ms)}</span>
                 <div onClick={(e) => e.stopPropagation()} className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                   <AddMenu
                     label="track"
                     title="Add to..."
-                    getTracks={() => [{ id: track.id, title: track.title, artist: track.artist, album: track.album }]}
+                    getTracks={() => [{ id: track.id, title: track.title, artist: trackArtistLabel(track), album: track.album }]}
                   />
                 </div>
               </div>
@@ -256,13 +258,13 @@ export function RecentlyAdded({
                 getTracks={async () => {
                   if (!token) return [];
                   const r = await browseAlbum(token, album.display_artist, album.album);
-                  return r.tracks.map((t: any) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                  return r.tracks.map((t: any) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })) as AddMenuTrack[];
                 }}
               />
             </div>
           </div>
           <h3 className="font-medium text-white truncate">{album.album}</h3>
-          <p className="text-sm text-slate-400 truncate">{album.display_artist}</p>
+          <p className="text-sm text-slate-400 truncate">{formatArtistValue(album.display_artist) ?? 'Unknown Artist'}</p>
         </div>
       ))}
     </div>

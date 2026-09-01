@@ -126,7 +126,7 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const firstOf = <T>(v: T | T[] | undefined): T | undefined => Array.isArray(v) ? v[0] : v;
 
   const title = sanitize(m.common.title);
-  const artist = sanitize(m.common.artist);
+  let artist = sanitize(m.common.artist);
   const album = sanitize(m.common.album);
   let albumartist = sanitize(m.common.albumartist);
   let durationMs = m.format.duration ? Math.round(m.format.duration * 1000) : null;
@@ -413,6 +413,10 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const canon = (v: string) => canonByKey.get(foldKey(v)) ?? v;
   artists = dedupeFold(artists.map(canon));
   albumartists = dedupeFold(albumartists.map(canon));
+
+  // Keep the legacy scalar columns canonical as well. A large part of the API,
+  // Subsonic support, and older clients consume these fields directly.
+  if (artists.length) artist = artists.join('; ');
 
   // Standardize album artist string for display/filtering (e.g. handle "A\0\uFEFFB\0\uFEFFC")
   if (albumartists.length) albumartist = albumartists.join('; ');

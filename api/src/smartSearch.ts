@@ -4,6 +4,7 @@ import { meili } from './meili.js';
 import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
 import { asciiFold } from './asciiFold.js';
+import { artistDisplay } from './artistDisplay.js';
 
 // ============================================================================
 // GENRE TAXONOMY (shared with recommendations)
@@ -541,9 +542,8 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
       // Normalize Meili hits (IDs sometimes come back as strings)
       for (const hit of res.hits) {
         hit.id = Number(hit.id);
-        const albumArtist = hit.album_artist?.split(/[;|]/)[0]?.trim();
-        const firstArtist = hit.artist?.split(/[;|]/)[0]?.trim();
-        hit.display_artist = albumArtist || firstArtist || 'Unknown Artist';
+        hit.display_artist = artistDisplay(hit.artist, hit.album_artist);
+        hit.display_album_artist = artistDisplay(hit.album_artist, hit.artist);
       }
 
       // Load user data for personalization
@@ -739,12 +739,14 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
             select
               ua.album,
               coalesce(
-                (select a.name from track_artists ta join artists a on a.id = ta.artist_id
+                (select string_agg(a.name, ' • ' order by ta.position asc, a.name asc)
+                   from track_artists ta join artists a on a.id = ta.artist_id
                  where ta.track_id = ua.first_track_id and ta.role = 'albumartist'
-                 order by ta.position asc, a.name asc limit 1),
-                (select a.name from track_artists ta join artists a on a.id = ta.artist_id
+                ),
+                (select string_agg(a.name, ' • ' order by ta.position asc, a.name asc)
+                   from track_artists ta join artists a on a.id = ta.artist_id
                  where ta.track_id = ua.first_track_id and ta.role = 'artist'
-                 order by ta.position asc, a.name asc limit 1)
+                )
               ) as display_artist,
               (select ta.artist_id::int from track_artists ta
                where ta.track_id = ua.first_track_id and ta.role = 'albumartist'

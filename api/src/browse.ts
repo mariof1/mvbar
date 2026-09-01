@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
 import { asciiFold } from './asciiFold.js';
+import { artistDisplay, artistNamesFromValue, trackArtistDisplay } from './artistDisplay.js';
 
 export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
   // Paginated artists list with ID for routing
@@ -216,12 +217,14 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       select
         ua.album,
         coalesce(
-          (select a.name from track_artists ta join artists a on a.id = ta.artist_id 
+          (select string_agg(a.name, ' • ' order by ta.position asc, a.name asc)
+             from track_artists ta join artists a on a.id = ta.artist_id
            where ta.track_id = ua.first_track_id and ta.role = 'albumartist' 
-           order by ta.position asc, a.name asc limit 1),
-          (select a.name from track_artists ta join artists a on a.id = ta.artist_id 
+          ),
+          (select string_agg(a.name, ' • ' order by ta.position asc, a.name asc)
+             from track_artists ta join artists a on a.id = ta.artist_id
            where ta.track_id = ua.first_track_id and ta.role = 'artist' 
-           order by ta.position asc, a.name asc limit 1)
+          )
         ) as display_artist,
         ac.track_count,
         ua.art_path,
@@ -575,10 +578,15 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
 
     const trackIds = r.rows.map((t: any) => t.id);
     const artistsMap = await getTrackArtists(trackIds);
-    const tracks = r.rows.map((t: any) => ({
-      ...t,
-      artists: artistsMap.get(Number(t.id)) ?? []
-    }));
+    const tracks = r.rows.map((t: any) => {
+      const artists = artistsMap.get(Number(t.id)) ?? [];
+      return {
+        ...t,
+        artists,
+        display_artist: trackArtistDisplay(artists, t.artist, t.album_artist),
+        display_album_artist: artistDisplay(t.album_artist, t.artist),
+      };
+    });
 
     return { ok: true, country: name, tracks, limit, offset };
   });
@@ -611,10 +619,15 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
 
     const trackIds = r.rows.map((t: any) => t.id);
     const artistsMap = await getTrackArtists(trackIds);
-    const tracks = r.rows.map((t: any) => ({
-      ...t,
-      artists: artistsMap.get(Number(t.id)) ?? []
-    }));
+    const tracks = r.rows.map((t: any) => {
+      const artists = artistsMap.get(Number(t.id)) ?? [];
+      return {
+        ...t,
+        artists,
+        display_artist: trackArtistDisplay(artists, t.artist, t.album_artist),
+        display_album_artist: artistDisplay(t.album_artist, t.artist),
+      };
+    });
 
     return { ok: true, language: name, tracks, limit, offset };
   });
@@ -648,10 +661,15 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
     // Fetch all artists for each track
     const trackIds = r.rows.map((t: any) => t.id);
     const artistsMap = await getTrackArtists(trackIds);
-    const tracks = r.rows.map((t: any) => ({
-      ...t,
-      artists: artistsMap.get(Number(t.id)) ?? []
-    }));
+    const tracks = r.rows.map((t: any) => {
+      const artists = artistsMap.get(Number(t.id)) ?? [];
+      return {
+        ...t,
+        artists,
+        display_artist: trackArtistDisplay(artists, t.artist, t.album_artist),
+        display_album_artist: artistDisplay(t.album_artist, t.artist),
+      };
+    });
 
     return { ok: true, genre: name, tracks, limit, offset };
   });
@@ -705,9 +723,14 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       )
       select 
         at.album,
-        (select a.name from track_artists ta2 join artists a on a.id = ta2.artist_id 
-         where ta2.track_id = at.first_track_id and ta2.role = 'albumartist' 
-         order by ta2.position asc, a.name asc limit 1) as display_artist,
+        coalesce(
+          (select string_agg(a.name, ' • ' order by ta2.position asc, a.name asc)
+             from track_artists ta2 join artists a on a.id = ta2.artist_id
+           where ta2.track_id = at.first_track_id and ta2.role = 'albumartist'),
+          (select string_agg(a.name, ' • ' order by ta2.position asc, a.name asc)
+             from track_artists ta2 join artists a on a.id = ta2.artist_id
+           where ta2.track_id = at.first_track_id and ta2.role = 'artist')
+        ) as display_artist,
         ac.track_count,
         at.art_path,
         at.art_hash
@@ -760,9 +783,14 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       )
       select 
         at.album,
-        (select a.name from track_artists ta2 join artists a on a.id = ta2.artist_id 
-         where ta2.track_id = at.first_track_id and ta2.role = 'albumartist' 
-         order by ta2.position asc, a.name asc limit 1) as album_artist,
+        coalesce(
+          (select string_agg(a.name, ' • ' order by ta2.position asc, a.name asc)
+             from track_artists ta2 join artists a on a.id = ta2.artist_id
+           where ta2.track_id = at.first_track_id and ta2.role = 'albumartist'),
+          (select string_agg(a.name, ' • ' order by ta2.position asc, a.name asc)
+             from track_artists ta2 join artists a on a.id = ta2.artist_id
+           where ta2.track_id = at.first_track_id and ta2.role = 'artist')
+        ) as album_artist,
         ac.track_count,
         at.art_path,
         at.art_hash
@@ -829,10 +857,13 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
     } else if (artist) {
       // Legacy: Match by album_artist or artist name
       libFilter = allowed === null ? '' : `and t.library_id = any($3)`;
+      // Album cards now carry the complete display credit. Resolve its first
+      // canonical member for the legacy name-based route.
+      const lookupArtist = artistNamesFromValue(artist)[0] ?? artist;
       // Join with artists table to find artist id, then use track_artists
       const artistLookup = await db().query(
         `select id from artists where name = $1 limit 1`,
-        [artist]
+        [lookupArtist]
       );
       
       if (artistLookup.rows[0]) {
@@ -863,7 +894,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       } else {
         // Fallback to old string matching if artist not found in artists table
         libFilter = allowed === null ? '' : `and t.library_id = any($3)`;
-        params = allowed === null ? [artist, album] : [artist, album, allowed];
+        params = allowed === null ? [lookupArtist, album] : [lookupArtist, album, allowed];
         r = await db().query(
           `
           select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
@@ -904,10 +935,8 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
     const artistsMap = await getTrackArtists(trackIds);
     
     const tracks = r.rows.map((t: any) => {
-      // Compute display_artist: album_artist first, fallback to first artist
-      const albumArtist = t.album_artist?.split(/[;|]/)[0]?.trim();
-      const firstArtist = t.artist?.split(/[;|]/)[0]?.trim();
-      const displayArtist = albumArtist || firstArtist || 'Unknown Artist';
+      const artists = artistsMap.get(Number(t.id)) ?? [];
+      const displayArtist = trackArtistDisplay(artists, t.artist, t.album_artist);
       
       return {
         ...t,
@@ -916,23 +945,24 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         trackTotal: t.track_total,
         discNumber: t.disc_number,
         discTotal: t.disc_total,
-        artists: artistsMap.get(Number(t.id)) ?? [],
-        display_artist: displayArtist
+        artists,
+        display_artist: displayArtist,
+        display_album_artist: artistDisplay(t.album_artist, t.artist),
       };
     });
 
-    // Get album artist from track_artists table (first album artist of first track)
+    // Album surfaces use the complete ordered album-artist credit, falling
+    // back to the complete track-artist credit.
     const firstTrack = r.rows[0];
-    const albumArtistR = await db().query(
-      `select a.name from track_artists ta
+    const albumArtistR = await db().query<{ display_artist: string | null }>(
+      `select string_agg(a.name, ' • ' order by ta.position asc, a.name asc) as display_artist
+       from track_artists ta
        join artists a on a.id = ta.artist_id
-       where ta.track_id = $1 and ta.role = 'albumartist'
-       order by ta.position asc, a.name asc limit 1`,
+       where ta.track_id = $1 and ta.role = 'albumartist'`,
       [Number(firstTrack.id)]
     );
-    const displayArtist = albumArtistR.rows[0]?.name 
-      || artistsMap.get(Number(firstTrack.id))?.[0]?.name 
-      || firstTrack.artist?.split(';')[0]?.trim() 
+    const displayArtist = albumArtistR.rows[0]?.display_artist
+      || trackArtistDisplay(artistsMap.get(Number(firstTrack.id)), firstTrack.artist)
       || 'Unknown Artist';
 
     // Calculate total discs
@@ -944,6 +974,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       album: {
         name: album,
         artist: displayArtist,
+        display_artist: displayArtist,
         art_path: firstTrack.art_path,
         art_hash: firstTrack.art_hash,
         track_count: tracks.length,

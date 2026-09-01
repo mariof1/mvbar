@@ -9,6 +9,7 @@ import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { useUi, type PodcastEpisode } from './uiStore';
 import { useBodyScrollLock } from './useBodyScrollLock';
+import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 
 type Hit = {
   id: number;
@@ -210,12 +211,12 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
   }, [navigate, onClose]);
 
   const handlePlay = useCallback((t: Hit) => {
-    onPlay?.({ id: t.id, title: t.title, artist: t.display_artist || t.artist });
+    onPlay?.({ id: t.id, title: t.title, artist: trackArtistLabel(t) });
     onClose();
   }, [onPlay, onClose]);
 
   const handleAddToQueue = useCallback((t: Hit) => {
-    onAddToQueue?.({ id: t.id, title: t.title, artist: t.display_artist || t.artist });
+    onAddToQueue?.({ id: t.id, title: t.title, artist: trackArtistLabel(t) });
   }, [onAddToQueue]);
 
   const handlePodcastEpisodePlay = useCallback((episode: PodcastEpisodeHit) => {
@@ -316,7 +317,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                           getTracks={async () => {
                             if (!token) return [];
                             const r = await browseArtistTracks(token, a.id);
-                            return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                            return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })) as AddMenuTrack[];
                           }}
                         />
                       </div>
@@ -355,7 +356,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium text-white truncate">{a.album}</div>
-                        <div className="text-xs text-slate-400 truncate">{a.display_artist || 'Unknown Artist'} · {a.track_count} tracks</div>
+                        <div className="text-xs text-slate-400 truncate">{formatArtistValue(a.display_artist) ?? 'Unknown Artist'} · {a.track_count} tracks</div>
                       </div>
                       <div className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                         <AddMenu
@@ -364,7 +365,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                           getTracks={async () => {
                             if (!token) return [];
                             const r = await browseAlbum(token, a.display_artist || '', a.album, a.artist_id ?? undefined);
-                            return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                            return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })) as AddMenuTrack[];
                           }}
                         />
                       </div>
@@ -512,7 +513,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                       <button onClick={() => handlePlay(t)} className="flex-1 min-w-0 text-left">
                         <div className="text-sm font-medium text-white truncate">{t.title ?? t.path}</div>
                         <div className="text-xs text-slate-400 truncate">
-                          {[t.display_artist || t.artist, t.album].filter(Boolean).join(' · ') || 'Unknown'}
+                          {[trackArtistLabel(t), t.album].filter(Boolean).join(' · ')}
                         </div>
                       </button>
 
@@ -521,7 +522,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                         <AddMenu
                           label="track"
                           title="Add to..."
-                          getTracks={() => [{ id: Number(t.id), title: t.title, artist: t.display_artist || t.artist, album: t.album }]}
+                          getTracks={() => [{ id: Number(t.id), title: t.title, artist: trackArtistLabel(t), album: t.album }]}
                         />
                         <button
                           onClick={async () => {

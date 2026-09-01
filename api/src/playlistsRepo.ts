@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { db } from './db.js';
+import { artistDisplay } from './artistDisplay.js';
 
 type Queryable = PoolClient | ReturnType<typeof db>;
 
@@ -285,7 +286,10 @@ export async function listItems(userId: string, playlistId: number, allowedLibra
     params
   );
 
-  return r.rows;
+  return r.rows.map((row) => ({
+    ...row,
+    display_artist: artistDisplay(row.artist),
+  }));
 }
 
 export async function getCollaboration(userId: string, playlistId: number) {

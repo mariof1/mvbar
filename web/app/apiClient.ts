@@ -700,6 +700,7 @@ export type TrackShare = {
     id: number;
     title: string | null;
     artist: string | null;
+    display_artist?: string | null;
     album: string | null;
     durationMs: number | null;
     artPath: string | null;
