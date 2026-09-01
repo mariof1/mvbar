@@ -9,6 +9,7 @@ import { useRouter } from './router';
 import { useSocialUpdates } from './socialStore';
 import type { QueueTrack } from './playerStore';
 import { useBodyScrollLock } from './useBodyScrollLock';
+import { trackArtistLabel } from './artistDisplay';
 
 function Avatar({ user }: { user: SocialUser }) {
   if (user.avatarPath) {
@@ -105,7 +106,7 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
           <div className="min-w-0 pr-4">
             <h2 id="share-track-title" className="text-lg font-bold text-white">Share song</h2>
             <p className="mt-1 truncate text-sm text-slate-300">{track.title || 'Unknown Track'}</p>
-            {track.artist && <p className="truncate text-xs text-slate-500">{track.artist}</p>}
+            <p className="truncate text-xs text-slate-500">{trackArtistLabel(track)}</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Close">
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

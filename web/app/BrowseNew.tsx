@@ -22,6 +22,7 @@ import { useLibraryUpdates } from './useWebSocket';
 import { useRouter, useRoute } from './router';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { useBodyScrollLock } from './useBodyScrollLock';
+import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 
 type Tab = 'artists' | 'albums' | 'genres' | 'countries' | 'languages';
 
@@ -837,7 +838,7 @@ export function BrowseNew(props: {
             </p>
             <div className="mt-4 flex items-center gap-2">
               <button
-                onClick={() => props.onPlayAll?.(albumDetail.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: albumDetail.name })))}
+                onClick={() => props.onPlayAll?.(albumDetail.tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: albumDetail.name })))}
                 className="px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
               >
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -848,7 +849,7 @@ export function BrowseNew(props: {
               <AddMenu
                 label="album"
                 title={`Add ${albumDetail.name}...`}
-                getTracks={() => albumDetail.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: albumDetail.name }))}
+                getTracks={() => albumDetail.tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: albumDetail.name }))}
               />
             </div>
           </div>
@@ -873,7 +874,7 @@ export function BrowseNew(props: {
                 )}
                 <div
                   className="group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
-                  onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: track.display_artist || track.artist, album: albumDetail.name })}
+                  onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: albumDetail.name })}
                 >
                   {/* Track number - always show play icon on mobile, hover on desktop */}
                   <div className="w-6 sm:w-8 text-center flex-shrink-0">
@@ -940,7 +941,7 @@ export function BrowseNew(props: {
                       <AddMenu
                         label="track"
                         title="Add to..."
-                        getTracks={() => [{ id: track.id, title: track.title, artist: track.display_artist || track.artist, album: albumDetail.name }]}
+                        getTracks={() => [{ id: track.id, title: track.title, artist: trackArtistLabel(track), album: albumDetail.name }]}
                       />
                     </div>
                   </div>
@@ -1265,7 +1266,7 @@ export function BrowseNew(props: {
                 getTracks={async () => {
                   if (!token || !selectedArtist) return [];
                   const r = await browseArtistTracks(token, selectedArtist.id);
-                  return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                  return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })) as AddMenuTrack[];
                 }}
               />
             </div>
@@ -1304,7 +1305,7 @@ export function BrowseNew(props: {
                       getTracks={async () => {
                         if (!token) return [];
                         const r = await browseAlbum(token, a.display_artist, a.album, selectedArtist?.id);
-                        return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                        return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })) as AddMenuTrack[];
                       }}
                     />
                   </div>
@@ -1346,7 +1347,7 @@ export function BrowseNew(props: {
                       getTracks={async () => {
                         if (!token) return [];
                         const r = await browseAlbum(token, a.album_artist, a.album);
-                        return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                        return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })) as AddMenuTrack[];
                       }}
                     />
                   </div>
@@ -1381,7 +1382,7 @@ export function BrowseNew(props: {
             <p className="text-slate-400">{genreTracks.length} tracks</p>
           </div>
           <button
-            onClick={() => props.onPlayAll?.(genreTracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: t.album })))}
+            onClick={() => props.onPlayAll?.(genreTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })))}
             className="ml-auto px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1392,7 +1393,7 @@ export function BrowseNew(props: {
           <AddMenu
             label="genre"
             title={`Add ${selectedGenre}...`}
-            getTracks={() => genreTracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: t.album }))}
+            getTracks={() => genreTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album }))}
           />
         </div>
 
@@ -1401,7 +1402,7 @@ export function BrowseNew(props: {
             <div
               key={track.id}
               className="group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
-              onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: track.display_artist || track.artist, album: track.album })}
+              onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: track.album })}
             >
               <div className="w-6 sm:w-8 text-center flex-shrink-0">
                 <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden">{idx + 1}</span>
@@ -1463,7 +1464,7 @@ export function BrowseNew(props: {
             <p className="text-slate-400">{countryTracks.length} tracks</p>
           </div>
           <button
-            onClick={() => props.onPlayAll?.(countryTracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: t.album })))}
+            onClick={() => props.onPlayAll?.(countryTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })))}
             className="ml-auto px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1474,7 +1475,7 @@ export function BrowseNew(props: {
           <AddMenu
             label="country"
             title={`Add ${selectedCountry}...`}
-            getTracks={() => countryTracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: t.album }))}
+            getTracks={() => countryTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album }))}
           />
         </div>
 
@@ -1483,7 +1484,7 @@ export function BrowseNew(props: {
             <div
               key={track.id}
               className="group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
-              onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: track.display_artist || track.artist, album: track.album })}
+              onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: track.album })}
             >
               <div className="w-6 sm:w-8 text-center flex-shrink-0">
                 <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden">{idx + 1}</span>
@@ -1547,7 +1548,7 @@ export function BrowseNew(props: {
             <p className="text-slate-400">{languageTracks.length} tracks</p>
           </div>
           <button
-            onClick={() => props.onPlayAll?.(languageTracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: t.album })))}
+            onClick={() => props.onPlayAll?.(languageTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })))}
             className="ml-auto px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1558,7 +1559,7 @@ export function BrowseNew(props: {
           <AddMenu
             label="language"
             title={`Add ${selectedLanguage}...`}
-            getTracks={() => languageTracks.map((t) => ({ id: t.id, title: t.title, artist: t.display_artist || t.artist, album: t.album }))}
+            getTracks={() => languageTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album }))}
           />
         </div>
 
@@ -1567,7 +1568,7 @@ export function BrowseNew(props: {
             <div
               key={track.id}
               className="group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
-              onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: track.display_artist || track.artist, album: track.album })}
+              onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: track.album })}
             >
               <div className="w-6 sm:w-8 text-center flex-shrink-0">
                 <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden">{idx + 1}</span>
@@ -1695,7 +1696,7 @@ export function BrowseNew(props: {
                     getTracks={async () => {
                       if (!token) return [];
                       const r = await browseArtistTracks(token, a.id);
-                      return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                      return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })) as AddMenuTrack[];
                     }}
                   />
                 </div>
@@ -1731,7 +1732,7 @@ export function BrowseNew(props: {
                     )}
                   </div>
                   <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
-                  <div className="text-sm text-slate-500 truncate">{a.display_artist}</div>
+                  <div className="text-sm text-slate-500 truncate">{formatArtistValue(a.display_artist) ?? 'Unknown Artist'}</div>
                 </button>
                 <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                   <AddMenu
@@ -1741,7 +1742,7 @@ export function BrowseNew(props: {
                     getTracks={async () => {
                       if (!token) return [];
                       const r = await browseAlbum(token, a.display_artist, a.album);
-                      return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: t.artist, album: t.album })) as AddMenuTrack[];
+                      return r.tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })) as AddMenuTrack[];
                     }}
                   />
                 </div>

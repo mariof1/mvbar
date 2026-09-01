@@ -22,6 +22,7 @@ import { usePlayer } from './playerStore';
 import { useToastStore } from './Toast';
 import { showConfirm } from './ConfirmModal';
 import { useSocialUpdates } from './socialStore';
+import { trackArtistLabel } from './artistDisplay';
 
 type SearchResult = SocialUser & {
   relationshipId: number | null;
@@ -169,7 +170,7 @@ export function Social() {
     player.playTrackNow({
       id: share.track.id,
       title: share.track.title,
-      artist: share.track.artist,
+      artist: trackArtistLabel(share.track),
       album: share.track.album,
       art_path: share.track.artPath,
       art_hash: share.track.artHash,
@@ -182,7 +183,7 @@ export function Social() {
     player.addToQueue({
       id: share.track.id,
       title: share.track.title,
-      artist: share.track.artist,
+      artist: trackArtistLabel(share.track),
       album: share.track.album,
       art_path: share.track.artPath,
       art_hash: share.track.artHash,
@@ -293,7 +294,7 @@ export function Social() {
               </button>
               <div className="min-w-0 flex-1 pr-4">
                 <h2 className="truncate font-semibold text-white">{share.track.title || 'Unknown Track'}</h2>
-                <p className="truncate text-sm text-slate-400">{[share.track.artist, share.track.album].filter(Boolean).join(' • ') || 'Unknown artist'}</p>
+                <p className="truncate text-sm text-slate-400">{[trackArtistLabel(share.track), share.track.album].filter(Boolean).join(' • ')}</p>
                 <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                   <Avatar user={share.sender} size="sm" />
                   <span className="min-w-0 truncate">Shared by {share.sender.email}</span>

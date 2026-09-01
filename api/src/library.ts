@@ -6,6 +6,7 @@ import { store } from './store.js';
 import { access, constants } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolveInside } from './pathSafety.js';
+import { artistDisplay } from './artistDisplay.js';
 
 const LIBRARY_READ_ONLY = process.env.LIBRARY_READ_ONLY === '1';
 const LIBRARY_PROBE_TIMEOUT_MS = 3000;
@@ -716,7 +717,15 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
       params as any
     );
 
-    return { ok: true, tracks: r.rows, limit, offset };
+    const tracks = r.rows.map((track: any) => ({
+      ...track,
+      // Track surfaces always use performers; album ownership is exposed
+      // separately for album headers/cards.
+      display_artist: artistDisplay(track.artist, track.album_artist),
+      display_album_artist: artistDisplay(track.album_artist, track.artist),
+    }));
+
+    return { ok: true, tracks, limit, offset };
   });
 
   // Rate limit bypass management

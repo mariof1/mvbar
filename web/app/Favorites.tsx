@@ -6,6 +6,7 @@ import { useFavorites } from './favoritesStore';
 import { useAuth } from './store';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu } from './AddMenu';
+import { trackArtistLabel } from './artistDisplay';
 
 export function Favorites(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
@@ -89,7 +90,7 @@ export function Favorites(props: {
             <div className="w-6 sm:w-8 flex-shrink-0 text-center">
               <span className="text-xs sm:text-sm text-slate-500 group-hover:hidden">{idx + 1}</span>
               <button
-                onClick={() => props.onPlay?.({ id: t.id, title: t.title, artist: t.artist })}
+                onClick={() => props.onPlay?.({ id: t.id, title: t.title, artist: trackArtistLabel(t) })}
                 className="hidden group-hover:block text-cyan-400"
               >
                 <svg className="w-4 h-4 sm:w-5 sm:h-5 mx-auto" fill="currentColor" viewBox="0 0 24 24">
@@ -102,7 +103,7 @@ export function Favorites(props: {
             <div className="flex-1 min-w-0">
               <div className="font-medium text-white truncate text-sm sm:text-base">{t.title ?? t.path}</div>
               <div className="text-xs sm:text-sm text-slate-400 truncate">
-                {[t.artist, t.album].filter(Boolean).join(' • ') || 'Unknown'}
+                {[trackArtistLabel(t), t.album].filter(Boolean).join(' • ')}
               </div>
             </div>
 
@@ -112,7 +113,7 @@ export function Favorites(props: {
                 <AddMenu
                   label="track"
                   title="Add to..."
-                  getTracks={() => [{ id: t.id, title: t.title, artist: t.artist, album: t.album }]}
+                  getTracks={() => [{ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album }]}
                 />
               </div>
               <button

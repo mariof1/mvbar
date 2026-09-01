@@ -58,6 +58,32 @@ export async function initDb() {
       );
     `);
     await pool.query('create index if not exists track_languages_language_idx on track_languages(language)');
+
+    // The API normally performs this backfill too, but the worker may be the
+    // first service to start. Keep scalar artist fields canonical before the
+    // search index is reconciled.
+    await pool.query(`
+      with canonical_artists as (
+        select
+          ta.track_id,
+          string_agg(a.name, '; ' order by ta.position, a.name)
+            filter (where ta.role = 'artist') as artist,
+          string_agg(a.name, '; ' order by ta.position, a.name)
+            filter (where ta.role = 'albumartist') as album_artist
+        from track_artists ta
+        join artists a on a.id = ta.artist_id
+        group by ta.track_id
+      )
+      update tracks t
+         set artist = coalesce(c.artist, t.artist),
+             album_artist = coalesce(c.album_artist, t.album_artist)
+        from canonical_artists c
+       where t.id = c.track_id
+         and (
+           (c.artist is not null and t.artist is distinct from c.artist)
+           or (c.album_artist is not null and t.album_artist is distinct from c.album_artist)
+         )
+    `);
   } catch {
     // ignore
   }
