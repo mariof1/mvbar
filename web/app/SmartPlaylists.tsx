@@ -17,6 +17,7 @@ import { usePlayer } from './playerStore';
 import { useLibraryUpdates } from './useWebSocket';
 import { showConfirm } from './ConfirmModal';
 import { trackArtistLabel } from './artistDisplay';
+import { formatCount } from './format';
 
 const SORT_OPTIONS = [
   { value: 'random', label: 'Random' },
@@ -812,13 +813,15 @@ export function SmartPlaylists() {
       {/* Mobile: show either list or detail, Desktop: show both side by side */}
       <div className="lg:grid lg:grid-cols-2 lg:gap-6">
         {/* Playlists List - hide on mobile when detail is shown */}
-        <div className={`space-y-3 ${showDetail ? 'hidden lg:block' : ''}`}>
-          <h3 className="text-lg font-semibold text-slate-300 flex items-center gap-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            Smart Playlists
-          </h3>
+        <div className={`space-y-3 ${showDetail ? 'hidden lg:block' : ''} ${playlists.length === 0 ? 'lg:col-span-2' : ''}`}>
+          {playlists.length > 0 && (
+            <h3 className="text-lg font-semibold text-slate-300 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Your smart playlists
+            </h3>
+          )}
           <div className="space-y-2">
             {playlists.map((p) => (
               <div
@@ -879,16 +882,19 @@ export function SmartPlaylists() {
               </div>
             ))}
             {playlists.length === 0 && (
-              <div className="text-center py-8 text-slate-400">
-                <p>No smart playlists yet</p>
-                <p className="text-sm mt-1">Create one to get dynamic playlists</p>
+              <div className="rounded-xl border border-dashed border-slate-700 bg-slate-800/20 px-6 py-12 text-center text-slate-400">
+                <svg className="mx-auto h-10 w-10 text-purple-400/70" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <p className="mt-3 font-medium text-white">No smart playlists yet</p>
+                <p className="text-sm mt-1">Create one above to build a playlist that updates automatically.</p>
               </div>
             )}
           </div>
         </div>
 
         {/* Tracks Detail View */}
-        <div className={`space-y-4 ${!showDetail ? 'hidden lg:block' : ''}`}>
+        <div className={`space-y-4 ${playlists.length === 0 ? 'hidden' : !showDetail ? 'hidden lg:block' : ''}`}>
           {selectedPlaylist ? (
             <>
               {/* Header with back button on mobile */}
@@ -896,6 +902,8 @@ export function SmartPlaylists() {
                 <button
                   onClick={() => setSelectedId(null)}
                   className="lg:hidden p-2 rounded-lg hover:bg-slate-800/50 text-slate-400 hover:text-white transition-colors flex-shrink-0"
+                  aria-label="Back to smart playlists"
+                  title="Back to smart playlists"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -904,7 +912,7 @@ export function SmartPlaylists() {
                 <div className="flex-1 min-w-0">
                   <h3 className="text-lg sm:text-xl font-bold text-white truncate">{selectedPlaylist.name}</h3>
                   <p className="text-sm text-slate-400">
-                    {trackCount} tracks{truncated && ' (capped)'}
+                    {formatCount(trackCount, 'track')}{truncated && ' (capped)'}
                   </p>
                 </div>
                 {/* Play buttons */}

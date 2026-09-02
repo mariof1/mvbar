@@ -23,6 +23,7 @@ import { useRouter, useRoute } from './router';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
+import { formatCount } from './format';
 
 type Tab = 'artists' | 'albums' | 'genres' | 'countries' | 'languages';
 
@@ -833,7 +834,7 @@ export function BrowseNew(props: {
             <h1 className="text-lg sm:text-3xl font-bold text-white truncate leading-tight">{albumDetail.name}</h1>
             <p className="text-sm sm:text-xl text-slate-400 mt-1 truncate">{albumDetail.artist}</p>
             <p className="text-sm text-slate-500 mt-2">
-              {albumDetail.tracks.length} tracks
+              {formatCount(albumDetail.tracks.length, 'track')}
               {albumDetail.totalDiscs > 1 && ` · ${albumDetail.totalDiscs} discs`}
             </p>
             <div className="mt-4 flex items-center gap-2">
@@ -1258,7 +1259,7 @@ export function BrowseNew(props: {
           </div>
           <div>
             <h1 className="text-3xl font-bold text-white">{selectedArtist.name}</h1>
-            <p className="text-slate-400 mt-1">{artistAlbums.length} albums</p>
+            <p className="text-slate-400 mt-1">{formatCount(artistAlbums.length, 'album')}</p>
             <div className="mt-3">
               <AddMenu
                 label="artist"
@@ -1295,7 +1296,7 @@ export function BrowseNew(props: {
                       )}
                     </div>
                     <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
-                    <div className="text-sm text-slate-500">{a.track_count} tracks</div>
+                    <div className="text-sm text-slate-500">{formatCount(a.track_count, 'track')}</div>
                   </button>
                   <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                     <AddMenu
@@ -1379,7 +1380,7 @@ export function BrowseNew(props: {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-white">{selectedGenre}</h1>
-            <p className="text-slate-400">{genreTracks.length} tracks</p>
+            <p className="text-slate-400">{formatCount(genreTracks.length, 'track')}</p>
           </div>
           <button
             onClick={() => props.onPlayAll?.(genreTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })))}
@@ -1461,7 +1462,7 @@ export function BrowseNew(props: {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-white">{selectedCountry}</h1>
-            <p className="text-slate-400">{countryTracks.length} tracks</p>
+            <p className="text-slate-400">{formatCount(countryTracks.length, 'track')}</p>
           </div>
           <button
             onClick={() => props.onPlayAll?.(countryTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })))}
@@ -1545,7 +1546,7 @@ export function BrowseNew(props: {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-white">{selectedLanguage}</h1>
-            <p className="text-slate-400">{languageTracks.length} tracks</p>
+            <p className="text-slate-400">{formatCount(languageTracks.length, 'track')}</p>
           </div>
           <button
             onClick={() => props.onPlayAll?.(languageTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })))}
@@ -1658,11 +1659,21 @@ export function BrowseNew(props: {
 
         {/* Result count */}
         <div className="text-sm text-slate-500">
-          {tab === 'artists' && `${artistsTotal.toLocaleString()} artists`}
-          {tab === 'albums' && `${albumsTotal.toLocaleString()} albums`}
-          {tab === 'genres' && `${genresTotal.toLocaleString()} genres`}
-          {tab === 'countries' && `${countriesTotal.toLocaleString()} countries`}
-          {tab === 'languages' && `${languagesTotal.toLocaleString()} languages`}
+          {loading && (
+            (tab === 'artists' && artists.length === 0) ||
+            (tab === 'albums' && albums.length === 0) ||
+            (tab === 'genres' && genres.length === 0) ||
+            (tab === 'countries' && countries.length === 0) ||
+            (tab === 'languages' && languages.length === 0)
+          ) ? 'Loading…' : (
+            <>
+              {tab === 'artists' && formatCount(artistsTotal, 'artist')}
+              {tab === 'albums' && formatCount(albumsTotal, 'album')}
+              {tab === 'genres' && formatCount(genresTotal, 'genre')}
+              {tab === 'countries' && formatCount(countriesTotal, 'country', 'countries')}
+              {tab === 'languages' && formatCount(languagesTotal, 'language')}
+            </>
+          )}
         </div>
       </div>
 
@@ -1686,7 +1697,7 @@ export function BrowseNew(props: {
                     )}
                   </div>
                   <div className="mt-3 font-medium text-white truncate group-hover:text-cyan-400">{a.name}</div>
-                  <div className="text-sm text-slate-500">{a.album_count} albums</div>
+                  <div className="text-sm text-slate-500">{formatCount(a.album_count, 'album')}</div>
                 </button>
                 <div className="absolute top-3 right-3 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                   <AddMenu
@@ -1769,7 +1780,7 @@ export function BrowseNew(props: {
                 <div className="absolute inset-0 bg-black/20" />
                 <div className="relative">
                   <div className="font-bold text-white text-lg">{g.genre}</div>
-                  <div className="text-white/80 text-sm">{g.track_count} tracks</div>
+                  <div className="text-white/80 text-sm">{formatCount(g.track_count, 'track')}</div>
                 </div>
               </button>
             ))}
@@ -1797,7 +1808,7 @@ export function BrowseNew(props: {
                 </div>
                 <div className="relative">
                   <div className="font-bold text-white text-lg">{c.country}</div>
-                  <div className="text-white/80 text-sm">{c.track_count} tracks</div>
+                  <div className="text-white/80 text-sm">{formatCount(c.track_count, 'track')}</div>
                 </div>
               </button>
             ))}
@@ -1827,7 +1838,7 @@ export function BrowseNew(props: {
                     </svg>
                     {l.language}
                   </div>
-                  <div className="text-white/80 text-sm">{l.track_count} tracks</div>
+                  <div className="text-white/80 text-sm">{formatCount(l.track_count, 'track')}</div>
                 </div>
               </button>
             ))}

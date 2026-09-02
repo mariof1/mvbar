@@ -7,6 +7,7 @@ import { apiFetch, browseAlbum } from './apiClient';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
+import { formatCount } from './format';
 
 type Album = {
   album: string;
@@ -178,7 +179,7 @@ export function RecentlyAdded({
           <div className="flex-1">
             <h2 className="text-2xl font-bold text-white">{selectedAlbum.album}</h2>
             <p className="text-slate-400 mt-1">{formatArtistValue(selectedAlbum.display_artist) ?? 'Unknown Artist'}</p>
-            <p className="text-slate-500 text-sm mt-1">{selectedAlbum.track_count} tracks</p>
+            <p className="text-slate-500 text-sm mt-1">{formatCount(selectedAlbum.track_count, 'track')}</p>
             <div className="flex gap-3 mt-4">
               <button
                 onClick={(e) => handlePlayAlbum(selectedAlbum, e)}

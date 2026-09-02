@@ -24,6 +24,7 @@ import { RecentlyAdded } from './RecentlyAdded';
 import { Social } from './Social';
 import { ShareTrackDialog } from './ShareTrackDialog';
 import { MissingMusic } from './MissingMusic';
+import { formatCount } from './format';
 import { useAuth } from './store';
 import { useFavorites } from './favoritesStore';
 import { usePlayer, type QueueTrack } from './playerStore';
@@ -231,6 +232,25 @@ function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: (
   const [lyricsType, setLyricsType] = useState<'synced' | 'unsynced' | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const activeLineRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(props.onClose);
+
+  useEffect(() => {
+    onCloseRef.current = props.onClose;
+  }, [props.onClose]);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCloseRef.current();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    closeButtonRef.current?.focus();
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, []);
   useBodyScrollLock(true);
 
   useEffect(() => {
@@ -308,11 +328,18 @@ function LyricsOverlay(props: { trackId: number; currentTime: number; onClose: (
         ref={containerRef}
         className="glass rounded-xl border border-white/10 p-6 w-full max-w-2xl max-h-[80vh] mx-4 overflow-y-auto scroll-smooth relative"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lyrics-dialog-title"
       >
-        {/* Close button only - no title */}
+        <h2 id="lyrics-dialog-title" className="sr-only">Lyrics</h2>
         <button
+          ref={closeButtonRef}
+          type="button"
           onClick={props.onClose}
           className="absolute top-4 right-4 p-2 rounded-full hover:bg-white/10 transition text-white/60 hover:text-white z-10"
+          aria-label="Close lyrics"
+          title="Close lyrics"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -930,6 +957,8 @@ function PlayerBar(props: {
               <button
                 onClick={cyclePlayMode}
                 className={`p-3 rounded-full ${props.playMode !== 'normal' ? 'text-cyan-400' : 'text-white/50'}`}
+                aria-label={getPlayModeTitle()}
+                title={getPlayModeTitle()}
               >
                 {getPlayModeIcon()}
               </button>
@@ -937,12 +966,16 @@ function PlayerBar(props: {
                 onClick={props.onPrev}
                 disabled={!props.hasPrev && props.playMode === 'normal'}
                 className="p-3 rounded-full text-white disabled:opacity-30"
+                aria-label="Previous track"
+                title="Previous track"
               >
                 <Icons.SkipBack />
               </button>
               <button
                 onClick={togglePlay}
                 className="p-5 rounded-full bg-white text-black shadow-lg"
+                aria-label={isPlaying ? 'Pause' : 'Play'}
+                title={isPlaying ? 'Pause' : 'Play'}
               >
                 {isPlaying ? <Icons.Pause /> : <Icons.Play />}
               </button>
@@ -950,12 +983,16 @@ function PlayerBar(props: {
                 onClick={() => props.onNext({ currentTime, duration })}
                 disabled={!props.hasNext && props.playMode === 'normal'}
                 className="p-3 rounded-full text-white disabled:opacity-30"
+                aria-label="Next track"
+                title="Next track"
               >
                 <Icons.SkipForward />
               </button>
               <button
                 onClick={props.onToggleLyrics}
                 className={`p-3 rounded-full ${props.showLyrics ? 'text-cyan-400' : 'text-white/50'}`}
+                aria-label={props.showLyrics ? 'Hide lyrics' : 'Show lyrics'}
+                title={props.showLyrics ? 'Hide lyrics' : 'Show lyrics'}
               >
                 <Icons.Lyrics />
               </button>
@@ -997,7 +1034,7 @@ function PlayerBar(props: {
             {props.queue && props.queue.length > 1 && (
               <div className="flex-1 px-4 pb-8">
                 <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wide px-4 mb-3">
-                  Queue ({props.queue.length} tracks)
+                  Queue ({formatCount(props.queue.length, 'track')})
                 </h3>
                 <div className="space-y-1 max-h-[300px] overflow-y-auto">
                   {props.queue.map((track, idx) => (
@@ -1080,6 +1117,8 @@ function PlayerBar(props: {
               <button
                 onClick={(e) => { e.stopPropagation(); props.onToggleFavorite(); }}
                 className={`p-2 rounded-full ${props.isFavorite ? 'text-pink-500' : 'text-white/50'}`}
+                aria-label={props.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                title={props.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
               >
                 {props.isFavorite ? <Icons.HeartFilled /> : <Icons.HeartOutline />}
               </button>
@@ -1087,6 +1126,8 @@ function PlayerBar(props: {
                 onClick={props.onPrev}
                 disabled={!props.hasPrev && props.playMode === 'normal'}
                 className="p-2 rounded-full text-white/70 disabled:opacity-30"
+                aria-label="Previous track"
+                title="Previous track"
               >
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M6 6h2v12H6V6zm3.5 6l8.5 6V6l-8.5 6z" />
@@ -1095,6 +1136,8 @@ function PlayerBar(props: {
               <button
                 onClick={togglePlay}
                 className="p-2 rounded-full bg-white text-black"
+                aria-label={isPlaying ? 'Pause' : 'Play'}
+                title={isPlaying ? 'Pause' : 'Play'}
               >
                 {isPlaying ? (
                   <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
@@ -1110,6 +1153,8 @@ function PlayerBar(props: {
                 onClick={() => props.onNext({ currentTime, duration })}
                 disabled={!props.hasNext && props.playMode === 'normal'}
                 className="p-2 rounded-full text-white/70 disabled:opacity-30"
+                aria-label="Next track"
+                title="Next track"
               >
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M16 6h2v12h-2V6zm-1.5 6L6 18V6l8.5 6z" />
@@ -1155,12 +1200,16 @@ function PlayerBar(props: {
                 onClick={props.onPrev}
                 disabled={!props.hasPrev && props.playMode === 'normal'}
                 className="p-2.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition disabled:opacity-30"
+                aria-label="Previous track"
+                title="Previous track"
               >
                 <Icons.SkipBack />
               </button>
               <button
                 onClick={togglePlay}
                 className="p-3 rounded-full bg-white text-black hover:bg-white/90 hover:scale-105 transition-all shadow-lg"
+                aria-label={isPlaying ? 'Pause' : 'Play'}
+                title={isPlaying ? 'Pause' : 'Play'}
               >
                 {isPlaying ? <Icons.Pause /> : <Icons.Play />}
               </button>
@@ -1168,6 +1217,8 @@ function PlayerBar(props: {
                 onClick={() => props.onNext({ currentTime, duration })}
                 disabled={!props.hasNext && props.playMode === 'normal'}
                 className="p-2.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 transition disabled:opacity-30"
+                aria-label="Next track"
+                title="Next track"
               >
                 <Icons.SkipForward />
               </button>
@@ -1364,9 +1415,14 @@ function MobileSidebar(props: {
   missingMusicEnabled: boolean;
   socialBadge: number;
 }) {
-  const sidebarRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const touchStartedInsideRef = useRef(false);
   useBodyScrollLock(props.isOpen);
+
+  useEffect(() => {
+    if (props.isOpen) closeButtonRef.current?.focus();
+  }, [props.isOpen]);
 
   // Close on click/scroll outside or Escape key
   useEffect(() => {
@@ -1439,17 +1495,34 @@ function MobileSidebar(props: {
       <div 
         className={`lg:hidden fixed inset-0 bg-black/60 z-40 transition-opacity duration-300 ${props.isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         onClick={props.onClose}
+        aria-hidden="true"
       />
       
       {/* Sidebar */}
       <aside 
+        id="mobile-navigation"
         ref={sidebarRef}
         className={`lg:hidden fixed left-0 top-0 ${getBottomClass()} w-64 bg-zinc-900/95 backdrop-blur-xl border-r border-white/10 z-50 transform transition-transform duration-300 ease-out ${props.isOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        aria-hidden={!props.isOpen}
+        inert={!props.isOpen}
+        role="dialog"
+        aria-modal={props.isOpen ? 'true' : undefined}
+        aria-label="Navigation menu"
       >
         <div className="flex flex-col h-full p-3 overflow-y-auto overscroll-contain touch-pan-y">
           {/* Logo */}
-          <div className="flex items-center gap-3 px-3 py-2 mb-2">
+          <div className="flex items-center justify-between gap-3 px-3 py-2 mb-2">
             <img src="/logo.png" alt="mvbar" className="h-8 w-auto" />
+            <button
+              ref={closeButtonRef}
+              type="button"
+              onClick={props.onClose}
+              className="rounded-lg p-2 text-white/60 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+              aria-label="Close menu"
+              title="Close menu"
+            >
+              <Icons.Close />
+            </button>
           </div>
 
           <nav className="flex flex-col gap-0.5">
@@ -1579,6 +1652,7 @@ export function AppShellNew() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchShortcutLabel, setSearchShortcutLabel] = useState('Ctrl+K');
   const [trackToShare, setTrackToShare] = useState<QueueTrack | null>(null);
   const [missingMusicEnabled, setMissingMusicEnabled] = useState(false);
   const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, addManyToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
@@ -1684,6 +1758,8 @@ export function AppShellNew() {
 
   // Global Ctrl+K / Cmd+K keyboard shortcut for search
   useEffect(() => {
+    const isApplePlatform = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+    setSearchShortcutLabel(isApplePlatform ? '⌘K' : 'Ctrl+K');
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
@@ -1921,9 +1997,11 @@ export function AppShellNew() {
       <header className="lg:hidden fixed top-0 left-0 right-0 z-30 bg-zinc-900/95 backdrop-blur-xl border-b border-white/10">
         <div className="flex items-center px-4 py-3">
           <button
-            onClick={() => setMobileSidebarOpen(true)}
+            onClick={() => setMobileSidebarOpen((open) => !open)}
             className="p-2 -ml-2 mr-2 rounded-lg hover:bg-white/10 transition-colors"
-            aria-label="Open menu"
+            aria-label={mobileSidebarOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={mobileSidebarOpen}
+            aria-controls="mobile-navigation"
           >
             <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
@@ -2021,7 +2099,7 @@ export function AppShellNew() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
                 <span className="flex-1 text-left text-sm">Search...</span>
-                <kbd className="text-[11px] bg-white/10 group-hover:bg-white/15 px-1.5 py-0.5 rounded font-mono border border-white/10">⌘K</kbd>
+                <kbd className="text-[11px] bg-white/10 group-hover:bg-white/15 px-1.5 py-0.5 rounded font-mono border border-white/10">{searchShortcutLabel}</kbd>
               </button>
             </div>
           </header>

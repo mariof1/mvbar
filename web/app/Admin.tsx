@@ -33,6 +33,7 @@ import { useScanProgress, useLibraryUpdates, useAdminPending, useBackupUpdates }
 import { AdminUserAudit } from './AdminUserAudit';
 import { AdminPlugins } from './AdminPlugins';
 import { useBodyScrollLock } from './useBodyScrollLock';
+import { formatCalendarDate, formatCount } from './format';
 
 type Tab = 'library' | 'users' | 'user-audit' | 'plugins' | 'settings' | 'device-logs' | 'notifications';
 
@@ -53,7 +54,7 @@ export function Admin() {
   return (
     <div className="space-y-6">
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-slate-700/50 pb-4 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
+      <div className="flex gap-2 border-b border-slate-700/50 pb-4 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin" role="tablist" aria-label="Admin sections">
         {[
           { id: 'library' as Tab, label: 'Library', icon: (
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -98,6 +99,8 @@ export function Admin() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
+            role="tab"
+            aria-selected={activeTab === tab.id}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap shrink-0 ${
               activeTab === tab.id
                 ? 'bg-cyan-500 text-white'
@@ -244,7 +247,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
+    return formatCalendarDate(date);
   };
 
   const getActivityIcon = (action: string) => {
@@ -541,7 +544,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-white truncate">{g.genre}</div>
                 </div>
-                <div className="text-sm text-slate-400">{g.track_count} tracks</div>
+                <div className="text-sm text-slate-400">{formatCount(g.track_count, 'track')}</div>
               </div>
             ))}
             {(stats?.topGenres ?? []).length === 0 && (
@@ -565,7 +568,7 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-white truncate">{c.country}</div>
                 </div>
-                <div className="text-sm text-slate-400">{c.track_count} tracks</div>
+                <div className="text-sm text-slate-400">{formatCount(c.track_count, 'track')}</div>
               </div>
             ))}
             {(stats?.topCountries ?? []).length === 0 && (
@@ -965,7 +968,14 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
       )}
 
       {/* Create User Card */}
-      <div className="p-6 bg-slate-800/30 border border-slate-700/30 rounded-xl space-y-4">
+      <form
+        autoComplete="off"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void createUser();
+        }}
+        className="p-6 bg-slate-800/30 border border-slate-700/30 rounded-xl space-y-4"
+      >
         <h3 className="text-lg font-semibold text-white flex items-center gap-2">
           <svg className="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
@@ -973,19 +983,32 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
           Create User
         </h3>
         <div className="grid sm:grid-cols-2 gap-4">
-          <input
-            placeholder="Email"
-            value={newEmail}
-            onChange={(e) => setNewEmail(e.target.value)}
-            className="px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
-          />
-          <input
-            placeholder="Password (min 8 chars)"
-            type="password"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            className="px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
-          />
+          <div>
+            <label htmlFor="new-user-email" className="mb-1.5 block text-sm font-medium text-slate-300">Email</label>
+            <input
+              id="new-user-email"
+              name="new-user-email"
+              type="email"
+              autoComplete="off"
+              placeholder="person@example.com"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+            />
+          </div>
+          <div>
+            <label htmlFor="new-user-password" className="mb-1.5 block text-sm font-medium text-slate-300">Temporary password</label>
+            <input
+              id="new-user-password"
+              name="new-user-password"
+              placeholder="Minimum 8 characters"
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+            />
+          </div>
         </div>
         <div className="flex items-center justify-between flex-wrap gap-4">
           <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
@@ -999,13 +1022,14 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
           </label>
           <div className="flex gap-2">
             <button
-              onClick={createUser}
+              type="submit"
               disabled={loading || !newEmail.trim() || newPassword.length < 8}
               className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-400 text-white rounded-lg font-medium transition-colors"
             >
               Create User
             </button>
             <button
+              type="button"
               onClick={refresh}
               disabled={loading}
               className="p-2 hover:bg-slate-700/50 rounded-lg transition-colors text-slate-400 hover:text-white"
@@ -1017,7 +1041,7 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
             </button>
           </div>
         </div>
-      </div>
+      </form>
 
       {/* Pending Users (Google OAuth) */}
       {pendingUsers.length > 0 && (
@@ -1039,7 +1063,7 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
                   <div>
                     <div className="font-medium text-white">{u.email}</div>
                     <div className="text-xs text-slate-400">
-                      Registered {new Date(u.created_at).toLocaleDateString()}
+                      Registered {formatCalendarDate(u.created_at)}
                     </div>
                   </div>
                 </div>
@@ -1147,8 +1171,11 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
                 <div className="text-sm font-medium text-slate-400">Reset Password</div>
                 <div className="flex gap-2">
                   <input
+                    aria-label={`New password for ${selectedUser.email}`}
+                    name="reset-user-password"
                     placeholder="New password (min 8 chars)"
                     type="password"
+                    autoComplete="new-password"
                     value={resetPassword}
                     onChange={(e) => setResetPasswordValue(e.target.value)}
                     className="flex-1 px-4 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
@@ -2036,10 +2063,13 @@ function NotificationsTab({ token }: { token: string }) {
         <h3 className="text-sm font-semibold text-slate-200">Bot Credentials</h3>
 
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Bot Token</label>
+          <label htmlFor="telegram-bot-token" className="block text-xs text-slate-400 mb-1">Bot Token</label>
           <div className="flex items-center gap-2">
             <input
+              id="telegram-bot-token"
+              name="telegram-bot-token"
               type="password"
+              autoComplete="off"
               placeholder={hasBotToken ? `Current: ${botTokenMasked} — leave blank to keep` : 'Paste bot token here'}
               value={botTokenInput}
               onChange={(e) => setBotTokenInput(e.target.value)}
@@ -2054,8 +2084,10 @@ function NotificationsTab({ token }: { token: string }) {
         </div>
 
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Chat ID</label>
+          <label htmlFor="telegram-chat-id" className="block text-xs text-slate-400 mb-1">Chat ID</label>
           <input
+            id="telegram-chat-id"
+            name="telegram-chat-id"
             type="text"
             placeholder="e.g. 123456789 or -1001234567890 for group/channel"
             value={chatId}

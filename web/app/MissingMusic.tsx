@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiFetch } from './apiClient';
 import { useAuth } from './store';
+import { formatCount } from './format';
 import { useToastStore } from './Toast';
 import { useMissingMusicUpdates } from './useWebSocket';
 
@@ -311,7 +312,7 @@ export function MissingMusic() {
                   className={`w-full rounded-xl px-3 py-2.5 text-left transition ${artist?.musicBrainzId === item.musicBrainzId ? 'bg-cyan-500/15 text-cyan-200' : 'hover:bg-white/[0.06]'}`}
                 >
                   <div className="truncate text-sm font-medium">{item.name}</div>
-                  <div className="mt-0.5 text-xs text-white/40">{item.albumCount} albums · {item.trackCount} tracks</div>
+                  <div className="mt-0.5 text-xs text-white/40">{formatCount(item.albumCount, 'album')} · {formatCount(item.trackCount, 'track')}</div>
                 </button>
               ))}
               {!loading && artists.length === 0 && <p className="py-8 text-center text-sm text-white/40">No tagged artists found.</p>}

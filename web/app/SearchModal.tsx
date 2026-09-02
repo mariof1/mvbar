@@ -10,6 +10,7 @@ import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { useUi, type PodcastEpisode } from './uiStore';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
+import { formatCount } from './format';
 
 type Hit = {
   id: number;
@@ -235,12 +236,16 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
       <div
         className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in"
         onClick={onClose}
+        aria-hidden="true"
       />
 
       {/* Modal */}
       <div
         className="relative w-full max-w-2xl animate-slide-up"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search library"
       >
         <div className="glass rounded-2xl border border-white/10 shadow-2xl shadow-black/50 overflow-hidden">
           {/* Search Input */}
@@ -250,6 +255,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
             </svg>
             <input
               ref={inputRef}
+              aria-label="Search library"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search songs, artists, albums, podcasts..."
@@ -264,6 +270,8 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
               <button
                 onClick={() => { setQ(''); inputRef.current?.focus(); }}
                 className="p-1 hover:bg-white/10 rounded-md transition-colors flex-shrink-0"
+                aria-label="Clear search"
+                title="Clear search"
               >
                 <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -289,27 +297,32 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                   {artistHits.slice(0, 4).map((a) => (
                     <div
                       key={a.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => handleNavigate({ type: 'browse-artist', artistId: a.id, artistName: a.name })}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleNavigate({ type: 'browse-artist', artistId: a.id, artistName: a.name }); }}
                       className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left cursor-pointer"
                     >
-                      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex-shrink-0 flex items-center justify-center text-xs font-bold text-white relative overflow-hidden">
-                        {getInitials(a.name)}
-                        {a.art_path && (
-                          <img
-                            src={`/api/art/${encodeURIComponent(a.art_path)}${a.art_hash ? `?h=${a.art_hash}` : ''}`}
-                            alt=""
-                            className="absolute inset-0 w-full h-full object-cover"
-                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-                          />
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium text-white truncate">{a.name}</div>
-                        <div className="text-xs text-slate-400">{a.track_count} tracks · {a.album_count} albums</div>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleNavigate({ type: 'browse-artist', artistId: a.id, artistName: a.name })}
+                        className="flex min-w-0 flex-1 items-center gap-3 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                      >
+                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex-shrink-0 flex items-center justify-center text-xs font-bold text-white relative overflow-hidden">
+                          {getInitials(a.name)}
+                          {a.art_path && (
+                            <img
+                              src={`/api/art/${encodeURIComponent(a.art_path)}${a.art_hash ? `?h=${a.art_hash}` : ''}`}
+                              alt=""
+                              className="absolute inset-0 w-full h-full object-cover"
+                              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                            />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-white truncate">{a.name}</div>
+                          <div className="text-xs text-slate-400">{formatCount(a.track_count, 'track')} · {formatCount(a.album_count, 'album')}</div>
+                        </div>
+                        <svg className="w-4 h-4 text-slate-600 flex-shrink-0 group-hover:opacity-0 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </button>
                       <div className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                         <AddMenu
                           label="artist"
@@ -321,9 +334,6 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                           }}
                         />
                       </div>
-                      <svg className="w-4 h-4 text-slate-600 flex-shrink-0 group-hover:opacity-0 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      </svg>
                     </div>
                   ))}
                 </div>
@@ -338,26 +348,31 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                   {albumHits.slice(0, 4).map((a, idx) => (
                     <div
                       key={`${a.album}-${idx}`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => handleNavigate({ type: 'browse-album', artist: a.display_artist || '', album: a.album, artistId: a.artist_id || undefined })}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleNavigate({ type: 'browse-album', artist: a.display_artist || '', album: a.album, artistId: a.artist_id || undefined }); }}
                       className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left cursor-pointer"
                     >
-                      <div className="w-9 h-9 rounded-lg bg-slate-700 flex-shrink-0 relative overflow-hidden">
-                        {a.art_track_id && (
-                          <img
-                            src={`/api/library/tracks/${a.art_track_id}/art`}
-                            alt=""
-                            className="absolute inset-0 w-full h-full object-cover"
-                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-                          />
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium text-white truncate">{a.album}</div>
-                        <div className="text-xs text-slate-400 truncate">{formatArtistValue(a.display_artist) ?? 'Unknown Artist'} · {a.track_count} tracks</div>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleNavigate({ type: 'browse-album', artist: a.display_artist || '', album: a.album, artistId: a.artist_id || undefined })}
+                        className="flex min-w-0 flex-1 items-center gap-3 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                      >
+                        <div className="w-9 h-9 rounded-lg bg-slate-700 flex-shrink-0 relative overflow-hidden">
+                          {a.art_track_id && (
+                            <img
+                              src={`/api/library/tracks/${a.art_track_id}/art`}
+                              alt=""
+                              className="absolute inset-0 w-full h-full object-cover"
+                              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                            />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-white truncate">{a.album}</div>
+                          <div className="text-xs text-slate-400 truncate">{formatArtistValue(a.display_artist) ?? 'Unknown Artist'} · {formatCount(a.track_count, 'track')}</div>
+                        </div>
+                        <svg className="w-4 h-4 text-slate-600 flex-shrink-0 group-hover:opacity-0 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </button>
                       <div className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                         <AddMenu
                           label="album"
@@ -369,9 +384,6 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                           }}
                         />
                       </div>
-                      <svg className="w-4 h-4 text-slate-600 flex-shrink-0 group-hover:opacity-0 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      </svg>
                     </div>
                   ))}
                 </div>

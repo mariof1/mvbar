@@ -6,6 +6,7 @@ import { useAuth } from './store';
 import { useHistoryUpdates } from './useWebSocket';
 import { AddMenu } from './AddMenu';
 import { trackArtistLabel } from './artistDisplay';
+import { formatCalendarDate } from './format';
 
 export function History(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
@@ -56,7 +57,7 @@ export function History(props: {
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
+    return formatCalendarDate(date);
   };
 
   return (
