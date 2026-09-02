@@ -123,7 +123,9 @@ export async function listAudit(limit = 200) {
 }
 
 export async function listUsers() {
-  const r = await db().query<{ id: string; email: string; role: Role }>('select id, email, role from users order by created_at asc');
+  const r = await db().query<{ id: string; email: string; role: Role; avatar_path: string | null }>(
+    'select id, email, role, avatar_path from users order by created_at asc'
+  );
   return r.rows;
 }
 
@@ -134,4 +136,3 @@ export async function setRole(userId: string, role: Role) {
 export async function deleteUser(userId: string) {
   await db().query('delete from users where id=$1', [userId]);
 }
-
