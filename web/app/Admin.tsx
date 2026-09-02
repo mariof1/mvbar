@@ -8,6 +8,7 @@ import {
   adminForceLogout,
   adminResetPassword,
   adminSetUserRole,
+  adminUnlockUserLogin,
   apiFetch,
   getLibraryActivity,
   getLibraryStats,
@@ -669,9 +670,36 @@ function LibraryTab({ token, clear }: { token: string; clear: () => void }) {
 }
 
 // ============ Users Tab ============
+type ManagedUser = {
+  id: string;
+  email: string;
+  role?: string;
+  avatar_path?: string | null;
+};
+
+function ManagedUserAvatar({ user, large = false }: { user: ManagedUser; large?: boolean }) {
+  return (
+    <div className={`${large ? 'h-14 w-14 text-xl' : 'h-10 w-10 text-base'} relative flex shrink-0 items-center justify-center overflow-hidden rounded-full font-bold text-white ${
+      user.role === 'admin'
+        ? 'bg-gradient-to-br from-amber-500 to-orange-600'
+        : 'bg-gradient-to-br from-slate-600 to-slate-700'
+    }`}>
+      {user.email.slice(0, 1).toUpperCase()}
+      {user.avatar_path && (
+        <img
+          src={`/api/avatars/${encodeURIComponent(user.avatar_path)}`}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          onError={(event) => { event.currentTarget.style.display = 'none'; }}
+        />
+      )}
+    </div>
+  );
+}
+
 function UsersTab({ token, clear, currentUserId }: { token: string; clear: () => void; currentUserId?: string }) {
-  const [users, setUsers] = useState<Array<{ id: string; email: string; role: string; avatar_path?: string }>>([]);
-  const [pendingUsers, setPendingUsers] = useState<Array<{ id: string; email: string; created_at: string; avatar_path?: string }>>([]);
+  const [users, setUsers] = useState<Array<ManagedUser & { role: string }>>([]);
+  const [pendingUsers, setPendingUsers] = useState<Array<ManagedUser & { created_at: string }>>([]);
   const [libraries, setLibraries] = useState<Array<{
     id: number;
     mount_path: string;
@@ -820,6 +848,22 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
     } catch (e: any) {
       if (e?.status === 401) clear();
       setError(e?.data?.error ?? e?.message ?? 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function unlockLogin() {
+    if (!selectedUser) return;
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await adminUnlockUserLogin(token, selectedUser.id);
+      setNotice(`Login restrictions cleared: ${selectedUser.email}`);
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      setError(e?.data?.error ?? e?.message ?? 'Unable to unlock login');
     } finally {
       setLoading(false);
     }
@@ -991,17 +1035,7 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
                 className="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl"
               >
                 <div className="flex items-center gap-3">
-                  {u.avatar_path ? (
-                    <img
-                      src={`/api/avatars/${u.avatar_path}`}
-                      alt=""
-                      className="w-10 h-10 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center font-bold text-white">
-                      {u.email[0].toUpperCase()}
-                    </div>
-                  )}
+                  <ManagedUserAvatar user={u} />
                   <div>
                     <div className="font-medium text-white">{u.email}</div>
                     <div className="text-xs text-slate-400">
@@ -1046,11 +1080,7 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
-                    u.role === 'admin' ? 'bg-gradient-to-br from-amber-500 to-orange-600' : 'bg-gradient-to-br from-slate-600 to-slate-700'
-                  }`}>
-                    {u.email[0].toUpperCase()}
-                  </div>
+                  <ManagedUserAvatar user={u} />
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-white truncate">{u.email}</div>
                     <div className="text-sm text-slate-400 flex items-center gap-2">
@@ -1076,11 +1106,7 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
             <div className="p-6 bg-slate-800/30 border border-slate-700/30 rounded-xl space-y-6">
               {/* Header */}
               <div className="flex items-center gap-4">
-                <div className={`w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold ${
-                  selectedUser.role === 'admin' ? 'bg-gradient-to-br from-amber-500 to-orange-600' : 'bg-gradient-to-br from-slate-600 to-slate-700'
-                }`}>
-                  {selectedUser.email[0].toUpperCase()}
-                </div>
+                <ManagedUserAvatar user={selectedUser} large />
                 <div>
                   <div className="text-xl font-bold text-white">{selectedUser.email}</div>
                   <div className="text-sm text-slate-400 font-mono">ID: {selectedUser.id}</div>
@@ -1227,6 +1253,13 @@ function UsersTab({ token, clear, currentUserId }: { token: string; clear: () =>
               <div className="pt-4 border-t border-slate-700/50 space-y-2">
                 <div className="text-sm font-medium text-slate-400">Actions</div>
                 <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={unlockLogin}
+                    disabled={loading}
+                    className="px-4 py-2 border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 disabled:opacity-50 text-cyan-300 rounded-lg font-medium transition-colors"
+                  >
+                    Unlock Login
+                  </button>
                   <button
                     onClick={forceLogout}
                     disabled={loading}

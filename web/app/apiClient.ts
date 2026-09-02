@@ -385,7 +385,10 @@ export async function adminDeleteLibrary(token: string, libraryId: number, opts?
 }
 
 export async function listAdminUsers(token: string) {
-  return (await apiFetch('/admin/users', { method: 'GET' }, token)) as { ok: boolean; users: Array<{ id: string; email: string; role: string }> };
+  return (await apiFetch('/admin/users', { method: 'GET' }, token)) as {
+    ok: boolean;
+    users: Array<{ id: string; email: string; role: string; avatar_path: string | null }>;
+  };
 }
 
 export type AdminLoginRestriction = {
