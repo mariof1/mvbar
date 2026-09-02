@@ -1,4 +1,6 @@
-const MEDIA_SESSION_ARTWORK_SIZES = [96, 128, 192, 256, 384, 512] as const;
+// Keep the largest cover first for older WebKit releases that only inspect the
+// first Media Session artwork candidate instead of selecting by `sizes`.
+const MEDIA_SESSION_ARTWORK_SIZES = [512, 384, 256, 192, 128, 96] as const;
 
 /**
  * Build artwork metadata that Chromium-based system media controls can select

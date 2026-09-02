@@ -714,6 +714,9 @@ function PlayerBar(props: {
     setIsPlaying(!a.paused);
     setCurrentTime(a.currentTime || 0);
     setDuration(Number.isFinite(a.duration) ? a.duration : 0);
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = a.paused ? 'paused' : 'playing';
+    }
 
     return () => {
       a.removeEventListener('play', onPlay);
@@ -2167,7 +2170,11 @@ export function AppShellNew() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-zinc-900 to-black overflow-x-hidden">
       <AutoLogin />
-      <audio id={MUSIC_AUDIO_ELEMENT_ID} preload="metadata" aria-hidden="true" />
+      <audio
+        id={MUSIC_AUDIO_ELEMENT_ID}
+        preload="auto"
+        aria-hidden="true"
+      />
       
       {/* Sidebar - Desktop */}
       <Sidebar tab={tab} setTab={setTab} isAdmin={isAdmin} missingMusicEnabled={missingMusicEnabled} socialBadge={socialBadge} user={user} onLogout={handleSignOut} />

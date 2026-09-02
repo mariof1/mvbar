@@ -7,6 +7,7 @@ import { usePlayer } from './playerStore';
 import { apiFetch } from './apiClient';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { mediaSessionArtwork } from './mediaSessionArtwork';
+import { prepareSystemPlaybackSession, publishSystemPlaybackState } from './musicAudio';
 
 // ============================================================================
 // TYPES
@@ -149,7 +150,9 @@ export function AudiobookPlayer({
   onCloseRef.current = onClose;
 
   useEffect(() => {
+    prepareSystemPlaybackSession();
     const audioEl = new Audio(`/api/audiobook-stream/${chapter.audiobook_id}/chapters/${chapter.id}`);
+    audioEl.preload = 'auto';
     audioEl.playbackRate = playbackRate;
 
     if (chapter.position_ms > 0) {
@@ -158,8 +161,14 @@ export function AudiobookPlayer({
 
     const onTimeUpdate = () => setCurrentTime(audioEl.currentTime);
     const onLoadedMetadata = () => setDuration(audioEl.duration);
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
+    const onPlay = () => {
+      setPlaying(true);
+      publishSystemPlaybackState('playing');
+    };
+    const onPause = () => {
+      setPlaying(false);
+      publishSystemPlaybackState('paused');
+    };
     const onEnded = async () => {
       setPlaying(false);
       // Save progress for the finished chapter

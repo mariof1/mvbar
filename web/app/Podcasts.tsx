@@ -12,6 +12,7 @@ import { useBodyScrollLock } from './useBodyScrollLock';
 import { formatCalendarDate } from './format';
 import { mediaSessionArtwork } from './mediaSessionArtwork';
 import { SeekSlider } from './SeekSlider';
+import { prepareSystemPlaybackSession, publishSystemPlaybackState } from './musicAudio';
 
 // ============================================================================
 // TYPES
@@ -1317,7 +1318,9 @@ export function PodcastPlayer({
   useEffect(() => {
     if (!episode) return;
 
+    prepareSystemPlaybackSession();
     const audioEl = new Audio(`/api/podcasts/episodes/${episode.id}/stream`);
+    audioEl.preload = 'auto';
     audioEl.playbackRate = playbackRate;
 
     // Resume from saved position
@@ -1345,8 +1348,14 @@ export function PodcastPlayer({
         played: true,
       });
     };
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
+    const onPlay = () => {
+      setPlaying(true);
+      publishSystemPlaybackState('playing');
+    };
+    const onPause = () => {
+      setPlaying(false);
+      publishSystemPlaybackState('paused');
+    };
 
     audioEl.addEventListener('timeupdate', onTimeUpdate);
     audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
