@@ -6,6 +6,7 @@ import { useUi, AudiobookChapter as AudiobookPlayerChapter } from './uiStore';
 import { usePlayer } from './playerStore';
 import { apiFetch } from './apiClient';
 import { useBodyScrollLock } from './useBodyScrollLock';
+import { mediaSessionArtwork } from './mediaSessionArtwork';
 
 // ============================================================================
 // TYPES
@@ -270,10 +271,7 @@ export function AudiobookPlayer({
       title: chapter.title,
       artist: chapter.author || 'Audiobook',
       album: chapter.audiobook_title,
-      artwork: [
-        ...(imageUrl ? [{ src: imageUrl, type: 'image/jpeg' }] : []),
-        { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
-      ],
+      artwork: mediaSessionArtwork(imageUrl),
     });
     navigator.mediaSession.metadata = metadata;
 

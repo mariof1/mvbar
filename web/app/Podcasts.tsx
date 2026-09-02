@@ -10,6 +10,7 @@ import { showConfirm, showAlert } from './ConfirmModal';
 import { sendWebSocketMessage, usePodcastProgress, updateLocalPodcastProgress } from './useWebSocket';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { formatCalendarDate } from './format';
+import { mediaSessionArtwork } from './mediaSessionArtwork';
 
 // ============================================================================
 // TYPES
@@ -1172,10 +1173,23 @@ export function PodcastPlayer({
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [expanded, setExpanded] = useState(false);
+  const [playerDragY, setPlayerDragY] = useState(0);
+  const [isPlayerDragging, setIsPlayerDragging] = useState(false);
   useBodyScrollLock(expanded);
   const lastBroadcastRef = useRef(0);
   const onCloseRef = useRef(onClose);
+  const playerDragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startedAt: number;
+  } | null>(null);
+  const playerDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressPlayerHandleClickRef = useRef(false);
   onCloseRef.current = onClose;
+
+  useEffect(() => () => {
+    if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
+  }, []);
   
   // Listen for podcast progress updates from other devices
   const lastProgress = usePodcastProgress((s) => s.lastProgress);
@@ -1293,10 +1307,7 @@ export function PodcastPlayer({
       title: episode.title,
       artist: episode.podcast_title || 'Podcast',
       album: episode.podcast_title || 'Podcast',
-      artwork: [
-        { src: `/api/podcasts/episodes/${episode.id}/art`, type: 'image/jpeg' },
-        { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
-      ],
+      artwork: mediaSessionArtwork(`/api/podcasts/episodes/${episode.id}/art`),
     });
     navigator.mediaSession.metadata = metadata;
 
@@ -1383,6 +1394,73 @@ export function PodcastPlayer({
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
+  const resetExpandedPlayerDrag = () => {
+    playerDragRef.current = null;
+    setIsPlayerDragging(false);
+    setPlayerDragY(0);
+  };
+
+  const minimizeExpandedPlayer = (animate = false) => {
+    if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
+    playerDragRef.current = null;
+    setIsPlayerDragging(false);
+    if (!animate) {
+      setExpanded(false);
+      setPlayerDragY(0);
+      return;
+    }
+    setPlayerDragY(window.innerHeight);
+    playerDismissTimerRef.current = setTimeout(() => {
+      setExpanded(false);
+      setPlayerDragY(0);
+      playerDismissTimerRef.current = null;
+    }, 180);
+  };
+
+  const handlePlayerDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
+    playerDragRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startedAt: performance.now(),
+    };
+    suppressPlayerHandleClickRef.current = false;
+    setIsPlayerDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePlayerDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = playerDragRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const distance = Math.max(0, event.clientY - gesture.startY);
+    if (distance > 6) suppressPlayerHandleClickRef.current = true;
+    setPlayerDragY(distance);
+  };
+
+  const handlePlayerDragEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = playerDragRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const distance = Math.max(0, event.clientY - gesture.startY);
+    const elapsed = Math.max(1, performance.now() - gesture.startedAt);
+    const velocity = distance / elapsed;
+    const shouldMinimize = distance >= Math.min(160, window.innerHeight * 0.2)
+      || (distance >= 28 && velocity >= 0.65);
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
+    playerDragRef.current = null;
+    setIsPlayerDragging(false);
+    if (shouldMinimize) minimizeExpandedPlayer(true);
+    else setPlayerDragY(0);
+    if (suppressPlayerHandleClickRef.current) {
+      setTimeout(() => { suppressPlayerHandleClickRef.current = false; }, 0);
+    }
+  };
+
+  const handlePlayerDragCancel = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (playerDragRef.current?.pointerId !== event.pointerId) return;
+    resetExpandedPlayerDrag();
+  };
+
   const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
 
   return (
@@ -1391,35 +1469,58 @@ export function PodcastPlayer({
       {expanded && (
         <div 
           className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl lg:hidden animate-fade-in"
-          onClick={() => setExpanded(false)}
+          onClick={() => minimizeExpandedPlayer()}
         >
           <div 
-            className="h-full flex flex-col overflow-y-auto"
+            className={`h-full flex flex-col overflow-y-auto ${
+              isPlayerDragging ? '' : 'transition-[transform,opacity] duration-200 ease-out'
+            }`}
             onClick={(e) => e.stopPropagation()}
+            style={{
+              transform: `translate3d(0, ${playerDragY}px, 0)`,
+              opacity: 1 - Math.min(playerDragY / 600, 0.35),
+              willChange: playerDragY > 0 ? 'transform, opacity' : undefined,
+            }}
           >
-            {/* Close handle */}
-            <div className="flex justify-center pt-4 pb-2">
-              <button 
-                onClick={() => setExpanded(false)}
-                className="w-12 h-1.5 bg-white/30 rounded-full"
-              />
-            </div>
+            <div
+              className={`shrink-0 touch-none select-none ${isPlayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+              onPointerDown={handlePlayerDragStart}
+              onPointerMove={handlePlayerDragMove}
+              onPointerUp={handlePlayerDragEnd}
+              onPointerCancel={handlePlayerDragCancel}
+            >
+              {/* Close handle */}
+              <div className="flex justify-center pt-4 pb-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (suppressPlayerHandleClickRef.current) return;
+                    minimizeExpandedPlayer();
+                  }}
+                  className="h-6 w-16 rounded-full p-2.5"
+                  aria-label="Minimize podcast player"
+                >
+                  <span className="block h-1.5 w-full rounded-full bg-white/30" />
+                </button>
+              </div>
 
-            {/* Artwork */}
-            <div className="flex-shrink-0 px-8 pt-4 pb-6">
-              {imageUrl ? (
-                <img
-                  src={imageUrl}
-                  alt=""
-                  className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl object-cover shadow-2xl"
-                  loading="lazy"
-                  decoding="async"
-                />
-              ) : (
-                <div className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl bg-white/10 flex items-center justify-center">
-                  <span className="text-6xl">🎙️</span>
-                </div>
-              )}
+              {/* Artwork */}
+              <div className="flex-shrink-0 px-8 pt-4 pb-6">
+                {imageUrl ? (
+                  <img
+                    src={imageUrl}
+                    alt=""
+                    draggable={false}
+                    className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl object-cover shadow-2xl"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                ) : (
+                  <div className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl bg-white/10 flex items-center justify-center">
+                    <span className="text-6xl">🎙️</span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Episode Info */}

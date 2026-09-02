@@ -43,6 +43,7 @@ import { useWebSocket, useAdminPending, usePluginUpdates } from './useWebSocket'
 import { useSocialUpdates } from './socialStore';
 import { preparePushNotifications, unsubscribeCurrentPushDevice } from './pushNotifications';
 import { useBodyScrollLock } from './useBodyScrollLock';
+import { mediaSessionArtwork } from './mediaSessionArtwork';
 
 // Icons as simple SVG components
 const Icons = {
@@ -518,10 +519,7 @@ function PlayerBar(props: {
       title: props.nowPlaying.title || 'Unknown Track',
       artist: props.nowPlaying.artist || 'Unknown Artist',
       album: props.nowPlaying.album || '',
-      artwork: [
-        { src: `${window.location.origin}/api/art/${props.nowPlaying.id}`, type: 'image/jpeg' },
-        { src: `${window.location.origin}/icon-512.png`, sizes: '512x512', type: 'image/png' },
-      ],
+      artwork: mediaSessionArtwork(`/api/art/${props.nowPlaying.id}`),
     });
     navigator.mediaSession.metadata = metadata;
 
