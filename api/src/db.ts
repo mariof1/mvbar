@@ -96,6 +96,15 @@ export async function initDb() {
     on audit_events ((lower(meta->>'email')), (meta->>'sessionIat'))
     where event = 'login_ok' and meta ? 'sessionIat'
   `);
+
+  await pool.query(`
+    create table if not exists rate_limit_bypass_ips (
+      ip inet primary key,
+      created_at timestamptz not null default now(),
+      created_by text references users(id) on delete set null,
+      check (masklen(ip) = case family(ip) when 4 then 32 else 128 end)
+    );
+  `);
   await pool.query(`
     insert into audit_events(ts, event, meta)
     select

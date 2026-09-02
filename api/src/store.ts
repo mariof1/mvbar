@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 export type Role = 'admin' | 'user';
 
 export type User = {
@@ -34,6 +36,20 @@ export const store = {
   rateLimitBypassIPs: new Set<string>()
 };
 
+export function normalizeRateLimitBypassIP(value: string) {
+  const candidate = value.trim();
+  const version = isIP(candidate);
+  if (version === 4) return candidate;
+  if (version !== 6) return null;
+  const hostname = new URL(`http://[${candidate}]/`).hostname;
+  return hostname.slice(1, -1).toLowerCase();
+}
+
+export function isRateLimitBypassed(ip: string) {
+  const normalized = normalizeRateLimitBypassIP(ip);
+  return normalized !== null && store.rateLimitBypassIPs.has(normalized);
+}
+
 function accountLoginFailures(email: string) {
   const normalizedEmail = email.trim().toLowerCase();
   const suffix = `:${normalizedEmail}`;
@@ -44,6 +60,10 @@ function accountLoginFailures(email: string) {
       ip: key.slice(0, -suffix.length),
       state,
     }));
+}
+
+export function loginRateLimitKey(ip: string, email: string) {
+  return `rl:${ip}:${email.trim().toLowerCase()}`;
 }
 
 export function getLoginRestriction(email: string, now = Date.now()): LoginRestriction {
@@ -58,9 +78,9 @@ export function getLoginRestriction(email: string, now = Date.now()): LoginRestr
       blockedUntil = Math.max(blockedUntil ?? 0, state.lockedUntil);
     }
 
-    const ipState = store.failedLoginsByKey.get(`rl:${ip}`);
+    const ipState = store.failedLoginsByKey.get(loginRateLimitKey(ip, email));
     if (
-      !store.rateLimitBypassIPs.has(ip)
+      !isRateLimitBypassed(ip)
       && ipState
       && ipState.count >= LOGIN_RATE_LIMIT_FAILURES
       && now - ipState.lastFailedAt <= LOGIN_RATE_LIMIT_WINDOW_MS
@@ -86,7 +106,7 @@ export function clearLoginRestrictions(email: string, now = Date.now()) {
   const ips = [...new Set(failures.map((failure) => failure.ip))].sort();
 
   for (const failure of failures) store.failedLoginsByKey.delete(failure.key);
-  for (const ip of ips) store.failedLoginsByKey.delete(`rl:${ip}`);
+  for (const ip of ips) store.failedLoginsByKey.delete(loginRateLimitKey(ip, email));
 
   return {
     before,

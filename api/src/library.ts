@@ -2,7 +2,12 @@ import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
 import { audit, db, redis } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
-import { store } from './store.js';
+import { normalizeRateLimitBypassIP } from './store.js';
+import {
+  addRateLimitBypassIP,
+  refreshRateLimitBypassIPs,
+  removeRateLimitBypassIP,
+} from './rateLimitBypass.js';
 import { access, constants } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolveInside } from './pathSafety.js';
@@ -731,25 +736,25 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   // Rate limit bypass management
   app.get('/api/admin/rate-limit/bypass', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
-    return { ok: true, ips: Array.from(store.rateLimitBypassIPs) };
+    return { ok: true, ips: await refreshRateLimitBypassIPs() };
   });
 
   app.post('/api/admin/rate-limit/bypass', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
-    const { ip } = req.body as { ip?: string };
-    if (!ip) return reply.code(400).send({ ok: false, error: 'IP required' });
-    store.rateLimitBypassIPs.add(ip);
-    await audit('rate_limit_bypass_added', { ip, by: req.user.userId });
-    return { ok: true, ips: Array.from(store.rateLimitBypassIPs) };
+    const { ip } = (req.body ?? {}) as { ip?: string };
+    const result = await addRateLimitBypassIP(ip ?? '', req.user.userId);
+    if (!result) return reply.code(400).send({ ok: false, error: 'Valid IP address required' });
+    await audit('rate_limit_bypass_added', { ip: result.ip, by: req.user.userId });
+    return { ok: true, ips: result.ips };
   });
 
   app.delete('/api/admin/rate-limit/bypass', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
-    const { ip } = req.body as { ip?: string };
-    if (!ip) return reply.code(400).send({ ok: false, error: 'IP required' });
-    store.rateLimitBypassIPs.delete(ip);
-    await audit('rate_limit_bypass_removed', { ip, by: req.user.userId });
-    return { ok: true, ips: Array.from(store.rateLimitBypassIPs) };
+    const { ip } = (req.body ?? {}) as { ip?: string };
+    const result = await removeRateLimitBypassIP(ip ?? '');
+    if (!result) return reply.code(400).send({ ok: false, error: 'Valid IP address required' });
+    await audit('rate_limit_bypass_removed', { ip: result.ip, by: req.user.userId });
+    return { ok: true, ips: result.ips };
   });
 
   // Get current request IP (useful for adding your own IP)
@@ -761,6 +766,6 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     const realIP = xff 
       ? (Array.isArray(xff) ? xff[0] : xff.split(',')[0].trim())
       : (xRealIP as string) || req.ip;
-    return { ok: true, ip: realIP };
+    return { ok: true, ip: normalizeRateLimitBypassIP(realIP) ?? realIP };
   });
 });

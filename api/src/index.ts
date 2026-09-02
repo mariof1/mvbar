@@ -36,6 +36,7 @@ import { initializePluginSystem } from './pluginSystem/registry.js';
 import { pluginUploadLimitBytes } from './pluginSystem/package.js';
 import { pluginsAdminPlugin } from './pluginSystem/routes.js';
 import { missingMusicPlugin, startMissingMusicScheduler } from './pluginSystem/missingMusic.js';
+import { refreshRateLimitBypassIPs } from './rateLimitBypass.js';
 
 // Use pino-pretty for human-readable logs
 const app = Fastify({
@@ -92,6 +93,7 @@ function sanitizeUrlForLog(url: string) {
 }
 
 await initDb();
+await refreshRateLimitBypassIPs();
 await initializeWebPush();
 await initializePluginSystem();
 logger.success('api', `Server starting on port ${config.port}`);

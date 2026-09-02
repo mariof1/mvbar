@@ -5,6 +5,8 @@ import {
   LOGIN_LOCK_DURATION_MS,
   LOGIN_RATE_LIMIT_FAILURES,
   LOGIN_RATE_LIMIT_WINDOW_MS,
+  isRateLimitBypassed,
+  loginRateLimitKey,
   store,
   type Role,
 } from './store.js';
@@ -216,14 +218,14 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     const ip = req.ip;
     const now = Date.now();
 
-    const bypassRateLimit = store.rateLimitBypassIPs.has(ip);
-    const rlKey = `rl:${ip}`;
-    const ipFailures = store.failedLoginsByKey.get(rlKey);
+    const bypassRateLimit = isRateLimitBypassed(ip);
+    const rlKey = loginRateLimitKey(ip, email);
+    const rateLimitState = store.failedLoginsByKey.get(rlKey);
     if (
       !bypassRateLimit
-      && ipFailures
-      && now - ipFailures.lastFailedAt <= LOGIN_RATE_LIMIT_WINDOW_MS
-      && ipFailures.count >= LOGIN_RATE_LIMIT_FAILURES
+      && rateLimitState
+      && now - rateLimitState.lastFailedAt <= LOGIN_RATE_LIMIT_WINDOW_MS
+      && rateLimitState.count >= LOGIN_RATE_LIMIT_FAILURES
     ) {
       return reply.code(429).send({ ok: false, error: 'rate_limited' });
     }
@@ -240,11 +242,11 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
 
     if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
       if (!bypassRateLimit) {
-        if (!ipFailures || now - ipFailures.lastFailedAt > LOGIN_RATE_LIMIT_WINDOW_MS) {
+        if (!rateLimitState || now - rateLimitState.lastFailedAt > LOGIN_RATE_LIMIT_WINDOW_MS) {
           store.failedLoginsByKey.set(rlKey, { count: 1, lastFailedAt: now });
         } else {
-          ipFailures.count += 1;
-          ipFailures.lastFailedAt = now;
+          rateLimitState.count += 1;
+          rateLimitState.lastFailedAt = now;
         }
       }
       const next = state ?? { count: 0, lastFailedAt: 0 };
