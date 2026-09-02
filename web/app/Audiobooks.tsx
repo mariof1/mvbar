@@ -881,36 +881,34 @@ function AudiobookDetailView({
           return (
             <div
               key={ch.id}
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition cursor-pointer ${
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition ${
                 isCurrent
                   ? 'bg-cyan-500/15 border border-cyan-500/30'
                   : 'bg-white/5 hover:bg-white/10 border border-transparent'
               }`}
-              onClick={() => playChapter(ch, isCurrent && book.progress ? book.progress.position_ms : 0)}
             >
-              {/* Play button */}
               <button
-                className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-cyan-500 hover:bg-cyan-400 text-white transition"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  playChapter(ch, isCurrent && book.progress ? book.progress.position_ms : 0);
-                }}
+                type="button"
+                onClick={() => playChapter(ch, isCurrent && book.progress ? book.progress.position_ms : 0)}
+                className="flex min-w-0 flex-1 items-center gap-3 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                aria-label={`Play ${ch.title}`}
+                title={`Play ${ch.title}`}
               >
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
+                <span className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-cyan-500 hover:bg-cyan-400 text-white transition">
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className={`block font-medium truncate ${isCurrent ? 'text-cyan-400' : 'text-white'}`}>
+                    {ch.title}
+                  </span>
+                  <span className="block text-xs text-white/50">
+                    Chapter {ch.position + 1}
+                    {ch.duration_ms && ` • ${formatDuration(ch.duration_ms)}`}
+                  </span>
+                </span>
               </button>
-
-              {/* Chapter info */}
-              <div className="flex-1 min-w-0">
-                <div className={`font-medium truncate ${isCurrent ? 'text-cyan-400' : 'text-white'}`}>
-                  {ch.title}
-                </div>
-                <div className="text-xs text-white/50">
-                  Chapter {ch.position + 1}
-                  {ch.duration_ms && ` • ${formatDuration(ch.duration_ms)}`}
-                </div>
-              </div>
 
               {/* Current indicator */}
               {isCurrent && (
@@ -1157,17 +1155,19 @@ export function Audiobooks() {
             : 0;
 
           return (
-            <div
+            <button
+              type="button"
               key={book.id}
               onClick={() => setSelectedBookId(book.id)}
-              className="bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 overflow-hidden cursor-pointer transition group"
+              className="bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 overflow-hidden cursor-pointer transition group text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+              aria-label={`Open ${book.title}`}
             >
               {/* Cover */}
               <div className="relative aspect-square">
                 {coverUrl ? (
                   <img
                     src={coverUrl}
-                    alt=""
+                    alt={`Cover of ${book.title}`}
                     className="w-full h-full object-cover"
                     loading="lazy"
                     decoding="async"
@@ -1217,7 +1217,7 @@ export function Audiobooks() {
                   )}
                 </div>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>

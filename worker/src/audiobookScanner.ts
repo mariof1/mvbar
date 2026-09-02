@@ -38,9 +38,14 @@ function mimeFromExt(ext: string): string {
   }
 }
 
+/** Remove common tag/path artifacts before showing or grouping metadata. */
+function cleanMetadataText(s: string): string {
+  return s.replace(/\0/g, '').trim().replace(/[\\/]+$/g, '').trim();
+}
+
 /** Normalize a string into a stable grouping key component. */
 function normalize(s: string): string {
-  return s.trim().toLowerCase().replace(/\s+/g, ' ');
+  return cleanMetadataText(s).toLowerCase().replace(/\s+/g, ' ');
 }
 
 /** Build a stable grouping key from author + title. */
@@ -236,7 +241,7 @@ function mostCommon(arr: string[]): string | null {
   const origMap = new Map<string, string>();
   for (const s of arr) {
     const key = normalize(s);
-    if (!origMap.has(key)) origMap.set(key, s);
+    if (!origMap.has(key)) origMap.set(key, cleanMetadataText(s));
   }
   for (const [key, count] of counts) {
     if (count > bestCount) { best = key; bestCount = count; }
@@ -346,7 +351,8 @@ async function upsertAudiobook(
   // Upsert chapters (path = absolute file path)
   for (let i = 0; i < group.files.length; i++) {
     const f = group.files[i];
-    const chapterTitle = f.title || path.basename(f.filename, path.extname(f.filename));
+    const filenameTitle = path.basename(f.filename, path.extname(f.filename));
+    const chapterTitle = cleanMetadataText(f.title || '') || cleanMetadataText(filenameTitle) || filenameTitle;
 
     await db().query(
       `INSERT INTO audiobook_chapters (audiobook_id, path, title, position, duration_ms, size_bytes, mtime_ms)

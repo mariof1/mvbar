@@ -9,6 +9,7 @@ import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { useUi, type PodcastEpisode } from './uiStore';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
+import { formatCount } from './format';
 
 type Hit = {
   id: number;
@@ -242,7 +243,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
                       <div className="min-w-0 flex-1">
                         <div className="font-semibold text-white truncate">{a.name}</div>
                         <div className="text-xs text-slate-400 truncate">
-                          {a.track_count} tracks • {a.album_count} albums
+                          {formatCount(a.track_count, 'track')} • {formatCount(a.album_count, 'album')}
                         </div>
                       </div>
                       <div className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
@@ -294,7 +295,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
                       <div className="min-w-0 flex-1">
                         <div className="font-semibold text-white truncate">{a.album}</div>
                         <div className="text-xs text-slate-400 truncate">
-                          {formatArtistValue(a.display_artist) ?? 'Unknown Artist'} • {a.track_count} tracks
+                          {formatArtistValue(a.display_artist) ?? 'Unknown Artist'} • {formatCount(a.track_count, 'track')}
                         </div>
                       </div>
                       <div className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">

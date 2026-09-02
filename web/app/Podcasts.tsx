@@ -9,6 +9,7 @@ import { apiFetch } from './apiClient';
 import { showConfirm, showAlert } from './ConfirmModal';
 import { sendWebSocketMessage, usePodcastProgress, updateLocalPodcastProgress } from './useWebSocket';
 import { useBodyScrollLock } from './useBodyScrollLock';
+import { formatCalendarDate } from './format';
 
 // ============================================================================
 // TYPES
@@ -378,7 +379,7 @@ function formatDate(dateStr: string | null): string {
   if (diffDays === 1) return 'Yesterday';
   if (diffDays < 7) return `${diffDays} days ago`;
   if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
-  return date.toLocaleDateString();
+  return formatCalendarDate(date);
 }
 
 function stripHtml(html: string | null): string {

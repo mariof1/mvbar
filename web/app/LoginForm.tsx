@@ -105,8 +105,10 @@ export function LoginForm() {
       <form onSubmit={handleSubmit} className="space-y-4">
         <h2 className="text-xl font-semibold text-white mb-6">Sign in</h2>
         <div>
-          <label className="block text-sm font-medium text-white/70 mb-2">Email</label>
+          <label htmlFor="login-email" className="block text-sm font-medium text-white/70 mb-2">Email</label>
           <input
+            id="login-email"
+            name="email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -116,8 +118,10 @@ export function LoginForm() {
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-white/70 mb-2">Password</label>
+          <label htmlFor="login-password" className="block text-sm font-medium text-white/70 mb-2">Password</label>
           <input
+            id="login-password"
+            name="password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}

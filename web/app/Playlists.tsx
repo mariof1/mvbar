@@ -24,6 +24,7 @@ import { showConfirm } from './ConfirmModal';
 import { usePlaylistUpdates, useLibraryUpdates } from './useWebSocket';
 import { useToastStore } from './Toast';
 import { trackArtistLabel } from './artistDisplay';
+import { formatCalendarDate, formatCount } from './format';
 
 type PlaylistTab = 'regular' | 'smart';
 
@@ -406,7 +407,7 @@ export function Playlists(props: {
             </button>
             <div className="flex-1 min-w-0">
               <h2 className="text-xl font-bold text-white truncate">{selectedPlaylist.name}</h2>
-              <p className="text-sm text-slate-400">{items.length} tracks</p>
+              <p className="text-sm text-slate-400">{formatCount(items.length, 'track')}</p>
             </div>
             <button
               onClick={() =>
@@ -692,7 +693,7 @@ export function Playlists(props: {
                           className="w-full bg-slate-900/60 border border-cyan-500/40 rounded px-2 py-1 text-white text-sm focus:outline-none focus:ring-1 focus:ring-cyan-400"
                         />
                         <div className="text-sm text-slate-400">
-                          {new Date(p.created_at).toLocaleDateString()}
+                          {formatCalendarDate(p.created_at)}
                         </div>
                       </div>
                     </div>
@@ -716,7 +717,7 @@ export function Playlists(props: {
                           )}
                         </div>
                         <div className="truncate text-sm text-slate-400">
-                          {p.is_owner ? `${p.item_count ?? 0} tracks` : `${p.owner?.email ?? 'Friend'} • ${p.item_count ?? 0} tracks`}
+                          {p.is_owner ? formatCount(p.item_count ?? 0, 'track') : `${p.owner?.email ?? 'Friend'} • ${formatCount(p.item_count ?? 0, 'track')}`}
                         </div>
                       </div>
                     </button>

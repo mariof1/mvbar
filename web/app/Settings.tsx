@@ -17,6 +17,7 @@ import { usePreferences } from './preferencesStore';
 import { showConfirm } from './ConfirmModal';
 import { PushNotificationSettings } from './PushNotificationSettings';
 import { unsubscribeCurrentPushDevice } from './pushNotifications';
+import { formatCalendarDate } from './format';
 
 type Tab = 'account' | 'playback' | 'notifications' | 'integrations' | 'about';
 
@@ -321,11 +322,13 @@ export function Settings() {
       <h1 className="text-2xl font-bold text-white mb-6">Settings</h1>
 
       {/* Tab Navigation */}
-      <div className="flex gap-1 mb-6 bg-slate-800/50 p-1 rounded-xl overflow-x-auto">
+      <div className="flex gap-1 mb-6 bg-slate-800/50 p-1 rounded-xl overflow-x-auto" role="tablist" aria-label="Settings sections">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
+            role="tab"
+            aria-selected={activeTab === tab.id}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
               activeTab === tab.id
                 ? 'bg-cyan-600 text-white'
@@ -364,6 +367,8 @@ export function Settings() {
                     <button
                       onClick={() => fileInputRef.current?.click()}
                       className="absolute inset-0 bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                      aria-label="Change profile picture"
+                      title="Change profile picture"
                     >
                       <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
@@ -422,7 +427,7 @@ export function Settings() {
                   </div>
                   {profile?.created_at && (
                     <div className="text-xs text-slate-500">
-                      Member since {new Date(profile.created_at).toLocaleDateString()}
+                      Member since {formatCalendarDate(profile.created_at)}
                     </div>
                   )}
                 </div>
@@ -435,14 +440,20 @@ export function Settings() {
                 <h2 className="text-lg font-semibold text-white">Change Password</h2>
                 <div className="space-y-3 max-w-md">
                   <input
+                    aria-label="Current password"
+                    name="current-password"
                     type="password"
+                    autoComplete="current-password"
                     placeholder="Current password"
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
                     className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
                   />
                   <input
+                    aria-label="New password"
+                    name="new-password"
                     type="password"
+                    autoComplete="new-password"
                     placeholder="New password (min 8 characters)"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
@@ -488,7 +499,10 @@ export function Settings() {
                       Set a password to sign in with email instead of Google:
                     </p>
                     <input
+                      aria-label="New local account password"
+                      name="local-account-password"
                       type="password"
+                      autoComplete="new-password"
                       placeholder="New password (min 8 characters)"
                       value={unlinkPassword}
                       onChange={(e) => setUnlinkPassword(e.target.value)}
@@ -611,7 +625,10 @@ export function Settings() {
                   Use <span className="text-white">{subsonicUsername || user.email}</span> as the username in clients such as DSub or Symfonium.
                 </div>
                 <input
+                  aria-label="Subsonic password"
+                  name="subsonic-password"
                   type="password"
+                  autoComplete="new-password"
                   placeholder={subsonicConfigured ? 'New Subsonic password' : 'Subsonic password (min 8 characters)'}
                   value={subsonicPassword}
                   onChange={(e) => setSubsonicPasswordValue(e.target.value)}
@@ -690,7 +707,10 @@ export function Settings() {
                     Get your user token from <a href="https://listenbrainz.org/settings/" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">ListenBrainz Settings</a>.
                   </div>
                   <input
+                    aria-label="ListenBrainz user token"
+                    name="listenbrainz-token"
                     type="password"
+                    autoComplete="off"
                     placeholder="Paste your ListenBrainz user token"
                     value={lbToken}
                     onChange={(e) => setLbToken(e.target.value)}
@@ -768,7 +788,7 @@ export function Settings() {
                 {versionInfo?.buildDate && versionInfo.buildDate !== 'unknown' && (
                   <div>
                     <div className="text-xs text-slate-500 uppercase tracking-wide">Build Date</div>
-                    <div className="text-white text-sm">{new Date(versionInfo.buildDate).toLocaleDateString()}</div>
+                    <div className="text-white text-sm">{formatCalendarDate(versionInfo.buildDate)}</div>
                   </div>
                 )}
               </div>
@@ -801,8 +821,12 @@ function ToggleSetting({
         <p className="text-sm text-slate-400 mt-1">{description}</p>
       </div>
       <button
+        type="button"
         onClick={() => !disabled && onChange(!enabled)}
         disabled={disabled}
+        role="switch"
+        aria-checked={enabled}
+        aria-label={label}
         className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
           disabled ? 'cursor-not-allowed' : ''
         } ${

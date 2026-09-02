@@ -23,6 +23,7 @@ import { useToastStore } from './Toast';
 import { showConfirm } from './ConfirmModal';
 import { useSocialUpdates } from './socialStore';
 import { trackArtistLabel } from './artistDisplay';
+import { formatCalendarDate } from './format';
 
 type SearchResult = SocialUser & {
   relationshipId: number | null;
@@ -53,7 +54,7 @@ function formatWhen(value: string) {
   if (Math.abs(hours) < 24) return relative.format(hours, 'hour');
   const days = Math.round(hours / 24);
   if (Math.abs(days) < 30) return relative.format(days, 'day');
-  return new Date(timestamp).toLocaleDateString();
+  return formatCalendarDate(new Date(timestamp));
 }
 
 function RelationshipRow({
@@ -243,7 +244,7 @@ export function Social() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">Friends & sharing</h1>
+          <h1 className="text-2xl font-bold text-white">Friends & Sharing</h1>
           <p className="mt-1 text-sm text-slate-400">Share music with people who use this mvbar server.</p>
         </div>
         <div className="flex rounded-xl border border-white/10 bg-white/[0.04] p-1">
@@ -381,8 +382,12 @@ export function Social() {
             <h2 className="font-bold text-white">Find people</h2>
             <p className="mt-1 text-sm text-slate-400">Search by the email address they use for mvbar.</p>
             <form onSubmit={search} className="mt-4 flex gap-2">
+              <label htmlFor="friend-search" className="sr-only">Friend email address</label>
               <input
+                id="friend-search"
+                name="friend-search"
                 type="search"
+                autoComplete="off"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="friend@example.com"
