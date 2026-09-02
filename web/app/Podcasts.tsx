@@ -48,6 +48,26 @@ interface Episode {
   podcast_image_path?: string | null;
 }
 
+function normalizePodcast(podcast: Podcast): Podcast {
+  return {
+    ...podcast,
+    id: Number(podcast.id),
+    unplayed_count: Number(podcast.unplayed_count ?? 0),
+  };
+}
+
+function normalizeEpisode(episode: Episode): Episode {
+  return {
+    ...episode,
+    id: Number(episode.id),
+    podcast_id: Number(episode.podcast_id),
+    duration_ms: episode.duration_ms == null ? null : Number(episode.duration_ms),
+    position_ms: Number(episode.position_ms ?? 0),
+    played: Boolean(episode.played),
+    downloaded: Boolean(episode.downloaded),
+  };
+}
+
 // ============================================================================
 // SEARCH RESULT TYPE
 // ============================================================================
@@ -675,7 +695,7 @@ function EpisodeRow({
   onDeleteDownload,
   featured = false,
   showPodcastTitle = true,
-  showDescription = true,
+  showDescriptionPreview = true,
 }: {
   episode: Episode;
   onPlay: () => void;
@@ -684,14 +704,51 @@ function EpisodeRow({
   onDeleteDownload: () => void;
   featured?: boolean;
   showPodcastTitle?: boolean;
-  showDescription?: boolean;
+  showDescriptionPreview?: boolean;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressTriggeredRef = useRef(false);
   const progress = episodeProgressPercent(episode);
   const imageUrl = episodeArtUrl(episode);
   const cleanDescription = stripHtml(episode.description);
   const hasProgress = episode.position_ms > 0 && !episode.played;
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = null;
+    longPressStartRef.current = null;
+  };
+
+  useEffect(() => () => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+  }, []);
+
+  const handleLongPressStart = (event: React.PointerEvent<HTMLElement>) => {
+    if (!cleanDescription || (event.pointerType === 'mouse' && event.button !== 0)) return;
+    if ((event.target as HTMLElement).closest('[data-long-press-ignore], a, input, select, textarea')) return;
+
+    cancelLongPress();
+    longPressTriggeredRef.current = false;
+    longPressStartRef.current = { x: event.clientX, y: event.clientY };
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      longPressStartRef.current = null;
+      longPressTriggeredRef.current = true;
+      setShowDetails(true);
+      try { navigator.vibrate?.(15); } catch {}
+    }, 550);
+  };
+
+  const handleLongPressMove = (event: React.PointerEvent<HTMLElement>) => {
+    const start = longPressStartRef.current;
+    if (!start) return;
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10) {
+      cancelLongPress();
+    }
+  };
 
   const handleDownload = async () => {
     setDownloading(true);
@@ -706,7 +763,7 @@ function EpisodeRow({
     <>
       {showDetails && (
         <PodcastTextDialog
-          label="Episode details"
+          label="Episode description"
           title={episode.title}
           subtitle={episode.podcast_title}
           meta={episodeMetaText(episode, true)}
@@ -717,16 +774,31 @@ function EpisodeRow({
 
       <article
         className={cx(
-          'group overflow-hidden rounded-xl border border-white/10 bg-slate-900/55 transition hover:border-white/20 hover:bg-slate-900/90',
+          'group select-none overflow-hidden rounded-xl border border-white/10 bg-slate-900/55 transition hover:border-white/20 hover:bg-slate-900/90',
           featured && 'border-orange-400/15 bg-gradient-to-br from-orange-950/25 via-slate-900/90 to-slate-900/90 shadow-xl shadow-black/20',
           episode.played && 'opacity-60'
         )}
+        title={cleanDescription ? 'Press and hold for episode description' : undefined}
+        onPointerDown={handleLongPressStart}
+        onPointerMove={handleLongPressMove}
+        onPointerUp={cancelLongPress}
+        onPointerCancel={cancelLongPress}
+        onPointerLeave={cancelLongPress}
+        onContextMenu={(event) => {
+          if (cleanDescription) event.preventDefault();
+        }}
       >
         <div className={featured ? 'p-4 sm:p-5' : 'p-3 sm:p-4'}>
           <div className={cx('flex items-start gap-3', featured && 'sm:gap-5')}>
             <button
               type="button"
-              onClick={onPlay}
+              onClick={() => {
+                if (longPressTriggeredRef.current) {
+                  longPressTriggeredRef.current = false;
+                  return;
+                }
+                onPlay();
+              }}
               className={cx(
                 'group/play relative flex-shrink-0 overflow-hidden rounded-lg bg-slate-800 shadow-md',
                 featured ? 'h-24 w-24 sm:h-28 sm:w-28' : 'h-16 w-16'
@@ -763,6 +835,7 @@ function EpisodeRow({
               {episode.downloaded ? (
                 <button
                   type="button"
+                  data-long-press-ignore
                   onClick={onDeleteDownload}
                   className="rounded-full p-2 text-green-300 transition hover:bg-red-500/10 hover:text-red-300"
                   title="Remove download"
@@ -773,6 +846,7 @@ function EpisodeRow({
               ) : (
                 <button
                   type="button"
+                  data-long-press-ignore
                   onClick={handleDownload}
                   disabled={downloading}
                   className="rounded-full p-2 text-slate-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
@@ -785,6 +859,7 @@ function EpisodeRow({
 
               <button
                 type="button"
+                data-long-press-ignore
                 onClick={() => onMarkPlayed(!episode.played)}
                 className={cx(
                   'rounded-full p-2 transition hover:bg-white/10',
@@ -798,23 +873,10 @@ function EpisodeRow({
             </div>
           </div>
 
-          {showDescription && cleanDescription && (
-            <button
-              type="button"
-              onClick={() => setShowDetails(true)}
-              className="mt-4 block w-full border-t border-white/10 pt-3 text-left"
-              aria-label={`Read full description for ${episode.title}`}
-            >
-              <span className={cx(
-                'block text-sm leading-6 text-slate-300 transition group-hover:text-slate-200',
-                featured ? 'line-clamp-4' : 'line-clamp-3'
-              )}>
-                {cleanDescription}
-              </span>
-              <span className="mt-1.5 inline-block text-xs font-bold text-cyan-300 transition hover:text-cyan-200">
-                Read full description
-              </span>
-            </button>
+          {showDescriptionPreview && cleanDescription && (
+            <p className="mt-4 line-clamp-3 w-full border-t border-white/10 pt-3 text-sm leading-6 text-slate-300">
+              {cleanDescription}
+            </p>
           )}
 
           {hasProgress && episode.duration_ms && (
@@ -825,21 +887,12 @@ function EpisodeRow({
             </div>
           )}
 
-          {(hasProgress || episode.downloaded || (!showDescription && cleanDescription)) && (
+          {(hasProgress || episode.downloaded) && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {hasProgress && (
                 <span className="text-xs font-bold text-orange-300">
                   {episodeRemainingText(episode) || `${progress}% played`}
                 </span>
-              )}
-              {!showDescription && cleanDescription && (
-                <button
-                  type="button"
-                  onClick={() => setShowDetails(true)}
-                  className="rounded-full border border-white/10 px-3 py-1 text-xs font-bold text-slate-300 transition hover:bg-white/10 hover:text-white"
-                >
-                  Episode details
-                </button>
               )}
               {episode.downloaded && <CountPill>Downloaded</CountPill>}
             </div>
@@ -1032,6 +1085,7 @@ function ContinueListeningView({
       <EpisodeRow
         episode={featured}
         featured
+        showDescriptionPreview={false}
         onPlay={() => onEpisodePlay(featured)}
         onMarkPlayed={(played) => onMarkPlayed(featured.id, played)}
         onDownload={() => onDownload(featured.id)}
@@ -1046,6 +1100,7 @@ function ContinueListeningView({
               <EpisodeRow
                 key={episode.id}
                 episode={episode}
+                showDescriptionPreview={false}
                 onPlay={() => onEpisodePlay(episode)}
                 onMarkPlayed={(played) => onMarkPlayed(episode.id, played)}
                 onDownload={() => onDownload(episode.id)}
@@ -1917,7 +1972,7 @@ export function Podcasts() {
     if (!token) return;
     try {
       const r = await apiFetch('/podcasts', { method: 'GET' }, token);
-      setPodcasts(r.podcasts || []);
+      setPodcasts((r.podcasts || []).map(normalizePodcast));
     } catch (e: any) {
       if (e?.status === 401) clear();
     }
@@ -1928,7 +1983,7 @@ export function Podcasts() {
     if (!token) return;
     try {
       const r = await apiFetch('/podcasts/episodes/new', { method: 'GET' }, token);
-      setNewEpisodes(r.episodes || []);
+      setNewEpisodes((r.episodes || []).map(normalizeEpisode));
     } catch (e: any) {
       if (e?.status === 401) clear();
     }
@@ -1939,7 +1994,7 @@ export function Podcasts() {
     if (!token) return;
     try {
       const r = await apiFetch(`/podcasts/${podcastId}`, { method: 'GET' }, token);
-      setEpisodes(r.episodes || []);
+      setEpisodes((r.episodes || []).map(normalizeEpisode));
     } catch (e: any) {
       if (e?.status === 401) clear();
     }

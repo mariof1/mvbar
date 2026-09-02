@@ -5,7 +5,7 @@ import { create } from 'zustand';
 import { useFavorites } from './favoritesStore';
 import { useToastStore } from './Toast';
 import { useAuth } from './store';
-import type { AdminBackup, AdminBackupJob } from './apiClient';
+import { apiFetch, type AdminBackup, type AdminBackupJob } from './apiClient';
 import { useSocialUpdates } from './socialStore';
 import { systemSocialNotificationsEnabled } from './pushNotifications';
 
@@ -190,11 +190,7 @@ export const useAdminPending = create<AdminPendingStore>((set) => ({
   refresh: async (token) => {
     if (!token) return;
     try {
-      const res = await fetch('/api/admin/users/pending', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await apiFetch('/admin/users/pending', { method: 'GET' }, token);
       set({ count: Array.isArray(data.users) ? data.users.length : 0 });
     } catch { /* ignore */ }
   },

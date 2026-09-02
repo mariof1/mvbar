@@ -16,11 +16,10 @@ export function mediaSessionArtwork(src?: string | null) {
 
   const absoluteSrc = new URL(src, window.location.origin).href;
 
-  return [
-    ...MEDIA_SESSION_ARTWORK_SIZES.map((size) => ({
-      src: absoluteSrc,
-      sizes: `${size}x${size}`,
-    })),
-    { src: absoluteFallback, sizes: '512x512', type: 'image/png' },
-  ];
+  // Do not append the app icon here. On mobile Chromium it competes with the
+  // real 512px cover and can be selected for the media notification instead.
+  return MEDIA_SESSION_ARTWORK_SIZES.map((size) => ({
+    src: absoluteSrc,
+    sizes: `${size}x${size}`,
+  }));
 }
