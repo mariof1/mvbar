@@ -44,6 +44,7 @@ import { useSocialUpdates } from './socialStore';
 import { preparePushNotifications, unsubscribeCurrentPushDevice } from './pushNotifications';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { mediaSessionArtwork } from './mediaSessionArtwork';
+import { SeekSlider } from './SeekSlider';
 
 // Icons as simple SVG components
 const Icons = {
@@ -907,12 +908,12 @@ function PlayerBar(props: {
     else a.pause();
   };
 
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const seekTo = (position: number) => {
     const a = audioRef.current;
-    if (!a) return;
-    const t = parseFloat(e.target.value);
-    a.currentTime = t;
-    setCurrentTime(t);
+    if (!a || !duration) return;
+    const nextPosition = Math.max(0, Math.min(position, duration));
+    a.currentTime = nextPosition;
+    setCurrentTime(nextPosition);
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1125,21 +1126,13 @@ function PlayerBar(props: {
 
             {/* Progress bar */}
             <div className="px-8 mb-4">
-              <div 
-                className="h-1.5 bg-white/20 rounded-full cursor-pointer"
-                onClick={(e) => {
-                  const a = audioRef.current;
-                  if (!a || !duration) return;
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const pct = (e.clientX - rect.left) / rect.width;
-                  a.currentTime = pct * duration;
-                }}
-              >
-                <div 
-                  className="h-full bg-cyan-500 rounded-full transition-all duration-150"
-                  style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-                />
-              </div>
+              <SeekSlider
+                currentTime={currentTime}
+                duration={duration}
+                onSeek={seekTo}
+                accent="#06b6d4"
+                label="Seek through track"
+              />
               <div className="flex justify-between text-xs text-white/50 mt-1">
                 <span>{formatTime(currentTime)}</span>
                 <span>{formatTime(duration)}</span>
@@ -1274,17 +1267,14 @@ function PlayerBar(props: {
       {/* Mini Player Bar */}
       <div className="fixed bottom-0 left-0 right-0 lg:left-64 z-50 glass border-t border-white/10 animate-slide-up h-[72px]">
         {/* Progress bar - full width on top */}
-        <div className="absolute top-0 left-0 right-0 h-1 bg-white/10 cursor-pointer"
-          onClick={(e) => {
-            const a = audioRef.current;
-            if (!a || !duration) return;
-            const rect = e.currentTarget.getBoundingClientRect();
-            const pct = (e.clientX - rect.left) / rect.width;
-            a.currentTime = pct * duration;
-          }}>
-          <div 
-            className="h-full bg-cyan-500 transition-all duration-150"
-            style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+        <div className="absolute -top-2 left-0 right-0 z-10">
+          <SeekSlider
+            currentTime={currentTime}
+            duration={duration}
+            onSeek={seekTo}
+            accent="#06b6d4"
+            label="Seek through track"
+            compact
           />
         </div>
 

@@ -11,6 +11,7 @@ import { sendWebSocketMessage, usePodcastProgress, updateLocalPodcastProgress } 
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { formatCalendarDate } from './format';
 import { mediaSessionArtwork } from './mediaSessionArtwork';
+import { SeekSlider } from './SeekSlider';
 
 // ============================================================================
 // TYPES
@@ -716,112 +717,133 @@ function EpisodeRow({
 
       <article
         className={cx(
-          'group rounded-lg border border-white/10 bg-slate-900/55 transition hover:border-white/20 hover:bg-slate-900',
-          featured && 'bg-slate-900/90 shadow-xl shadow-black/20',
+          'group overflow-hidden rounded-xl border border-white/10 bg-slate-900/55 transition hover:border-white/20 hover:bg-slate-900/90',
+          featured && 'border-orange-400/15 bg-gradient-to-br from-orange-950/25 via-slate-900/90 to-slate-900/90 shadow-xl shadow-black/20',
           episode.played && 'opacity-60'
         )}
       >
-        <div className={cx('flex items-start gap-3', featured ? 'p-4 sm:gap-5 sm:p-5' : 'p-3 sm:p-4')}>
-          <button
-            type="button"
-            onClick={onPlay}
-            className={cx(
-              'group/play relative flex-shrink-0 overflow-hidden rounded-lg bg-slate-800',
-              featured ? 'h-24 w-24 sm:h-28 sm:w-28' : 'h-16 w-16'
-            )}
-            title="Play episode"
-          >
-            <PodcastArtwork src={imageUrl} alt="" className="h-full w-full rounded-lg" />
-            <span className="absolute inset-0 flex items-center justify-center bg-black/45 opacity-0 transition group-hover/play:opacity-100">
-              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-950 shadow-lg">
-                <PlayGlyph className="h-5 w-5" />
-              </span>
-            </span>
-          </button>
-
-          <div className="min-w-0 flex-1">
-            {showPodcastTitle && episode.podcast_title && (
-              <p className="truncate text-sm font-bold text-cyan-300">{episode.podcast_title}</p>
-            )}
-            <h3
+        <div className={featured ? 'p-4 sm:p-5' : 'p-3 sm:p-4'}>
+          <div className={cx('flex items-start gap-3', featured && 'sm:gap-5')}>
+            <button
+              type="button"
+              onClick={onPlay}
               className={cx(
-                'font-bold leading-snug text-white',
-                featured ? 'line-clamp-2 text-lg sm:text-xl' : 'line-clamp-2 text-sm sm:text-base'
+                'group/play relative flex-shrink-0 overflow-hidden rounded-lg bg-slate-800 shadow-md',
+                featured ? 'h-24 w-24 sm:h-28 sm:w-28' : 'h-16 w-16'
               )}
+              title="Play episode"
+              aria-label={`Play ${episode.title}`}
             >
-              {episode.title}
-            </h3>
-            <p className="mt-1 truncate text-xs font-medium text-slate-500">
-              {episodeMetaText(episode, true)}
-            </p>
+              <PodcastArtwork src={imageUrl} alt="" className="h-full w-full rounded-lg" />
+              <span className="absolute inset-0 flex items-center justify-center bg-black/45 opacity-0 transition group-hover/play:opacity-100 group-focus-visible/play:opacity-100">
+                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-950 shadow-lg">
+                  <PlayGlyph className="h-5 w-5" />
+                </span>
+              </span>
+            </button>
 
-            {showDescription && cleanDescription && (
-              <p className={cx('mt-2 text-sm leading-5 text-slate-400', featured ? 'line-clamp-3' : 'line-clamp-2')}>
-                {cleanDescription}
+            <div className="min-w-0 flex-1">
+              {showPodcastTitle && episode.podcast_title && (
+                <p className="truncate text-sm font-bold text-cyan-300">{episode.podcast_title}</p>
+              )}
+              <h3
+                className={cx(
+                  'font-bold leading-snug text-white',
+                  featured ? 'line-clamp-3 text-lg sm:text-xl' : 'line-clamp-2 text-sm sm:text-base'
+                )}
+              >
+                {episode.title}
+              </h3>
+              <p className="mt-1 line-clamp-2 text-xs font-medium leading-5 text-slate-500">
+                {episodeMetaText(episode, false)}
               </p>
-            )}
+            </div>
 
-            {hasProgress && episode.duration_ms && (
-              <div className="mt-3">
-                <div className="h-1 overflow-hidden rounded-full bg-slate-700">
-                  <div className="h-full rounded-full bg-orange-500" style={{ width: `${progress}%` }} />
-                </div>
+            <div className="flex flex-shrink-0 flex-col items-center gap-1">
+              {episode.downloaded ? (
+                <button
+                  type="button"
+                  onClick={onDeleteDownload}
+                  className="rounded-full p-2 text-green-300 transition hover:bg-red-500/10 hover:text-red-300"
+                  title="Remove download"
+                  aria-label="Remove downloaded episode"
+                >
+                  <CheckGlyph className="h-5 w-5" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleDownload}
+                  disabled={downloading}
+                  className="rounded-full p-2 text-slate-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
+                  title="Download for offline"
+                  aria-label="Download episode for offline listening"
+                >
+                  {downloading ? <SpinnerGlyph className="h-5 w-5" /> : <DownloadGlyph className="h-5 w-5" />}
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => onMarkPlayed(!episode.played)}
+                className={cx(
+                  'rounded-full p-2 transition hover:bg-white/10',
+                  episode.played ? 'text-orange-300' : 'text-slate-400 hover:text-white'
+                )}
+                title={episode.played ? 'Mark as unplayed' : 'Mark as played'}
+                aria-label={episode.played ? 'Mark episode as unplayed' : 'Mark episode as played'}
+              >
+                {episode.played ? <CheckGlyph className="h-5 w-5" /> : <CircleGlyph className="h-5 w-5" />}
+              </button>
+            </div>
+          </div>
+
+          {showDescription && cleanDescription && (
+            <button
+              type="button"
+              onClick={() => setShowDetails(true)}
+              className="mt-4 block w-full border-t border-white/10 pt-3 text-left"
+              aria-label={`Read full description for ${episode.title}`}
+            >
+              <span className={cx(
+                'block text-sm leading-6 text-slate-300 transition group-hover:text-slate-200',
+                featured ? 'line-clamp-4' : 'line-clamp-3'
+              )}>
+                {cleanDescription}
+              </span>
+              <span className="mt-1.5 inline-block text-xs font-bold text-cyan-300 transition hover:text-cyan-200">
+                Read full description
+              </span>
+            </button>
+          )}
+
+          {hasProgress && episode.duration_ms && (
+            <div className="mt-4">
+              <div className="h-1 overflow-hidden rounded-full bg-slate-700">
+                <div className="h-full rounded-full bg-orange-500" style={{ width: `${progress}%` }} />
               </div>
-            )}
+            </div>
+          )}
 
+          {(hasProgress || episode.downloaded || (!showDescription && cleanDescription)) && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {hasProgress && (
                 <span className="text-xs font-bold text-orange-300">
                   {episodeRemainingText(episode) || `${progress}% played`}
                 </span>
               )}
-              {cleanDescription && (
+              {!showDescription && cleanDescription && (
                 <button
                   type="button"
                   onClick={() => setShowDetails(true)}
                   className="rounded-full border border-white/10 px-3 py-1 text-xs font-bold text-slate-300 transition hover:bg-white/10 hover:text-white"
                 >
-                  Details
+                  Episode details
                 </button>
               )}
               {episode.downloaded && <CountPill>Downloaded</CountPill>}
             </div>
-          </div>
-
-          <div className="flex flex-shrink-0 flex-col items-center gap-1">
-            {episode.downloaded ? (
-              <button
-                type="button"
-                onClick={onDeleteDownload}
-                className="rounded-full p-2 text-green-300 transition hover:bg-red-500/10 hover:text-red-300"
-                title="Remove download"
-              >
-                <CheckGlyph className="h-5 w-5" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleDownload}
-                disabled={downloading}
-                className="rounded-full p-2 text-slate-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
-                title="Download for offline"
-              >
-                {downloading ? <SpinnerGlyph className="h-5 w-5" /> : <DownloadGlyph className="h-5 w-5" />}
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => onMarkPlayed(!episode.played)}
-              className={cx(
-                'rounded-full p-2 transition hover:bg-white/10',
-                episode.played ? 'text-orange-300' : 'text-slate-400 hover:text-white'
-              )}
-              title={episode.played ? 'Mark as unplayed' : 'Mark as played'}
-            >
-              {episode.played ? <CheckGlyph className="h-5 w-5" /> : <CircleGlyph className="h-5 w-5" />}
-            </button>
-          </div>
+          )}
         </div>
       </article>
     </>
@@ -841,28 +863,60 @@ function PodcastSwitcher({
   onViewChange: (view: PodcastHomeView) => void;
   onSubscribeClick: () => void;
 }) {
+  const tabClass = (selected: boolean) => cx(
+    'flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl px-2 text-xs font-bold transition sm:h-10 sm:px-3 sm:text-sm',
+    selected
+      ? 'bg-white text-slate-950 shadow-sm'
+      : 'text-slate-300 hover:bg-white/10 hover:text-white'
+  );
+
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <ChipButton
-        selected={view === 'new'}
+    <div
+      className="grid w-full grid-cols-3 gap-1 rounded-2xl border border-white/10 bg-slate-950/55 p-1 sm:w-auto sm:min-w-[340px]"
+      role="group"
+      aria-label="Podcast navigation"
+    >
+      <button
+        type="button"
+        aria-pressed={view === 'new'}
         onClick={() => onViewChange('new')}
-        className="min-w-[132px]"
+        className={tabClass(view === 'new')}
       >
-        Continue
-        {continueCount > 0 && <span className="text-xs opacity-75">{Math.min(continueCount, 999)}</span>}
-      </ChipButton>
-      <ChipButton
-        selected={view === 'subscriptions'}
+        <span className="truncate">Continue</span>
+        {continueCount > 0 && (
+          <span className={cx(
+            'rounded-full px-1.5 py-0.5 text-[10px] leading-none',
+            view === 'new' ? 'bg-slate-900/10' : 'bg-white/10 text-slate-400'
+          )}>
+            {Math.min(continueCount, 999)}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        aria-pressed={view === 'subscriptions'}
         onClick={() => onViewChange('subscriptions')}
-        className="min-w-[110px]"
+        className={tabClass(view === 'subscriptions')}
       >
-        Shows
-        {subscriptionCount > 0 && <span className="text-xs opacity-75">{Math.min(subscriptionCount, 999)}</span>}
-      </ChipButton>
-      <ChipButton tone="accent" onClick={onSubscribeClick} title="Add podcast">
-        <PlusGlyph />
-        Add
-      </ChipButton>
+        <span className="truncate">Shows</span>
+        {subscriptionCount > 0 && (
+          <span className={cx(
+            'rounded-full px-1.5 py-0.5 text-[10px] leading-none',
+            view === 'subscriptions' ? 'bg-slate-900/10' : 'bg-white/10 text-slate-400'
+          )}>
+            {Math.min(subscriptionCount, 999)}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={onSubscribeClick}
+        title="Add podcast"
+        className="flex h-9 min-w-0 items-center justify-center gap-1 rounded-xl bg-cyan-600 px-2 text-xs font-bold text-white shadow-sm transition hover:bg-cyan-500 sm:h-10 sm:gap-1.5 sm:px-3 sm:text-sm"
+      >
+        <PlusGlyph className="h-4 w-4" />
+        <span>Add</span>
+      </button>
     </div>
   );
 }
@@ -992,7 +1046,6 @@ function ContinueListeningView({
               <EpisodeRow
                 key={episode.id}
                 episode={episode}
-                showDescription={false}
                 onPlay={() => onEpisodePlay(episode)}
                 onMarkPlayed={(played) => onMarkPlayed(episode.id, played)}
                 onDownload={() => onDownload(episode.id)}
@@ -1381,9 +1434,11 @@ export function PodcastPlayer({
     audio.currentTime = Math.max(0, Math.min(duration, audio.currentTime + seconds));
   };
 
-  const seekTo = (pct: number) => {
+  const seekTo = (position: number) => {
     if (!audio || !duration) return;
-    audio.currentTime = pct * duration;
+    const nextPosition = Math.max(0, Math.min(position, duration));
+    audio.currentTime = nextPosition;
+    setCurrentTime(nextPosition);
   };
 
   const formatTime = (s: number) => {
@@ -1537,19 +1592,13 @@ export function PodcastPlayer({
 
             {/* Progress bar */}
             <div className="px-8 mb-4">
-              <div 
-                className="h-1.5 bg-white/20 rounded-full cursor-pointer"
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const pct = (e.clientX - rect.left) / rect.width;
-                  seekTo(pct);
-                }}
-              >
-                <div 
-                  className="h-full bg-orange-500 rounded-full transition-all duration-150"
-                  style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-                />
-              </div>
+              <SeekSlider
+                currentTime={currentTime}
+                duration={duration}
+                onSeek={seekTo}
+                accent="#f97316"
+                label="Seek through podcast episode"
+              />
               <div className="flex justify-between text-xs text-white/50 mt-1">
                 <span>{formatTime(currentTime)}</span>
                 <span>{formatTime(duration)}</span>
@@ -1622,19 +1671,17 @@ export function PodcastPlayer({
         onClick={() => setExpanded(true)}
       >
         {/* Progress bar at top of player */}
-        <div 
-          className="h-1 bg-white/10 cursor-pointer"
-          onClick={(e) => {
-            e.stopPropagation();
-            const rect = e.currentTarget.getBoundingClientRect();
-            const pct = (e.clientX - rect.left) / rect.width;
-            seekTo(pct);
-          }}
-        >
-          <div 
-            className="h-full bg-orange-500 transition-all duration-150"
-            style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-          />
+        <div className="relative h-1 z-10">
+          <div className="absolute -top-2 left-0 right-0">
+            <SeekSlider
+              currentTime={currentTime}
+              duration={duration}
+              onSeek={seekTo}
+              accent="#f97316"
+              label="Seek through podcast episode"
+              compact
+            />
+          </div>
         </div>
 
         <div className="px-4 py-3">
