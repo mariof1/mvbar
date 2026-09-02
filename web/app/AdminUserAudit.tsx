@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  adminUnlockUserLogin,
   getAdminUserAudit,
   getAdminUserAuditDetail,
   type AdminUserAuditDetail,
@@ -9,7 +10,7 @@ import {
   type AdminUserAuditSummary,
 } from './apiClient';
 
-type ActivityFilter = 'all' | 'active' | 'no-plays';
+type ActivityFilter = 'all' | 'active' | 'blocked' | 'no-plays';
 type UserSort = 'recent' | 'listening' | 'name';
 type ActivityView = 'music' | 'podcasts' | 'audiobooks' | 'sign-ins' | 'devices';
 type MobilePane = 'users' | 'detail';
@@ -247,7 +248,9 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [moreLoading, setMoreLoading] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function loadOverview() {
     setLoading(true);
@@ -311,6 +314,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
         ) return false;
         if (activityFilter === 'no-plays') return user.totalPlays + user.podcastEpisodeCount + user.audiobookCount === 0;
         if (activityFilter === 'active') return eventTime(user.lastActiveAt) >= sevenDaysAgo;
+        if (activityFilter === 'blocked') return user.loginRestriction.blocked;
         return true;
       })
       .sort((left, right) => {
@@ -335,6 +339,27 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
       setError(reason?.data?.error ?? reason?.message ?? 'Unable to load more history');
     } finally {
       setMoreLoading(false);
+    }
+  }
+
+  async function unlockLogin() {
+    if (!detail || unlocking) return;
+    setUnlocking(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await adminUnlockUserLogin(token, detail.user.id);
+      const updateUser = (user: AdminUserAuditSummary) => (
+        user.id === detail.user.id ? { ...user, loginRestriction: result.loginRestriction } : user
+      );
+      setOverview((current) => ({ ...current, users: current.users.map(updateUser) }));
+      setDetail((current) => current ? { ...current, user: updateUser(current.user) } : current);
+      setNotice(`Login restrictions cleared for ${detail.user.email}.`);
+    } catch (reason: any) {
+      if (reason?.status === 401) clear();
+      setError(reason?.data?.error ?? reason?.message ?? 'Unable to unlock account');
+    } finally {
+      setUnlocking(false);
     }
   }
 
@@ -385,6 +410,13 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
         </div>
       )}
 
+      {notice && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100" role="status">
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)} className="shrink-0 text-emerald-200/70 hover:text-white" aria-label="Dismiss notification">×</button>
+        </div>
+      )}
+
       <div className="grid grid-cols-3 divide-x divide-slate-800 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/35">
         <OverviewStat label="Accounts" value={overview.totals.users.toLocaleString()} />
         <OverviewStat label="Active in 7 days" value={overview.totals.active7d.toLocaleString()} />
@@ -416,6 +448,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                   <select value={activityFilter} onChange={(event) => setActivityFilter(event.target.value as ActivityFilter)} className="h-9 w-full min-w-0 rounded-lg border border-slate-700 bg-slate-950/70 px-2 text-xs text-slate-300 focus:border-cyan-500 focus:outline-none">
                     <option value="all">All accounts</option>
                     <option value="active">Active this week</option>
+                    <option value="blocked">Locked or rate limited</option>
                     <option value="no-plays">No activity</option>
                   </select>
                 </label>
@@ -461,7 +494,11 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                     <div className="min-w-0 flex-1">
                       <div className={`truncate text-sm font-medium ${selected ? 'text-cyan-100' : 'text-slate-200'}`}>{user.email}</div>
                       <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-slate-500">
-                        <span className="truncate" title={dateTime(user.lastActiveAt)}>{online ? 'Active now' : `Active ${relativeTime(user.lastActiveAt)}`}</span>
+                        {user.loginRestriction.blocked ? (
+                          <span className="shrink-0 rounded-full bg-red-500/10 px-1.5 py-0.5 font-medium text-red-300">Blocked</span>
+                        ) : (
+                          <span className="truncate" title={dateTime(user.lastActiveAt)}>{online ? 'Active now' : `Active ${relativeTime(user.lastActiveAt)}`}</span>
+                        )}
                         {user.activity7d > 0 && <><span className="text-slate-700">•</span><span className="shrink-0">{user.activity7d} this week</span></>}
                       </div>
                     </div>
@@ -492,6 +529,7 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                       <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                         <span>{authLabel(detail.user.authProvider)}</span>
                         {detail.user.role === 'admin' && <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-200">Admin</span>}
+                        {detail.user.loginRestriction.blocked && <span className="rounded-full bg-red-500/10 px-2 py-0.5 font-medium text-red-300">Login blocked</span>}
                         <span className={`h-1.5 w-1.5 rounded-full ${isRecentlyActive(detail.user.lastActiveAt) ? 'bg-emerald-400' : 'bg-slate-600'}`} />
                         <span>{isRecentlyActive(detail.user.lastActiveAt) ? 'Active now' : `Active ${relativeTime(detail.user.lastActiveAt)}`}</span>
                       </div>
@@ -515,6 +553,33 @@ export function AdminUserAudit({ token, clear }: { token: string; clear: () => v
                     </button>
                   </div>
                 </div>
+
+                {detail.user.loginRestriction.blocked && (
+                  <div className="border-b border-red-500/20 bg-red-500/[0.07] px-4 py-4 sm:px-6" data-testid="audit-login-restriction">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-red-100">
+                          {detail.user.loginRestriction.locked && detail.user.loginRestriction.rateLimited
+                            ? 'Account lock and rate limit are active'
+                            : detail.user.loginRestriction.locked ? 'Account is locked' : 'Login rate limit is active'}
+                        </div>
+                        <p className="mt-1 text-xs leading-5 text-red-200/70">
+                          {detail.user.loginRestriction.failedAttempts.toLocaleString()} failed attempts
+                          {detail.user.loginRestriction.ips.length > 0 ? ` from ${detail.user.loginRestriction.ips.join(', ')}` : ''}
+                          {detail.user.loginRestriction.blockedUntil ? ` · expires ${dateTime(new Date(detail.user.loginRestriction.blockedUntil).toISOString())}` : ''}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void unlockLogin()}
+                        disabled={unlocking}
+                        className="inline-flex h-10 shrink-0 items-center justify-center rounded-lg bg-red-500 px-4 text-sm font-semibold text-white transition hover:bg-red-400 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {unlocking ? 'Unlocking…' : 'Unlock login'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {showAccountDetails && (
                   <div className="grid grid-cols-1 gap-x-8 gap-y-4 border-b border-slate-800 bg-slate-900/35 px-5 py-5 sm:grid-cols-2 xl:grid-cols-3" data-testid="audit-account-details">

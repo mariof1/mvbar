@@ -1,7 +1,8 @@
 import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
-import { db } from './db.js';
-import type { Role } from './store.js';
+import { audit, db } from './db.js';
+import { clearLoginRestrictions, getLoginRestriction, type Role } from './store.js';
+import * as userRepo from './userRepo.js';
 
 type AuditSummaryRow = {
   id: string;
@@ -85,6 +86,7 @@ function normalizeSummary(row: AuditSummaryRow) {
     estimatedListeningMs: Number(row.estimated_listening_ms),
     favoriteCount: Number(row.favorite_count),
     playlistCount: Number(row.playlist_count),
+    loginRestriction: getLoginRestriction(row.email),
   };
 }
 
@@ -240,6 +242,31 @@ export const userAuditPlugin: FastifyPluginAsync = fp(async (app) => {
         activity7d: users.reduce((sum, user) => sum + user.activity7d, 0),
         estimatedListeningMs: users.reduce((sum, user) => sum + user.estimatedListeningMs, 0),
       },
+    };
+  });
+
+  app.post('/api/admin/users/:id/login-restrictions/unlock', async (req, reply) => {
+    if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
+
+    const { id } = req.params as { id: string };
+    const user = await userRepo.getUserById(id);
+    if (!user) return reply.code(404).send({ ok: false, error: 'user_not_found' });
+
+    const cleared = clearLoginRestrictions(user.email);
+    await audit('user_login_restrictions_cleared', {
+      userId: user.id,
+      email: user.email,
+      by: req.user.userId,
+      previouslyLocked: cleared.before.locked,
+      previouslyRateLimited: cleared.before.rateLimited,
+      failedAttempts: cleared.before.failedAttempts,
+      ips: cleared.ips,
+      clearedKeys: cleared.clearedKeys,
+    });
+
+    return {
+      ok: true,
+      loginRestriction: getLoginRestriction(user.email),
     };
   });
 
