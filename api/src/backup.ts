@@ -26,6 +26,7 @@ import { PassThrough, Transform } from 'node:stream';
 import { finished, pipeline } from 'node:stream/promises';
 import { createInterface } from 'node:readline';
 import { config } from './config.js';
+import { refreshRateLimitBypassIPs } from './rateLimitBypass.js';
 import { db, redis } from './db.js';
 import { broadcastToAdmins } from './websocket.js';
 
@@ -950,6 +951,7 @@ async function restoreArchiveFile(
       avatarFiles,
       preserveSessions,
     );
+    await refreshRateLimitBypassIPs();
     await rescanPlugins();
     let cacheFiles = 0;
     let cacheWarning: string | undefined;

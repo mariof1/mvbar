@@ -4,6 +4,7 @@ import { boundedAuditPage } from '../dist/userAudit.js';
 import {
   clearLoginRestrictions,
   getLoginRestriction,
+  loginRateLimitKey,
   store,
 } from '../dist/store.js';
 
@@ -25,10 +26,14 @@ test('login restriction status and admin clear cover account locks and related I
     lastFailedAt: now - 2_000,
     lockedUntil: now + 300_000,
   });
-  store.failedLoginsByKey.set(`rl:${ipv4}`, { count: 8, lastFailedAt: now - 2_000 });
+  store.failedLoginsByKey.set(loginRateLimitKey(ipv4, email), { count: 8, lastFailedAt: now - 2_000 });
   store.failedLoginsByKey.set(`${ipv6}:user@example.com`, { count: 5, lastFailedAt: now - 1_000 });
-  store.failedLoginsByKey.set(`rl:${ipv6}`, { count: 5, lastFailedAt: now - 1_000 });
+  store.failedLoginsByKey.set(loginRateLimitKey(ipv6, email), { count: 5, lastFailedAt: now - 1_000 });
   store.failedLoginsByKey.set(`${ipv4}:someone@example.com`, { count: 3, lastFailedAt: now });
+  store.failedLoginsByKey.set(loginRateLimitKey(ipv4, 'someone@example.com'), {
+    count: 5,
+    lastFailedAt: now,
+  });
 
   const restriction = getLoginRestriction(email, now);
   assert.equal(restriction.blocked, true);
@@ -41,8 +46,10 @@ test('login restriction status and admin clear cover account locks and related I
   assert.equal(cleared.clearedKeys, 4);
   assert.equal(getLoginRestriction(email, now).blocked, false);
   assert.equal(store.failedLoginsByKey.has(`${ipv4}:user@example.com`), false);
-  assert.equal(store.failedLoginsByKey.has(`rl:${ipv6}`), false);
+  assert.equal(store.failedLoginsByKey.has(loginRateLimitKey(ipv6, email)), false);
   assert.equal(store.failedLoginsByKey.has(`${ipv4}:someone@example.com`), true);
+  assert.equal(store.failedLoginsByKey.has(loginRateLimitKey(ipv4, 'someone@example.com')), true);
+  assert.equal(getLoginRestriction('someone@example.com', now).blocked, true);
 
   store.failedLoginsByKey.clear();
 });
