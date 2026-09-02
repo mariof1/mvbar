@@ -388,6 +388,15 @@ export async function listAdminUsers(token: string) {
   return (await apiFetch('/admin/users', { method: 'GET' }, token)) as { ok: boolean; users: Array<{ id: string; email: string; role: string }> };
 }
 
+export type AdminLoginRestriction = {
+  blocked: boolean;
+  locked: boolean;
+  rateLimited: boolean;
+  blockedUntil: number | null;
+  failedAttempts: number;
+  ips: string[];
+};
+
 export type AdminUserAuditSummary = {
   id: string;
   email: string;
@@ -421,6 +430,7 @@ export type AdminUserAuditSummary = {
   estimatedListeningMs: number;
   favoriteCount: number;
   playlistCount: number;
+  loginRestriction: AdminLoginRestriction;
 };
 
 export type AdminUserAuditOverview = {
@@ -513,6 +523,14 @@ export async function getAdminUserAuditDetail(token: string, userId: string, lim
     { method: 'GET' },
     token
   )) as AdminUserAuditDetail;
+}
+
+export async function adminUnlockUserLogin(token: string, userId: string) {
+  return (await apiFetch(
+    `/admin/users/${encodeURIComponent(userId)}/login-restrictions/unlock`,
+    { method: 'POST' },
+    token
+  )) as { ok: boolean; loginRestriction: AdminLoginRestriction };
 }
 
 export async function adminCreateUser(token: string, params: { email: string; password: string; role: 'admin' | 'user' }) {
