@@ -451,9 +451,29 @@ function PlayerBar(props: {
   const [expanded, setExpanded] = useState(false);
   useBodyScrollLock(expanded);
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
+  const [playerDragY, setPlayerDragY] = useState(0);
+  const [isPlayerDragging, setIsPlayerDragging] = useState(false);
+  const [touchDraggedIdx, setTouchDraggedIdx] = useState<number | null>(null);
   const volumeRef = useRef<HTMLDivElement>(null);
   const queueRef = useRef<HTMLDivElement>(null);
+  const mobileQueueListRef = useRef<HTMLDivElement>(null);
   const activeQueueItemRef = useRef<HTMLDivElement>(null);
+  const playerDragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startedAt: number;
+  } | null>(null);
+  const playerDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressPlayerHandleClickRef = useRef(false);
+  const queueTouchGestureRef = useRef<{
+    timer: number;
+    active: boolean;
+    fromIndex: number;
+    currentIndex: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+  const suppressQueueClickUntilRef = useRef(0);
   const playedSentRef = useRef(false);
   const lastNotifiedTrackRef = useRef<number | null>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -556,6 +576,70 @@ function PlayerBar(props: {
       document.removeEventListener('touchstart', handleHide);
     };
   }, [showVolume]);
+
+  useEffect(() => {
+    const resetQueueGesture = () => {
+      const gesture = queueTouchGestureRef.current;
+      if (gesture) window.clearTimeout(gesture.timer);
+      queueTouchGestureRef.current = null;
+      setTouchDraggedIdx(null);
+    };
+
+    const handleTouchMove = (event: TouchEvent) => {
+      const gesture = queueTouchGestureRef.current;
+      const touch = event.touches[0];
+      if (!gesture || !touch) return;
+
+      if (!gesture.active) {
+        if (Math.hypot(touch.clientX - gesture.startX, touch.clientY - gesture.startY) > 10) {
+          resetQueueGesture();
+        }
+        return;
+      }
+
+      event.preventDefault();
+      const queueList = mobileQueueListRef.current;
+      if (queueList) {
+        const bounds = queueList.getBoundingClientRect();
+        const edgeSize = 48;
+        if (touch.clientY < bounds.top + edgeSize) queueList.scrollTop -= 12;
+        if (touch.clientY > bounds.bottom - edgeSize) queueList.scrollTop += 12;
+      }
+
+      const target = document.elementFromPoint(touch.clientX, touch.clientY);
+      const row = target instanceof Element
+        ? target.closest<HTMLElement>('[data-mobile-queue-index]')
+        : null;
+      const nextIndex = Number(row?.dataset.mobileQueueIndex);
+      if (!Number.isInteger(nextIndex) || nextIndex === gesture.currentIndex) return;
+
+      gesture.currentIndex = nextIndex;
+      setTouchDraggedIdx(nextIndex);
+    };
+
+    const handleTouchEnd = (event: TouchEvent) => {
+      const gesture = queueTouchGestureRef.current;
+      if (gesture?.active) {
+        event.preventDefault();
+        suppressQueueClickUntilRef.current = Date.now() + 500;
+        if (gesture.fromIndex !== gesture.currentIndex) {
+          playerEventPropsRef.current.onReorderQueue?.(gesture.fromIndex, gesture.currentIndex);
+        }
+      }
+      resetQueueGesture();
+    };
+
+    document.addEventListener('touchmove', handleTouchMove, { passive: false });
+    document.addEventListener('touchend', handleTouchEnd, { passive: false });
+    document.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+    return () => {
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleTouchEnd);
+      document.removeEventListener('touchcancel', handleTouchEnd);
+      resetQueueGesture();
+      if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -883,40 +967,152 @@ function PlayerBar(props: {
     }
   };
 
+  const resetExpandedPlayerDrag = () => {
+    playerDragRef.current = null;
+    setIsPlayerDragging(false);
+    setPlayerDragY(0);
+  };
+
+  const minimizeExpandedPlayer = (animate = false) => {
+    if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
+    playerDragRef.current = null;
+    setIsPlayerDragging(false);
+    if (!animate) {
+      setExpanded(false);
+      setPlayerDragY(0);
+      return;
+    }
+    setPlayerDragY(window.innerHeight);
+    playerDismissTimerRef.current = setTimeout(() => {
+      setExpanded(false);
+      setPlayerDragY(0);
+      playerDismissTimerRef.current = null;
+    }, 180);
+  };
+
+  const handlePlayerDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
+    playerDragRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startedAt: performance.now(),
+    };
+    suppressPlayerHandleClickRef.current = false;
+    setIsPlayerDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePlayerDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = playerDragRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const distance = Math.max(0, event.clientY - gesture.startY);
+    if (distance > 6) suppressPlayerHandleClickRef.current = true;
+    setPlayerDragY(distance);
+  };
+
+  const handlePlayerDragEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = playerDragRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const distance = Math.max(0, event.clientY - gesture.startY);
+    const elapsed = Math.max(1, performance.now() - gesture.startedAt);
+    const velocity = distance / elapsed;
+    const shouldMinimize = distance >= Math.min(160, window.innerHeight * 0.2)
+      || (distance >= 28 && velocity >= 0.65);
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
+    playerDragRef.current = null;
+    setIsPlayerDragging(false);
+    if (shouldMinimize) minimizeExpandedPlayer(true);
+    else setPlayerDragY(0);
+    if (suppressPlayerHandleClickRef.current) {
+      setTimeout(() => { suppressPlayerHandleClickRef.current = false; }, 0);
+    }
+  };
+
+  const handlePlayerDragCancel = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (playerDragRef.current?.pointerId !== event.pointerId) return;
+    resetExpandedPlayerDrag();
+  };
+
+  const startQueueLongPress = (event: React.TouchEvent<HTMLButtonElement>, index: number) => {
+    if (event.touches.length !== 1 || !props.onReorderQueue) return;
+    const existing = queueTouchGestureRef.current;
+    if (existing) window.clearTimeout(existing.timer);
+    const touch = event.touches[0];
+    const gesture = {
+      timer: 0,
+      active: false,
+      fromIndex: index,
+      currentIndex: index,
+      startX: touch.clientX,
+      startY: touch.clientY,
+    };
+    gesture.timer = window.setTimeout(() => {
+      if (queueTouchGestureRef.current !== gesture) return;
+      gesture.active = true;
+      setTouchDraggedIdx(gesture.currentIndex);
+      try { navigator.vibrate?.(15); } catch {}
+    }, 400);
+    queueTouchGestureRef.current = gesture;
+  };
+
   return (
     <>
       {/* Expanded Player Overlay */}
       {expanded && (
         <div 
           className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl lg:hidden animate-fade-in"
-          onClick={() => setExpanded(false)}
+          onClick={() => minimizeExpandedPlayer()}
         >
           <div 
-            className="h-full flex flex-col overflow-y-auto"
+            className={`h-full flex flex-col overflow-y-auto ${
+              isPlayerDragging ? '' : 'transition-[transform,opacity] duration-200 ease-out'
+            }`}
             onClick={(e) => e.stopPropagation()}
+            style={{
+              transform: `translate3d(0, ${playerDragY}px, 0)`,
+              opacity: 1 - Math.min(playerDragY / 600, 0.35),
+              willChange: playerDragY > 0 ? 'transform, opacity' : undefined,
+            }}
           >
-            {/* Close handle */}
-            <div className="flex justify-center pt-4 pb-2">
-              <button 
-                onClick={() => setExpanded(false)}
-                className="w-12 h-1.5 bg-white/30 rounded-full"
-              />
-            </div>
+            <div
+              className={`shrink-0 touch-none select-none ${isPlayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+              onPointerDown={handlePlayerDragStart}
+              onPointerMove={handlePlayerDragMove}
+              onPointerUp={handlePlayerDragEnd}
+              onPointerCancel={handlePlayerDragCancel}
+            >
+              {/* Close handle */}
+              <div className="flex justify-center pt-4 pb-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (suppressPlayerHandleClickRef.current) return;
+                    minimizeExpandedPlayer();
+                  }}
+                  className="h-6 w-16 rounded-full p-2.5"
+                  aria-label="Minimize player"
+                >
+                  <span className="block h-1.5 w-full rounded-full bg-white/30" />
+                </button>
+              </div>
 
-            {/* Artwork */}
-            <div className="flex-shrink-0 px-8 pt-4 pb-6">
-              {artOk ? (
-                <img
-                  src={`/api/art/${props.nowPlaying.id}`}
-                  alt=""
-                  className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl object-cover shadow-2xl"
-                  onError={() => setArtOk(false)}
-                />
-              ) : (
-                <div className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl bg-white/10 flex items-center justify-center">
-                  <Icons.Playlist />
-                </div>
-              )}
+              {/* Artwork */}
+              <div className="flex-shrink-0 px-8 pt-4 pb-6">
+                {artOk ? (
+                  <img
+                    src={`/api/art/${props.nowPlaying.id}`}
+                    alt=""
+                    draggable={false}
+                    className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl object-cover shadow-2xl"
+                    onError={() => setArtOk(false)}
+                  />
+                ) : (
+                  <div className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl bg-white/10 flex items-center justify-center">
+                    <Icons.Playlist />
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Track Info */}
@@ -1033,19 +1229,30 @@ function PlayerBar(props: {
             {/* Queue Section */}
             {props.queue && props.queue.length > 1 && (
               <div className="flex-1 px-4 pb-8">
-                <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wide px-4 mb-3">
-                  Queue ({formatCount(props.queue.length, 'track')})
-                </h3>
-                <div className="space-y-1 max-h-[300px] overflow-y-auto">
+                <div className="mb-3 flex items-center justify-between gap-3 px-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-wide text-white/70">
+                    Queue ({formatCount(props.queue.length, 'track')})
+                  </h3>
+                  <span className="text-[11px] text-white/40">Hold and drag to reorder</span>
+                </div>
+                <div ref={mobileQueueListRef} className="space-y-1 max-h-[300px] overflow-y-auto overscroll-contain">
                   {props.queue.map((track, idx) => (
                     <button
                       key={`${track.id}-${idx}`}
-                      onClick={() => props.onPlayQueueItem?.(idx)}
-                      className={`w-full flex items-center gap-3 p-3 rounded-lg transition ${
+                      type="button"
+                      data-mobile-queue-index={idx}
+                      onTouchStart={(event) => startQueueLongPress(event, idx)}
+                      onContextMenu={(event) => event.preventDefault()}
+                      onClick={() => {
+                        if (Date.now() < suppressQueueClickUntilRef.current) return;
+                        props.onPlayQueueItem?.(idx);
+                      }}
+                      className={`relative w-full flex items-center gap-3 p-3 rounded-lg transition touch-pan-y select-none ${
                         idx === props.queueIndex 
                           ? 'bg-cyan-500/20 text-cyan-400' 
                           : 'text-white/70 hover:bg-white/10'
-                      }`}
+                      } ${touchDraggedIdx === idx ? 'z-10 scale-[1.02] bg-white/15 shadow-xl ring-1 ring-cyan-400/60' : ''}`}
+                      style={{ WebkitTouchCallout: 'none' }}
                     >
                       <span className="w-6 text-center text-sm opacity-50">{idx + 1}</span>
                       <div className="flex-1 min-w-0 text-left">
