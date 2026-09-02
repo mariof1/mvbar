@@ -348,18 +348,18 @@ export function Settings() {
               
               <div className="flex items-start gap-6">
                 {/* Avatar */}
-                <div className="flex flex-col items-center gap-2">
-                  <div className="relative group">
-                    {profile?.avatar_path ? (
+                <div className="flex shrink-0 flex-col items-center gap-2">
+                  <div className="group relative h-20 w-20 shrink-0 overflow-hidden rounded-full">
+                    <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-cyan-500 to-blue-600 text-2xl font-bold text-white">
+                      {user.email[0].toUpperCase()}
+                    </div>
+                    {profile?.avatar_path && (
                       <img
-                        src={`/api/avatars/${profile.avatar_path}`}
+                        src={`/api/avatars/${encodeURIComponent(profile.avatar_path)}`}
                         alt="Avatar"
-                        className="w-20 h-20 rounded-full object-cover"
+                        className="absolute inset-0 block h-full w-full object-cover"
+                        onError={(event) => { event.currentTarget.style.display = 'none'; }}
                       />
-                    ) : (
-                      <div className="w-20 h-20 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-2xl font-bold text-white">
-                        {user.email[0].toUpperCase()}
-                      </div>
                     )}
                     <button
                       onClick={() => fileInputRef.current?.click()}
@@ -389,8 +389,8 @@ export function Settings() {
                 </div>
 
                 {/* User Info */}
-                <div className="flex-1 space-y-2">
-                  <div className="text-lg font-medium text-white">{user.email}</div>
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="break-words text-lg font-medium text-white">{user.email}</div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="px-2 py-0.5 bg-slate-700 rounded text-xs text-slate-400">{user.role}</span>
                     {profile?.auth_type === 'google' && (
