@@ -276,7 +276,10 @@ export function Recommendations() {
       {buckets.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-white">Your Library</h3>
+            <div>
+              <h3 className="text-lg font-semibold text-white">Made for you</h3>
+              <p className="text-xs text-slate-500">A focused mix of favourites, rediscovery, and new finds</p>
+            </div>
             {wsRefreshing && <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />}
           </div>
           <div ref={bucketsRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">

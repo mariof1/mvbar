@@ -5,6 +5,8 @@ import { db, redis } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
 import { findSimilarLocalArtists, isLastfmEnabled } from './lastfm.js';
 import { fetchRecommendations as fetchLBRecommendations, lookupRecording, getUserLBConfig } from './listenbrainz.js';
+import { artistNamesFromValue } from './artistDisplay.js';
+import { curateRecommendationBuckets, recommendationMaturity } from './recommendationCuration.js';
 
 // ============================================================================
 // GENRE TAXONOMY - Comprehensive genre families
@@ -63,6 +65,15 @@ function dailySeed(...parts: (string | number)[]): number {
   return parseInt(hash.slice(0, 12), 16);
 }
 
+function weeklySeed(...parts: (string | number)[]): number {
+  const now = new Date();
+  const day = now.getUTCDay() || 7;
+  const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - day + 1));
+  const week = monday.toISOString().split('T')[0];
+  const hash = crypto.createHash('sha256').update(`${week}:${parts.join(':')}`).digest('hex');
+  return parseInt(hash.slice(0, 12), 16);
+}
+
 function seededRandom(seed: number): () => number {
   let s = seed;
   return () => {
@@ -79,6 +90,19 @@ function seededShuffle<T>(arr: T[], seed: number): T[] {
     [result[i], result[j]] = [result[j], result[i]];
   }
   return result;
+}
+
+function seededWeightedOrder<T>(arr: T[], seed: number, weight: (value: T) => number): T[] {
+  const rand = seededRandom(seed);
+  return arr
+    .map((value) => ({
+      value,
+      // Weighted sampling without replacement: stronger tastes appear more
+      // often, while smaller tastes still get a chance to rotate in.
+      rank: -Math.log(Math.max(rand(), Number.EPSILON)) / Math.max(0.01, weight(value)),
+    }))
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ value }) => value);
 }
 
 function seededNoise(seed: number, n: number): number {
@@ -103,14 +127,6 @@ function foldDiacritics(str: string): string {
     .replace(/æ/g, 'ae')
     .replace(/œ/g, 'oe')
     .toLowerCase();
-}
-
-function getTimeContext(): { period: 'morning' | 'afternoon' | 'evening' | 'night'; energyBias: number } {
-  const hour = new Date().getHours();
-  if (hour >= 6 && hour < 12) return { period: 'morning', energyBias: 0.3 };
-  if (hour >= 12 && hour < 17) return { period: 'afternoon', energyBias: 0.5 };
-  if (hour >= 17 && hour < 22) return { period: 'evening', energyBias: 0.7 };
-  return { period: 'night', energyBias: 0.2 };
 }
 
 // ============================================================================
@@ -211,6 +227,12 @@ function clamp(value: number, min: number, max: number): number {
 
 function normalizeFeature(value: string | null | undefined): string {
   return foldDiacritics(String(value ?? '').trim()).replace(/\s+/g, ' ');
+}
+
+function artistKeys(value: unknown): string[] {
+  return artistNamesFromValue(value)
+    .map((artist) => normalizeFeature(artist))
+    .filter(Boolean);
 }
 
 function splitFeatureList(value: string | null | undefined): string[] {
@@ -395,9 +417,8 @@ async function buildTasteProfile(userId: string, allowed: number[] | null, now: 
   for (const row of rows.rows) {
     const positive = interactionPositiveWeight(row, now);
     const negative = interactionNegativeWeight(row, now);
-    const artist = normalizeFeature(row.artist);
+    const artists = artistKeys(row.artist);
     const album = normalizeFeature(row.album);
-    const albumKey = artist && album ? `${artist}::${album}` : null;
     const genres = splitFeatureList(row.genre);
     const families = genreFamilyKeys(genres);
     const countries = splitFeatureList(row.country);
@@ -407,8 +428,11 @@ async function buildTasteProfile(userId: string, allowed: number[] | null, now: 
     if (positive > 0) {
       totalPositive += positive;
       profile.positiveSamples++;
-      incrementWeight(profile.artistWeights, artist, positive * 1.25);
-      incrementWeight(profile.albumWeights, albumKey, positive * 0.5);
+      for (const [index, artist] of artists.entries()) {
+        const creditWeight = index === 0 ? 1 : 0.5;
+        incrementWeight(profile.artistWeights, artist, positive * 1.25 * creditWeight);
+        incrementWeight(profile.albumWeights, album ? `${artist}::${album}` : null, positive * 0.5 * creditWeight);
+      }
       incrementWeight(profile.decadeWeights, decade, positive * 0.45);
       for (const genre of genres) incrementWeight(profile.genreWeights, genre, positive * 1.05);
       for (const family of families) incrementWeight(profile.familyWeights, family, positive * 0.9);
@@ -424,7 +448,9 @@ async function buildTasteProfile(userId: string, allowed: number[] | null, now: 
     }
 
     if (negative > 0) {
-      incrementWeight(profile.dislikedArtistWeights, artist, negative * 0.8);
+      for (const [index, artist] of artists.entries()) {
+        incrementWeight(profile.dislikedArtistWeights, artist, negative * 0.8 * (index === 0 ? 1 : 0.5));
+      }
       for (const genre of genres) incrementWeight(profile.dislikedGenreWeights, genre, negative * 0.75);
       for (const family of families) incrementWeight(profile.dislikedFamilyWeights, family, negative * 0.6);
     }
@@ -457,9 +483,8 @@ async function buildTasteProfile(userId: string, allowed: number[] | null, now: 
 function tasteScoreTrack(track: TrackData, profile: TasteProfile, purpose: ScoringOptions['purpose']): number {
   if (profile.confidence <= 0) return 0;
 
-  const artist = normalizeFeature(track.artist);
+  const artists = artistKeys(track.artist);
   const album = normalizeFeature(track.album);
-  const albumKey = artist && album ? `${artist}::${album}` : null;
   const genres = trackGenreList(track);
   const families = genreFamilyKeys(genres);
   const countries = splitFeatureList(track.country);
@@ -467,15 +492,19 @@ function tasteScoreTrack(track: TrackData, profile: TasteProfile, purpose: Scori
   const decade = decadeKey(track.year);
 
   let score = 0;
-  score += mapScore(profile.artistWeights, artist);
-  score += mapScore(profile.albumWeights, albumKey);
+  const artistScores = artists.map((artist) => mapScore(profile.artistWeights, artist)).sort((a, b) => b - a);
+  const albumScores = artists
+    .map((artist) => mapScore(profile.albumWeights, album ? `${artist}::${album}` : null))
+    .sort((a, b) => b - a);
+  score += Math.min(20, (artistScores[0] || 0) + artistScores.slice(1).reduce((sum, value) => sum + value * 0.25, 0));
+  score += Math.min(6, (albumScores[0] || 0) + albumScores.slice(1).reduce((sum, value) => sum + value * 0.25, 0));
   score += mapScore(profile.decadeWeights, decade);
   score += Math.min(16, genres.reduce((sum, genre) => sum + mapScore(profile.genreWeights, genre), 0));
   score += Math.min(12, families.reduce((sum, family) => sum + mapScore(profile.familyWeights, family), 0));
   score += Math.min(4, countries.reduce((sum, country) => sum + mapScore(profile.countryWeights, country), 0));
   score += Math.min(4, languages.reduce((sum, language) => sum + mapScore(profile.languageWeights, language), 0));
 
-  score -= mapScore(profile.dislikedArtistWeights, artist);
+  score -= Math.min(14, artists.reduce((max, artist) => Math.max(max, mapScore(profile.dislikedArtistWeights, artist)), 0));
   score -= Math.min(10, genres.reduce((sum, genre) => sum + mapScore(profile.dislikedGenreWeights, genre), 0));
   score -= Math.min(8, families.reduce((sum, family) => sum + mapScore(profile.dislikedFamilyWeights, family), 0));
 
@@ -487,7 +516,7 @@ function tasteScoreTrack(track: TrackData, profile: TasteProfile, purpose: Scori
   }
 
   if (purpose === 'discovery' && track.play_count === 0) score += 5;
-  if (purpose === 'discovery' && mapScore(profile.artistWeights, artist) > 12) score -= 2;
+  if (purpose === 'discovery' && artistScores.some((value) => value > 12)) score -= 2;
   if (purpose === 'familiar' && track.is_favorite) score += 5;
 
   return clamp(score * (0.55 + profile.confidence * 0.45), -35, 65);
@@ -585,15 +614,15 @@ function filterHighSkipRatio(tracks: TrackData[]): TrackData[] {
 
 function diversify(
   tracks: TrackData[],
-  opts: { maxPerArtist?: number; maxPerAlbum?: number; limit?: number; seed?: number; filterSkips?: boolean }
+  opts: { maxPerArtist?: number; maxPerAlbum?: number; limit?: number; seed?: number; filterSkips?: boolean; rotationStrength?: number }
 ): TrackData[] {
-  const { maxPerArtist = 2, maxPerAlbum = 3, limit = 25, seed, filterSkips = true } = opts;
+  const { maxPerArtist = 2, maxPerAlbum = 3, limit = 25, seed, filterSkips = true, rotationStrength = 4 } = opts;
   
   // Filter out heavily skipped tracks
   const filtered = filterSkips ? filterHighSkipRatio(tracks) : tracks;
   const sorted = [...filtered].sort((a, b) => {
-    const aScore = (a.score || 0) + (seed === undefined ? 0 : seededNoise(seed, a.id) * 1.5);
-    const bScore = (b.score || 0) + (seed === undefined ? 0 : seededNoise(seed, b.id) * 1.5);
+    const aScore = (a.score || 0) + (seed === undefined ? 0 : seededNoise(seed, a.id) * rotationStrength);
+    const bScore = (b.score || 0) + (seed === undefined ? 0 : seededNoise(seed, b.id) * rotationStrength);
     return bScore - aScore;
   });
   
@@ -602,19 +631,34 @@ function diversify(
   const albumCount = new Map<string, number>();
   
   for (const track of sorted) {
-    const artist = (track.artist || '').toLowerCase();
-    const album = (track.album || '').toLowerCase();
+    const artists = artistKeys(track.artist);
+    const albumName = normalizeFeature(track.album);
+    const album = albumName ? `${artists[0] || 'unknown'}::${albumName}` : '';
     
-    if ((artistCount.get(artist) || 0) >= maxPerArtist) continue;
+    if (artists.some((artist) => (artistCount.get(artist) || 0) >= maxPerArtist)) continue;
     if (album && (albumCount.get(album) || 0) >= maxPerAlbum) continue;
     
     result.push(track);
-    artistCount.set(artist, (artistCount.get(artist) || 0) + 1);
+    for (const artist of artists) artistCount.set(artist, (artistCount.get(artist) || 0) + 1);
     if (album) albumCount.set(album, (albumCount.get(album) || 0) + 1);
     
     if (result.length >= limit) break;
   }
   
+  return result;
+}
+
+function interleaveTracks(primary: TrackData[], secondary: TrackData[], limit: number): TrackData[] {
+  const result: TrackData[] = [];
+  let primaryIndex = 0;
+  let secondaryIndex = 0;
+  while (result.length < limit && (primaryIndex < primary.length || secondaryIndex < secondary.length)) {
+    const preferSecondary = result.length % 3 === 2;
+    const next = preferSecondary
+      ? secondary[secondaryIndex++] ?? primary[primaryIndex++]
+      : primary[primaryIndex++] ?? secondary[secondaryIndex++];
+    if (next) result.push(next);
+  }
   return result;
 }
 
@@ -634,7 +678,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // ========================================================================
     const RECO_CACHE_TTL = 300;
     const allowedKey = allowed === null ? 'all' : (allowed.length > 0 ? [...allowed].sort((a, b) => a - b).join(',') : 'none');
-    const cacheKey = `reco:v6:${userId}:${allowedKey}`;
+    const cacheKey = `reco:v7:${userId}:${allowedKey}`;
     try {
       const cached = await redis().get(cacheKey);
       if (cached) {
@@ -645,7 +689,6 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     } catch { /* Redis unavailable → compute fresh */ }
 
     const now = Date.now();
-    const timeContext = getTimeContext();
     const buckets: Bucket[] = [];
 
     // ========================================================================
@@ -680,17 +723,17 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       };
     }
 
-    async function addBucket(key: string, name: string, tracks: TrackData[], subtitle?: string, reason?: string) {
-      if (buckets.some((bucket) => bucket.key === key)) return;
+    async function addBucket(key: string, name: string, tracks: TrackData[], subtitle?: string, reason?: string): Promise<boolean> {
+      if (buckets.some((bucket) => bucket.key === key)) return false;
 
       const seen = new Set<number>();
       const uniqueTracks = tracks.filter((track) => {
         if (!Number.isFinite(Number(track.id)) || seen.has(track.id)) return false;
         seen.add(track.id);
         return true;
-      }).slice(0, 60);
+      }).slice(0, 30);
 
-      if (uniqueTracks.length < 4) return;
+      if (uniqueTracks.length < 4) return false;
       const art = await getBucketArt(uniqueTracks.map(t => t.id));
       
       buckets.push({
@@ -707,6 +750,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
         })),
         ...art
       });
+      return true;
     }
 
     function currentBucketTrackIds(): Set<number> {
@@ -798,28 +842,21 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     );
     const recentlyPlayedIds = new Set(recentR.rows.map(r => r.track_id));
 
-    // Cooldown window (3d): avoid repeating the same tracks in mood-style buckets
-    const recentCooldownR = await db().query<{ track_id: number }>(
-      `select distinct ph.track_id
-       from play_history ph
-       join active_tracks t on t.id = ph.track_id
-       where ph.user_id = $1 and ph.played_at > now() - interval '3 days'
-         ${allowed ? `and t.library_id = any($2::bigint[])` : ''}`,
-      allowed ? [userId, allowed] : [userId]
-    );
-    const cooldownIds = new Set(recentCooldownR.rows.map(r => r.track_id));
-
     const scoringOpts: ScoringOptions = { purpose: 'mixed', now, recentlyPlayedIds, favoriteIds };
     const tasteProfile = await buildTasteProfile(userId, allowed, now);
     scoringOpts.tasteProfile = tasteProfile;
 
     // Top artists
     const topArtistsR = await db().query<{ artist: string; plays: number }>(
-      `select t.artist, sum(s.play_count)::int as plays
-       from user_track_stats s join active_tracks t on t.id = s.track_id
-       where s.user_id = $1 and t.artist is not null and s.play_count > 0
+      `select a.name as artist,
+              sum(s.play_count * case when ta.position = 0 then 1.0 else 0.5 end)::int as plays
+       from user_track_stats s
+       join active_tracks t on t.id = s.track_id
+       join track_artists ta on ta.track_id = t.id and ta.role = 'artist'
+       join artists a on a.id = ta.artist_id
+       where s.user_id = $1 and s.play_count > 0
          ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
-       group by t.artist order by plays desc limit 20`,
+       group by a.id, a.name order by plays desc limit 20`,
       allowed ? [userId, allowed] : [userId]
     );
 
@@ -878,8 +915,27 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
         }))
         .filter(t => (t.score || 0) > 4);
 
-      const diverse = diversify(scored, { maxPerArtist: 2, maxPerAlbum: 3, limit: 60, seed });
-      await addBucket('made_for_you', 'Made For You', diverse, 'Ranked from your plays, favorites, playlists, and skips');
+      // Keep the anchor mix familiar enough to trust while reserving roughly
+      // one in three positions for a relevant unplayed track. This also keeps
+      // it meaningfully distinct from the all-unplayed Discover Weekly mix.
+      const familiar = diversify(
+        scored.filter((track) => track.play_count > 0 || track.is_favorite),
+        { maxPerArtist: 2, maxPerAlbum: 3, limit: 21, seed, rotationStrength: 6 },
+      );
+      const unplayed = diversify(
+        scored.filter((track) => track.play_count === 0 && !track.is_favorite),
+        { maxPerArtist: 2, maxPerAlbum: 3, limit: 9, seed: seed + 1, rotationStrength: 7 },
+      );
+      const selectedIds = new Set([...familiar, ...unplayed].map((track) => track.id));
+      const remaining = 30 - familiar.length - unplayed.length;
+      const extras = remaining > 0
+        ? diversify(
+            scored.filter((track) => !selectedIds.has(track.id)),
+            { maxPerArtist: 2, maxPerAlbum: 3, limit: remaining, seed: seed + 2, rotationStrength: 7 },
+          )
+        : [];
+      const blended = [...interleaveTracks(familiar, unplayed, 30), ...extras].slice(0, 30);
+      await addBucket('made_for_you', 'Made For You', blended, 'Your taste, balanced with a few new discoveries');
     }
 
     // Top genre + country combos (for "Polish Hip-Hop" style buckets)
@@ -993,12 +1049,18 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const onRepeatR = await db().query<TrackData>(
       `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-              s.play_count, s.skip_count, s.last_played_at,
+              count(*)::int as play_count,
+              coalesce(s.skip_count, 0)::int as skip_count,
+              max(ph.played_at) as last_played_at,
               false as is_favorite, null as updated_at
-       from user_track_stats s join active_tracks t on t.id = s.track_id
-       where s.user_id = $1 and s.last_played_at > now() - interval '14 days' and s.play_count >= 2
+       from play_history ph
+       join active_tracks t on t.id = ph.track_id
+       left join user_track_stats s on s.track_id = t.id and s.user_id = $1
+       where ph.user_id = $1 and ph.played_at > now() - interval '14 days'
          ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
-       order by s.play_count desc limit 100`,
+       group by t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, s.skip_count
+       having count(*) >= 2
+       order by play_count desc, last_played_at desc limit 100`,
       allowed ? [userId, allowed] : [userId]
     );
 
@@ -1035,25 +1097,6 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     // ========================================================================
-    // BUCKET: FAVORITES
-    // ========================================================================
-
-    if (favoriteIds.size > 0) {
-      const favsR = await db().query<TrackData>(
-        `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                coalesce(s.play_count, 0)::int as play_count,
-                coalesce(s.skip_count, 0)::int as skip_count,
-                s.last_played_at, true as is_favorite, f.added_at as updated_at
-         from favorite_tracks f join active_tracks t on t.id = f.track_id
-         left join user_track_stats s on s.track_id = t.id and s.user_id = $1
-         where f.user_id = $1 ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
-         order by f.added_at desc limit 30`,
-        allowed ? [userId, allowed] : [userId]
-      );
-      await addBucket('favorites', 'Your Favorites', favsR.rows, `${favoriteIds.size} loved tracks`);
-    }
-
-    // ========================================================================
     // BUCKET: BECAUSE YOU SEARCHED "X" (up to 5)
     // ========================================================================
 
@@ -1063,7 +1106,9 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
        from (
          select query, query_normalized, max(created_at) as latest
          from search_logs 
-         where user_id = $1 and result_count >= 5 and length(query_normalized) >= 3
+         where user_id = $1
+           and created_at > now() - interval '30 days'
+           and result_count >= 5 and length(query_normalized) >= 3
          group by query, query_normalized
        ) t order by latest desc`,
       [userId]
@@ -1204,7 +1249,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       // Rotate through top artists daily — pick 2-3 different artists each day
       const artistPool = topArtistsR.rows.slice(0, 8);
       const artistSeed = dailySeed(userId, 'similar_artists');
-      const shuffledArtists = seededShuffle(artistPool, artistSeed);
+      const shuffledArtists = seededWeightedOrder(artistPool, artistSeed, (artist) => artist.plays);
       const artistsToUse = shuffledArtists.slice(0, 3);
 
       for (const topArtist of artistsToUse) {
@@ -1217,7 +1262,13 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
                     coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                     s.last_played_at, false as is_favorite, null as updated_at
              from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
-             where lower(t.artist) = any($2) ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
+             where exists (
+                     select 1
+                     from track_artists ta
+                     join artists a on a.id = ta.artist_id
+                     where ta.track_id = t.id and ta.role = 'artist' and lower(a.name) = any($2::text[])
+                   )
+               ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
              order by coalesce(s.play_count, 0) desc limit 150`,
             allowed ? [userId, similarNames, allowed] : [userId, similarNames]
           );
@@ -1228,12 +1279,13 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
               score: t.play_count === 0 ? 20 : 10 - Math.min(t.play_count, 5)
             }));
             const diverse = diversify(scored, { maxPerArtist: 3, limit: 50, seed: dailySeed(userId, 'similar', topArtist.artist) });
-            await addBucket(
+            const added = await addBucket(
               `similar_to_${topArtist.artist.toLowerCase().replace(/\W/g, '_').slice(0, 30)}`,
               `Similar to ${topArtist.artist}`,
               diverse,
               'Artists you might like'
             );
+            if (added) break;
           }
         }
       }
@@ -1244,7 +1296,12 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // ========================================================================
 
     const usedFamilyCountryCombos = new Set<string>();
-    for (const gc of genreCountryR.rows.slice(0, 8)) {
+    const rotatingGenreCountries = seededWeightedOrder(
+      genreCountryR.rows.slice(0, 5),
+      dailySeed(userId, 'genre_country_bucket'),
+      (item) => item.plays,
+    );
+    for (const gc of rotatingGenreCountries) {
       // Map genre to family for nicer label and deduplication
       const family = tokenToFamily.get(gc.genre.toLowerCase());
       const familyKey = family?.key || gc.genre.toLowerCase();
@@ -1280,12 +1337,13 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       if (gcR.rows.length >= 10) {
         const scored = gcR.rows.map(t => ({ ...t, score: scoreTrack(t, scoringOpts) }));
         const diverse = diversify(scored, { maxPerArtist: 3, limit: 50 });
-        await addBucket(
+        const added = await addBucket(
           `genre_country_${familyKey}_${gc.country.toLowerCase().replace(/\W/g, '_')}`,
           `${gc.country} ${genreLabel}`,
           diverse,
           `A ${gc.country} ${genreLabel.toLowerCase()} vibe`
         );
+        if (added) break;
       }
     }
 
@@ -1293,7 +1351,12 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // BUCKET: DECADE FAVORITES (e.g., "Your 90s Favorites")
     // ========================================================================
 
-    for (const dec of decadesR.rows.slice(0, 2)) {
+    const rotatingDecades = seededWeightedOrder(
+      decadesR.rows.slice(0, 3),
+      dailySeed(userId, 'decade_bucket'),
+      (item) => item.plays,
+    );
+    for (const dec of rotatingDecades) {
       if (dec.plays < 5) continue;
       
       const decadeR = await db().query<TrackData>(
@@ -1318,12 +1381,13 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
         const decadeLabel = dec.decade === 2000 ? '2000s' : 
                            dec.decade === 2010 ? '2010s' : 
                            dec.decade === 2020 ? '2020s' : `${dec.decade}s`;
-        await addBucket(
+        const added = await addBucket(
           `decade_${dec.decade}`,
-          `Your ${decadeLabel} Favorites`,
+          `Your ${decadeLabel} Mix`,
           diverse,
           `Throwback to the ${decadeLabel}`
         );
+        if (added) break;
       }
     }
 
@@ -1331,7 +1395,12 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // BUCKET: LANGUAGE MIX (e.g., "More Polish Music")
     // ========================================================================
 
-    for (const lang of languagesR.rows.slice(0, 2)) {
+    const rotatingLanguages = seededWeightedOrder(
+      languagesR.rows.slice(0, 3),
+      dailySeed(userId, 'language_bucket'),
+      (item) => item.plays,
+    );
+    for (const lang of rotatingLanguages) {
       if (lang.plays < 5 || lang.language.toLowerCase() === 'english') continue;
       
       const langR = await db().query<TrackData>(
@@ -1353,12 +1422,13 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       if (langR.rows.length >= 15) {
         const scored = langR.rows.map(t => ({ ...t, score: scoreTrack(t, scoringOpts) }));
         const diverse = diversify(scored, { maxPerArtist: 3, limit: 50 });
-        await addBucket(
+        const added = await addBucket(
           `language_${lang.language.toLowerCase().replace(/\W/g, '_')}`,
           `More ${lang.language} Music`,
           diverse,
           `A bit more ${lang.language}`
         );
+        if (added) break;
       }
     }
 
@@ -1386,9 +1456,14 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       .sort((a, b) => b[1].score - a[1].score)
       .slice(0, 4);
 
-    let mixNum = 1;
-    for (const [, familyData] of rankedFamilies) {
-      const genreList = [...familyData.genres];
+    const rotatingFamilies = seededWeightedOrder(
+      rankedFamilies,
+      dailySeed(userId, 'daily_mix_bucket'),
+      ([, family]) => family.score,
+    );
+    for (const [familyKey, familyData] of rotatingFamilies) {
+      const family = GENRE_FAMILIES.find((candidate) => candidate.key === familyKey);
+      const genreList = family ? family.tokens : [...familyData.genres];
       
       const mixR = await db().query<TrackData>(
         `select distinct on (t.id) 
@@ -1409,17 +1484,17 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       if (mixR.rows.length < 15) continue;
 
       const scored = mixR.rows.map(t => ({ ...t, score: scoreTrack(t, scoringOpts) }));
-      const seed = dailySeed(userId, 'daily_mix', mixNum);
+      const seed = dailySeed(userId, 'daily_mix', familyKey);
       const diverse = diversify(scored, { maxPerArtist: 3, maxPerAlbum: 3, limit: 50, seed });
 
       if (diverse.length >= 10) {
-        await addBucket(
-          `daily_mix_${mixNum}`,
-          `Daily Mix ${mixNum}`,
+        const added = await addBucket(
+          `daily_mix_${familyKey.replace(/\W/g, '_')}`,
+          `${familyData.label} Mix`,
           diverse,
-          `${familyData.label} • Refreshed daily`
+          'Familiar favourites and new finds • Refreshed daily'
         );
-        mixNum++;
+        if (added) break;
       }
     }
 
@@ -1473,7 +1548,13 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
                 coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                 s.last_played_at, false as is_favorite
          from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
-         where lower(t.artist) = any($2) and (s.play_count is null or s.play_count < 2)
+         where exists (
+                 select 1
+                 from track_artists ta
+                 join artists a on a.id = ta.artist_id
+                 where ta.track_id = t.id and ta.role = 'artist' and lower(a.name) = any($2::text[])
+               )
+           and (s.play_count is null or s.play_count < 2)
            and coalesce(t.birthtime_ms, extract(epoch from t.created_at) * 1000) > extract(epoch from (now() - interval '90 days')) * 1000
            ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
          order by coalesce(t.birthtime_ms, extract(epoch from t.created_at) * 1000) desc limit 150`,
@@ -1485,7 +1566,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
           newFromR.rows.map(t => ({ ...t, score: 10 })),
           { maxPerArtist: 3, limit: 50 }
         );
-        await addBucket('new_from_artists', 'New From Artists You Love', diverse, 'Fresh tracks from your favorites');
+        await addBucket('new_from_artists', 'New in Your Library', diverse, 'Recently added tracks from artists you love');
       }
     }
 
@@ -1495,7 +1576,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
 
     if (topGenresR.rows.length > 0) {
       const likedGenres = new Set(topGenresR.rows.slice(0, 10).map(g => g.genre.toLowerCase()));
-      const topArtistNames = new Set(topArtistsR.rows.slice(0, 15).map(a => a.artist.toLowerCase()));
+      const topArtistNames = new Set(topArtistsR.rows.slice(0, 15).map(a => normalizeFeature(a.artist)));
       
       // Use genre family matching for broader coverage, plus artist affinity
       const likedFamilyKeys = new Set<string>();
@@ -1507,15 +1588,20 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       const discoverR = await db().query<TrackData & { genres: string[] }>(
         `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
                 t.genre, t.country, t.language, t.year, t.bpm, t.duration_ms, t.updated_at,
-                0 as play_count, 0 as skip_count, null::timestamptz as last_played_at, false as is_favorite,
+                coalesce(s.play_count, 0)::int as play_count,
+                coalesce(s.skip_count, 0)::int as skip_count,
+                s.last_played_at,
+                case when f.track_id is not null then true else false end as is_favorite,
                 array_agg(tg.genre) as genres
          from active_tracks t join track_genres tg on tg.track_id = t.id
          left join user_track_stats s on s.track_id = t.id and s.user_id = $1
+         left join favorite_tracks f on f.track_id = t.id and f.user_id = $1
          where (s.play_count is null or s.play_count = 0)
            ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
          group by t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-                  t.genre, t.country, t.language, t.year, t.bpm, t.duration_ms, t.updated_at
-         order by t.updated_at desc nulls last limit 500`,
+                  t.genre, t.country, t.language, t.year, t.bpm, t.duration_ms, t.updated_at,
+                  s.play_count, s.skip_count, s.last_played_at, f.track_id
+         order by t.updated_at desc nulls last limit 2000`,
         allowed ? [userId, allowed] : [userId]
       );
 
@@ -1532,7 +1618,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
           }
         }
         // Bonus for tracks by artists similar to user's top artists
-        const artistBonus = topArtistNames.has((t.artist || '').toLowerCase()) ? 3 : 0;
+        const artistBonus = artistKeys(t.artist).some((artist) => topArtistNames.has(artist)) ? 3 : 0;
         // Artist "adjacent" bonus — same album as a played track's artist gets a small boost
         const freshness = t.updated_at ? Math.max(0, 30 - (now - new Date(t.updated_at).getTime()) / 86400000) : 0;
         return {
@@ -1546,8 +1632,8 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       }).filter(t => t.score > 0);
 
       if (scored.length >= 10) {
-        const diverse = diversify(scored, { maxPerArtist: 2, limit: 50, seed: dailySeed(userId, 'discover') });
-        await addBucket('discover_weekly', 'Discover Weekly', diverse, 'Fresh picks based on your taste');
+        const diverse = diversify(scored, { maxPerArtist: 2, limit: 30, seed: weeklySeed(userId, 'discover'), rotationStrength: 8 });
+        await addBucket('discover_weekly', 'Discover Weekly', diverse, 'Unplayed picks based on your taste • Updates Monday');
       }
     }
 
@@ -1562,7 +1648,13 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
                 coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
                 s.last_played_at, false as is_favorite, null as updated_at
          from active_tracks t left join user_track_stats s on s.track_id = t.id and s.user_id = $1
-         where lower(t.artist) = any($2) and coalesce(s.play_count, 0) < 2
+         where exists (
+                 select 1
+                 from track_artists ta
+                 join artists a on a.id = ta.artist_id
+                 where ta.track_id = t.id and ta.role = 'artist' and lower(a.name) = any($2::text[])
+               )
+           and coalesce(s.play_count, 0) < 2
            ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
          order by t.id limit 300`,
         allowed ? [userId, topNames, allowed] : [userId, topNames]
@@ -1599,11 +1691,11 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       );
 
       if (lovedAlbumsR.rows.length >= 2) {
-        // Pick 1-2 albums with daily rotation
+        // Pick one album with daily rotation.
         const albumSeed = dailySeed(userId, 'because_album');
-        const shuffled = seededShuffle(lovedAlbumsR.rows, albumSeed);
+        const shuffled = seededWeightedOrder(lovedAlbumsR.rows, albumSeed, (album) => album.plays);
 
-        for (const album of shuffled.slice(0, 2)) {
+        for (const album of shuffled) {
           const becauseConditions = ['t.album is distinct from $2', 'lower(t.artist) = lower($3)'];
           const becauseParams: unknown[] = [userId, album.album, album.artist];
 
@@ -1638,114 +1730,15 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
                      (t.artist?.toLowerCase() === album.artist.toLowerCase() ? 10 : 0)
             }));
             const diverse = diversify(scored, { maxPerArtist: 2, limit: 30, seed: albumSeed });
-            await addBucket(
+            const added = await addBucket(
               `because_${album.album.toLowerCase().replace(/\W/g, '_').slice(0, 25)}`,
               `Because You Like "${album.album}"`,
               diverse,
               `More like ${album.artist}`
             );
+            if (added) break;
           }
         }
-      }
-    }
-
-    // ========================================================================
-    // BUCKET: TIME-BASED MOOD
-    // ========================================================================
-
-    const moodConfig = {
-      morning: { name: 'Morning Coffee', subtitle: 'Easy listening to start your day', energies: ['low', 'medium'] },
-      afternoon: { name: 'Afternoon Boost', subtitle: 'Keep the momentum going', energies: ['medium', 'high'] },
-      evening: { name: 'Evening Vibes', subtitle: 'Wind down with these', energies: ['medium'] },
-      night: { name: 'Late Night', subtitle: 'Quiet hours companion', energies: ['low'] }
-    }[timeContext.period];
-
-    const moodGenres: string[] = [];
-    for (const fam of GENRE_FAMILIES) {
-      if (moodConfig.energies.includes(fam.energy)) {
-        moodGenres.push(...fam.tokens.slice(0, 5));
-      }
-    }
-
-    if (moodGenres.length > 0) {
-      // Target BPM from your recent listening, scoped to this time-of-day if we have enough data.
-      const period = timeContext.period;
-      const hourExpr = `extract(hour from ph.played_at)`;
-      const periodWhere =
-        period === 'morning'
-          ? `${hourExpr} >= 6 and ${hourExpr} < 12`
-          : period === 'afternoon'
-            ? `${hourExpr} >= 12 and ${hourExpr} < 17`
-            : period === 'evening'
-              ? `${hourExpr} >= 17 and ${hourExpr} < 22`
-              : `(${hourExpr} >= 22 or ${hourExpr} < 6)`;
-
-      const periodTempoR = await db().query<{ avg_bpm: number; count: number }>(
-        `select avg(t.bpm)::float as avg_bpm, count(*)::int as count
-         from play_history ph join active_tracks t on t.id = ph.track_id
-         where ph.user_id = $1
-           and ph.played_at > now() - interval '30 days'
-           and t.bpm is not null and t.bpm > 0
-           and ${periodWhere}
-           ${allowed ? `and t.library_id = any($2::bigint[])` : ''}`,
-        allowed ? [userId, allowed] : [userId]
-      );
-
-      const overallTempoR = await db().query<{ avg_bpm: number; count: number }>(
-        `select avg(t.bpm)::float as avg_bpm, count(*)::int as count
-         from user_track_stats s join active_tracks t on t.id = s.track_id
-         where s.user_id = $1 and t.bpm is not null and t.bpm > 0 and s.play_count > 0
-           and s.last_played_at > now() - interval '30 days'
-           ${allowed ? `and t.library_id = any($2::bigint[])` : ''}`,
-        allowed ? [userId, allowed] : [userId]
-      );
-
-      const targetBpm =
-        periodTempoR.rows[0]?.count >= 10
-          ? periodTempoR.rows[0].avg_bpm
-          : overallTempoR.rows[0]?.count >= 10
-            ? overallTempoR.rows[0].avg_bpm
-            : null;
-
-      const moodR = await db().query<TrackData>(
-        `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.bpm,
-                coalesce(s.play_count, 0)::int as play_count, coalesce(s.skip_count, 0)::int as skip_count,
-                s.last_played_at,
-                case when f.track_id is not null then true else false end as is_favorite,
-                null as updated_at
-         from active_tracks t
-         join track_genres tg on tg.track_id = t.id
-         left join user_track_stats s on s.track_id = t.id and s.user_id = $1
-         left join favorite_tracks f on f.track_id = t.id and f.user_id = $1
-         where lower(tg.genre) = any($2)
-           ${allowed ? `and t.library_id = any($3::bigint[])` : ''}
-         group by t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.bpm,
-                  s.play_count, s.skip_count, s.last_played_at, f.track_id
-         order by coalesce(s.play_count, 0) desc, random() limit 300`,
-        allowed ? [userId, moodGenres.slice(0, 30), allowed] : [userId, moodGenres.slice(0, 30)]
-      );
-
-      const cooldownFiltered = moodR.rows.filter((t) => !cooldownIds.has(t.id));
-      if (cooldownFiltered.length >= 10) {
-        const rotationWindow = Math.floor(now / (2 * 60 * 60 * 1000));
-        const seed = dailySeed(userId, 'mood', timeContext.period, rotationWindow);
-        const tolerance = 15;
-
-        const scored = cooldownFiltered.map((t) => {
-          const base = scoreTrack(t, scoringOpts);
-          const tempoBoost =
-            targetBpm && t.bpm
-              ? Math.max(0, tolerance - Math.abs(t.bpm - targetBpm)) * 1.2
-              : 0;
-          return { ...t, score: base + tempoBoost + seededNoise(seed, t.id) * 3 };
-        });
-
-        const diverse = diversify(scored, { maxPerArtist: 2, limit: 50, seed });
-        const subtitle = targetBpm
-          ? `${moodConfig.subtitle} • ~${Math.round(targetBpm)} BPM • Rotates every 2 hours`
-          : `${moodConfig.subtitle} • Rotates every 2 hours`;
-
-        await addBucket(`mood_${timeContext.period}`, moodConfig.name, diverse, subtitle);
       }
     }
 
@@ -1753,34 +1746,36 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // BUCKET: RECENTLY ADDED
     // ========================================================================
 
-    const recentlyAddedR = await db().query<TrackData & { added_ms: number }>(
-      `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
-              t.genre, t.country, t.language, t.year, t.bpm, t.duration_ms, t.updated_at,
-              coalesce(t.birthtime_ms, (extract(epoch from t.created_at) * 1000)::bigint) as added_ms,
-              coalesce(s.play_count, 0)::int as play_count,
-              coalesce(s.skip_count, 0)::int as skip_count,
-              s.last_played_at,
-              case when f.track_id is not null then true else false end as is_favorite
-       from active_tracks t
-       left join user_track_stats s on s.track_id = t.id and s.user_id = $1
-       left join favorite_tracks f on f.track_id = t.id and f.user_id = $1
-       where (t.duration_ms is null or t.duration_ms between 45000 and 1200000)
-         ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
-       order by added_ms desc nulls last
-       limit 160`,
-      allowed ? [userId, allowed] : [userId]
-    );
+    if (recommendationMaturity(tasteProfile.confidence) === 'new') {
+      const recentlyAddedR = await db().query<TrackData & { added_ms: number }>(
+        `select t.id, t.title, t.artist, t.album, t.art_path, t.art_hash,
+                t.genre, t.country, t.language, t.year, t.bpm, t.duration_ms, t.updated_at,
+                coalesce(t.birthtime_ms, (extract(epoch from t.created_at) * 1000)::bigint) as added_ms,
+                coalesce(s.play_count, 0)::int as play_count,
+                coalesce(s.skip_count, 0)::int as skip_count,
+                s.last_played_at,
+                case when f.track_id is not null then true else false end as is_favorite
+         from active_tracks t
+         left join user_track_stats s on s.track_id = t.id and s.user_id = $1
+         left join favorite_tracks f on f.track_id = t.id and f.user_id = $1
+         where (t.duration_ms is null or t.duration_ms between 45000 and 1200000)
+           ${allowed ? `and t.library_id = any($2::bigint[])` : ''}
+         order by added_ms desc nulls last
+         limit 160`,
+        allowed ? [userId, allowed] : [userId]
+      );
 
-    const recentlyAddedSorted = diversify(
-      recentlyAddedR.rows.map((t, idx) => ({
-        ...t,
-        score: Math.max(1, 40 - idx * 0.4) + (t.play_count === 0 ? 6 : 0)
-      })),
-      { maxPerArtist: 3, maxPerAlbum: 4, limit: 50, filterSkips: false }
-    );
+      const recentlyAddedSorted = diversify(
+        recentlyAddedR.rows.map((t, idx) => ({
+          ...t,
+          score: Math.max(1, 40 - idx * 0.4) + (t.play_count === 0 ? 6 : 0)
+        })),
+        { maxPerArtist: 3, maxPerAlbum: 4, limit: 30, filterSkips: false }
+      );
 
-    if (recentlyAddedSorted.length >= 4) {
-      await addBucket('recently_added', 'Recently Added', recentlyAddedSorted, 'Newest tracks in your library');
+      if (recentlyAddedSorted.length >= 4) {
+        await addBucket('recently_added', 'Recently Added', recentlyAddedSorted, 'A starting point while mvbar learns your taste');
+      }
     }
 
     // ========================================================================
@@ -1834,11 +1829,17 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // RETURN
     // ========================================================================
 
+    const curatedBuckets = curateRecommendationBuckets(buckets, {
+      confidence: tasteProfile.confidence,
+      seed: dailySeed(userId, 'recommendation_slate'),
+    });
+
     const result = {
       ok: true,
       generatedAt: new Date().toISOString(),
       lastfmEnabled: isLastfmEnabled(),
-      buckets
+      recommendationProfile: recommendationMaturity(tasteProfile.confidence),
+      buckets: curatedBuckets
     };
 
     // Cache the computed result

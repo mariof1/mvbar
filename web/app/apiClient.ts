@@ -980,6 +980,8 @@ export async function browseAlbum(token: string, artist: string | null | undefin
 export async function getRecommendations(token: string) {
   return (await apiFetch('/recommendations', { method: 'GET' }, token)) as {
     ok: boolean;
+    generatedAt?: string;
+    recommendationProfile?: 'new' | 'learning' | 'personalized';
     buckets: Array<{
       key: string;
       name: string;
