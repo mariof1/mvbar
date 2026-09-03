@@ -6,6 +6,7 @@ import * as stats from './statsRepo.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import { broadcastToUser } from './websocket.js';
 import { artistDisplay } from './artistDisplay.js';
+import { invalidateRecommendationCache } from './recommendationCache.js';
 
 export const historyPlugin: FastifyPluginAsync = fp(async (app) => {
   app.post('/api/history/:trackId', async (req, reply) => {
@@ -21,6 +22,7 @@ export const historyPlugin: FastifyPluginAsync = fp(async (app) => {
 
     await hist.addPlay(req.user.userId, trackId);
     await stats.incPlay(req.user.userId, trackId);
+    await invalidateRecommendationCache(req.user.userId);
     await audit('track_played', { by: req.user.userId, trackId });
     broadcastToUser(req.user.userId, 'history:added', { trackId, ts: Date.now() });
     return { ok: true };

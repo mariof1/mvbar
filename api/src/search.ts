@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { meili } from './meili.js';
 import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
+import { invalidateRecommendationCache } from './recommendationCache.js';
 
 // Normalize search query for deduplication
 function normalizeQuery(q: string): string {
@@ -48,6 +49,7 @@ export const searchPlugin: FastifyPluginAsync = fp(async (app) => {
             `insert into search_logs(user_id, query, query_normalized, result_count) values ($1, $2, $3, $4)`,
             [req.user.userId, q.trim(), normalized, res.estimatedTotalHits || 0]
           );
+          await invalidateRecommendationCache(req.user.userId);
         }
       }
 

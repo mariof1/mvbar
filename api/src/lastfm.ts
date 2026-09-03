@@ -194,7 +194,11 @@ export async function findSimilarLocalArtists(
   // Find which of these exist in our library
   const names = similar.map(s => s.name.toLowerCase());
   const localR = await db().query<{ artist: string }>(
-    `select distinct lower(artist) as artist from active_tracks where lower(artist) = any($1)`,
+    `select distinct lower(a.name) as artist
+       from artists a
+       join track_artists ta on ta.artist_id = a.id and ta.role = 'artist'
+       join active_tracks t on t.id = ta.track_id
+      where lower(a.name) = any($1::text[])`,
     [names]
   );
 

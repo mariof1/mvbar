@@ -5,6 +5,7 @@ import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
 import { asciiFold } from './asciiFold.js';
 import { artistDisplay } from './artistDisplay.js';
+import { invalidateRecommendationCache } from './recommendationCache.js';
 
 // ============================================================================
 // GENRE TAXONOMY (shared with recommendations)
@@ -814,6 +815,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
             `INSERT INTO search_logs(user_id, query, query_normalized, result_count) VALUES ($1, $2, $3, $4)`,
             [userId, q.trim(), normalized, (res.estimatedTotalHits || 0) + podcasts.length + podcastEpisodes.length]
           );
+          await invalidateRecommendationCache(userId);
         }
       }
 

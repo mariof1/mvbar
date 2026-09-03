@@ -23,6 +23,10 @@ function publishUpdate(event: string, data: Record<string, unknown>) {
   publisher.publish('library:updates', JSON.stringify({ event, ...data, ts: Date.now() }));
 }
 
+function invalidateRecommendations() {
+  void publisher.incr('reco:library_revision').catch(() => undefined);
+}
+
 // Scan progress tracking
 const scanProgress = {
   status: 'idle' as 'idle' | 'scanning' | 'indexing',
@@ -332,6 +336,7 @@ export class LibraryWatcher {
       if (this.ready) {
         const action = existing ? 'track_updated' : 'track_added';
         await audit(action, { path: relPath, title: tags.title, artist: tags.artist });
+        invalidateRecommendations();
         this.debounceIndex();
         
         // Publish live update to connected clients
@@ -361,6 +366,7 @@ export class LibraryWatcher {
       
       // Log removal to audit
       await audit('track_removed', { path: relPath, library_id: libId });
+      invalidateRecommendations();
       
       // Publish live update to connected clients
       publishUpdate('track_removed', { path: relPath, library_id: libId });

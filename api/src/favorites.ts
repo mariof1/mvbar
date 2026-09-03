@@ -7,6 +7,7 @@ import { submitFeedback } from './listenbrainz.js';
 import { broadcastToUser } from './websocket.js';
 import logger from './logger.js';
 import { artistDisplay } from './artistDisplay.js';
+import { invalidateRecommendationCache } from './recommendationCache.js';
 
 // Get user's ListenBrainz token
 async function getUserLBToken(userId: string): Promise<string | null> {
@@ -30,6 +31,7 @@ export const favoritesPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!isLibraryAllowed(Number(row.library_id), allowed)) return reply.code(404).send({ ok: false });
 
     await fav.addFavorite(req.user.userId, trackId);
+    await invalidateRecommendationCache(req.user.userId);
     await audit('favorite_added', { by: req.user.userId, trackId });
 
     // Broadcast favorite change to all connected clients of this user
@@ -53,6 +55,7 @@ export const favoritesPlugin: FastifyPluginAsync = fp(async (app) => {
     const trackRow = await db().query<{ title: string; artist: string }>('select title, artist from active_tracks where id=$1', [trackId]);
 
     await fav.removeFavorite(req.user.userId, trackId);
+    await invalidateRecommendationCache(req.user.userId);
     await audit('favorite_removed', { by: req.user.userId, trackId });
 
     // Broadcast favorite change to all connected clients of this user

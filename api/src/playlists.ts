@@ -5,6 +5,7 @@ import { audit, db } from './db.js';
 import * as playlists from './playlistsRepo.js';
 import { sendWebPushToUser } from './pushNotifications.js';
 import { broadcastToUser } from './websocket.js';
+import { invalidateRecommendationCaches } from './recommendationCache.js';
 
 async function broadcastPlaylist(playlistId: number, type: string, data: Record<string, unknown>, userIds?: string[]) {
   const recipients = userIds ?? await playlists.playlistUserIds(playlistId);
@@ -84,6 +85,8 @@ export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
     const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
     const r = await playlists.addItem(req.user.userId, playlistId, trackId, allowed, position);
     if (!r) return reply.code(404).send({ ok: false });
+    const recommendationUsers = await playlists.playlistUserIds(playlistId);
+    await invalidateRecommendationCaches([...recommendationUsers, req.user.userId]);
     await audit('playlist_add_item', { by: req.user.userId, playlistId, trackId, position: r.position });
     await broadcastPlaylist(playlistId, 'playlist:item_added', {
       playlistId,
@@ -105,6 +108,8 @@ export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
     const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
     const r = await playlists.removeItem(req.user.userId, playlistId, trackId, allowed);
     if (!r) return reply.code(404).send({ ok: false });
+    const recommendationUsers = await playlists.playlistUserIds(playlistId);
+    await invalidateRecommendationCaches([...recommendationUsers, req.user.userId]);
     await audit('playlist_remove_item', { by: req.user.userId, playlistId, trackId });
     await broadcastPlaylist(playlistId, 'playlist:item_removed', { playlistId, trackId, by: req.user.userId });
     return { ok: true };
@@ -158,6 +163,7 @@ export const playlistsPlugin: FastifyPluginAsync = fp(async (app) => {
     const recipients = await playlists.playlistUserIds(id);
     const deleted = await playlists.deletePlaylist(req.user.userId, id);
     if (!deleted) return reply.code(404).send({ ok: false });
+    await invalidateRecommendationCaches([...recipients, req.user.userId]);
     await audit('playlist_delete', { by: req.user.userId, playlistId: id });
     await broadcastPlaylist(id, 'playlist:deleted', { id, by: req.user.userId }, recipients);
     return { ok: true, deleted: id };

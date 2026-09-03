@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { audit, db } from './db.js';
 import * as stats from './statsRepo.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
+import { invalidateRecommendationCache } from './recommendationCache.js';
 
 export const statsPlugin: FastifyPluginAsync = fp(async (app) => {
   app.post('/api/stats/skip/:trackId', async (req, reply) => {
@@ -20,6 +21,7 @@ export const statsPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!isLibraryAllowed(Number(row.library_id), allowed)) return reply.code(404).send({ ok: false });
 
     await stats.incSkip(req.user.userId, trackId);
+    await invalidateRecommendationCache(req.user.userId);
     await audit('track_skipped', { by: req.user.userId, trackId, pct });
     return { ok: true };
   });
