@@ -3,7 +3,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
-import { getRecommendations, sendRecommendationFeedback } from './apiClient';
+import {
+  clearHiddenRecommendationBuckets,
+  getRecommendations,
+  sendRecommendationFeedback,
+} from './apiClient';
 import { trackArtistLabel } from './artistDisplay';
 import { useToastStore } from './Toast';
 import { useBodyScrollLock } from './useBodyScrollLock';
@@ -216,9 +220,13 @@ export function Recommendations() {
 
   const [loading, setLoading] = useState(false);
   const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
+  const [serverRefreshing, setServerRefreshing] = useState(false);
+  const [restoringMixes, setRestoringMixes] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [slateId, setSlateId] = useState<string | undefined>();
+  const [recommendationProfile, setRecommendationProfile] = useState<'new' | 'learning' | 'personalized'>('new');
+  const [hiddenMixCount, setHiddenMixCount] = useState(0);
   const [detailsBucket, setDetailsBucket] = useState<Bucket | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = useToastStore((state) => state.show);
@@ -260,6 +268,9 @@ export function Recommendations() {
       .then((r) => {
         setBuckets(r.buckets ?? []);
         setSlateId(r.slateId);
+        setRecommendationProfile(r.recommendationProfile ?? 'new');
+        setHiddenMixCount(r.hiddenMixCount ?? 0);
+        setServerRefreshing(Boolean(r._stale && r._refreshing));
         const staleRetries = opts?.staleRetries ?? 0;
         if (r._stale && staleRetries < 3) {
           if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -271,6 +282,7 @@ export function Recommendations() {
       .catch((e: any) => {
         if (e?.status === 401) clear();
         setError(e?.message ?? 'error');
+        setServerRefreshing(false);
       })
       .finally(() => {
         if (silent) setBackgroundRefreshing(false);
@@ -289,13 +301,33 @@ export function Recommendations() {
   const hideBucket = async (bucket: Bucket) => {
     if (!token) return;
     try {
-      await sendRecommendationFeedback(token, { action: 'hide_bucket', bucketKey: bucket.key });
+      const result = await sendRecommendationFeedback(token, { action: 'hide_bucket', bucketKey: bucket.key });
       setBuckets((current) => current.filter((item) => item.key !== bucket.key));
+      setHiddenMixCount((current) => result.hiddenMixCount ?? current + 1);
       setDetailsBucket(null);
       showToast(`Hidden “${bucket.name}”`, 'success');
     } catch (feedbackError: any) {
       if (feedbackError?.status === 401) clear();
       showToast('Could not save recommendation feedback', 'error');
+    }
+  };
+
+  const restoreHiddenMixes = async () => {
+    if (!token || restoringMixes) return;
+    setRestoringMixes(true);
+    setError(null);
+    try {
+      await clearHiddenRecommendationBuckets(token);
+      setHiddenMixCount(0);
+      setServerRefreshing(true);
+      loadRecommendations({ silent: true });
+      showToast('Restoring your recommendation mixes', 'success');
+    } catch (restoreError: any) {
+      if (restoreError?.status === 401) clear();
+      setError(restoreError?.message ?? 'Could not restore recommendation mixes');
+      setServerRefreshing(false);
+    } finally {
+      setRestoringMixes(false);
     }
   };
 
@@ -327,7 +359,7 @@ export function Recommendations() {
               <h3 className="text-lg font-semibold text-white">Made for you</h3>
               <p className="text-xs text-slate-500">A focused mix of favourites, rediscovery, and new finds</p>
             </div>
-            {backgroundRefreshing && <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" title="Refreshing recommendations" />}
+            {(backgroundRefreshing || serverRefreshing) && <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" title="Refreshing recommendations" />}
           </div>
           <div ref={bucketsRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {buckets.map((bucket) => (
@@ -344,15 +376,51 @@ export function Recommendations() {
       )}
 
       {/* Empty state */}
-      {buckets.length === 0 && (
+      {buckets.length === 0 && hiddenMixCount > 0 && !serverRefreshing && (
+        <div className="rounded-2xl border border-white/10 bg-slate-800/40 px-5 py-14 text-center">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-slate-800">
+            <svg className="h-8 w-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18M9.75 9.75V6l10.5-3v10.5M9.75 18c0 1.243-1.511 2.25-3.375 2.25S3 19.243 3 18s1.511-2.25 3.375-2.25S9.75 16.757 9.75 18zm10.5-4.5c0 1.243-1.511 2.25-3.375 2.25" />
+            </svg>
+          </div>
+          <h3 className="mb-2 text-lg font-semibold text-white">All recommendation mixes are hidden</h3>
+          <p className="mx-auto mb-5 max-w-md text-sm text-slate-400">
+            You hid {hiddenMixCount} {hiddenMixCount === 1 ? 'mix' : 'mixes'}. Restore them whenever you want mvbar to build a fresh selection.
+          </p>
+          <button
+            type="button"
+            onClick={() => void restoreHiddenMixes()}
+            disabled={restoringMixes}
+            className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500 disabled:cursor-wait disabled:opacity-60"
+          >
+            {restoringMixes ? 'Restoring…' : 'Restore hidden mixes'}
+          </button>
+        </div>
+      )}
+
+      {buckets.length === 0 && serverRefreshing && (
+        <div className="py-16 text-center">
+          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-3 border-cyan-500 border-t-transparent" />
+          <h3 className="mb-2 text-lg font-semibold text-white">Building fresh mixes</h3>
+          <p className="text-sm text-slate-400">This normally takes only a few seconds.</p>
+        </div>
+      )}
+
+      {buckets.length === 0 && hiddenMixCount === 0 && !serverRefreshing && (
         <div className="text-center py-16">
           <div className="w-16 h-16 mx-auto mb-4 bg-slate-800 rounded-full flex items-center justify-center">
             <svg className="w-8 h-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
             </svg>
           </div>
-          <h3 className="text-lg font-semibold text-white mb-2">Start listening</h3>
-          <p className="text-slate-400 text-sm mb-4">Play some music and your personalized recommendations will appear here.</p>
+          <h3 className="text-lg font-semibold text-white mb-2">
+            {recommendationProfile === 'new' ? 'Start listening' : 'No mixes available yet'}
+          </h3>
+          <p className="text-slate-400 text-sm mb-4">
+            {recommendationProfile === 'new'
+              ? 'Play some music and your personalized recommendations will appear here.'
+              : 'mvbar could not build a varied recommendation mix from the currently available music.'}
+          </p>
           <p className="text-slate-500 text-xs">
             Tip: Connect to <a href="/settings" className="text-cyan-400 hover:underline">ListenBrainz</a> for even better recommendations!
           </p>

@@ -1007,6 +1007,7 @@ export async function getRecommendations(token: string) {
     _cached?: boolean;
     _stale?: boolean;
     _refreshing?: boolean;
+    hiddenMixCount?: number;
     recommendationProfile?: 'new' | 'learning' | 'personalized';
     buckets: Array<{
       key: string;
@@ -1053,6 +1054,7 @@ export async function sendRecommendationFeedback(
     subjectType: 'track' | 'artist' | 'bucket';
     subjectKey: string;
     preference: number;
+    hiddenMixCount?: number;
   };
 }
 
@@ -1072,6 +1074,13 @@ export async function getRecommendationFeedback(token: string) {
 
 export async function clearAllRecommendationFeedback(token: string) {
   return (await apiFetch('/recommendations/feedback/all', { method: 'DELETE' }, token)) as {
+    ok: boolean;
+    removed: number;
+  };
+}
+
+export async function clearHiddenRecommendationBuckets(token: string) {
+  return (await apiFetch('/recommendations/feedback/hidden-buckets', { method: 'DELETE' }, token)) as {
     ok: boolean;
     removed: number;
   };

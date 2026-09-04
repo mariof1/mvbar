@@ -6,6 +6,10 @@ import {
   splitRecommendationFeatures,
 } from '../dist/recommendationFeatures.js';
 import { normalizeCompletionRatio, normalizePlaybackSignal } from '../dist/playbackSignal.js';
+import {
+  recommendationBucketIsHidden,
+  recommendationBucketPreferenceKey,
+} from '../dist/recommendationTelemetry.js';
 
 test('normalizes recommendation features consistently across accents and artist separators', () => {
   assert.equal(normalizeRecommendationFeature('  Sokół  '), 'sokol');
@@ -43,4 +47,18 @@ test('normalizes both legacy whole percentages and modern completion ratios', ()
   assert.equal(normalizeCompletionRatio(0.12), 0.12);
   assert.equal(normalizeCompletionRatio(150), 1);
   assert.equal(normalizeCompletionRatio('invalid'), null);
+});
+
+test('stores dynamic recommendation hides against stable, narrowly scoped families', () => {
+  assert.equal(recommendationBucketPreferenceKey('made_for_you'), 'made_for_you');
+  assert.equal(recommendationBucketPreferenceKey('because_album_one_deadbeef'), 'family:because_album');
+  assert.equal(recommendationBucketPreferenceKey('because_album_two_cafebabe'), 'family:because_album');
+  assert.equal(recommendationBucketPreferenceKey('genre_country_pop_poland_12345678'), 'family:genre_country');
+  assert.equal(recommendationBucketPreferenceKey('language_polish_12345678'), 'family:language');
+  assert.equal(recommendationBucketPreferenceKey('decade_2010'), 'family:decade');
+
+  const hidden = new Set(['family:because_album', 'made_for_you']);
+  assert.equal(recommendationBucketIsHidden('because_another_album_87654321', hidden), true);
+  assert.equal(recommendationBucketIsHidden('made_for_you', hidden), true);
+  assert.equal(recommendationBucketIsHidden('language_polish_12345678', hidden), false);
 });

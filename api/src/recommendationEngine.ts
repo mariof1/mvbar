@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { db } from './db.js';
+import { recommendationBucketPreferenceKey } from './recommendationTelemetry.js';
 import {
   normalizeRecommendationFeature as normalizeFeature,
   recommendationArtistKeys as artistKeys,
@@ -173,6 +174,7 @@ export interface TasteProfile {
   boostedTrackIds: Set<number>;
   lessLikedArtists: Set<string>;
   hiddenBucketKeys: Set<string>;
+  hiddenBucketCount: number;
   impressionPenalties: Map<number, number>;
   bpmMean: number | null;
   bpmStd: number | null;
@@ -356,6 +358,7 @@ function emptyTasteProfile(): TasteProfile {
     boostedTrackIds: new Set(),
     lessLikedArtists: new Set(),
     hiddenBucketKeys: new Set(),
+    hiddenBucketCount: 0,
     impressionPenalties: new Map(),
     bpmMean: null,
     bpmStd: null,
@@ -441,7 +444,11 @@ export async function buildTasteProfile(userId: string, allowed: number[] | null
       const artist = normalizeFeature(preference.subject_key);
       if (artist) profile.lessLikedArtists.add(artist);
     } else if (preference.subject_type === 'bucket' && preference.preference < 0) {
-      profile.hiddenBucketKeys.add(preference.subject_key);
+      const exactKey = preference.subject_key.trim().toLowerCase();
+      if (!exactKey) continue;
+      profile.hiddenBucketCount++;
+      profile.hiddenBucketKeys.add(exactKey);
+      profile.hiddenBucketKeys.add(recommendationBucketPreferenceKey(exactKey));
     }
   }
 

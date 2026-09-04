@@ -174,6 +174,16 @@ const Icons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" />
     </svg>
   ),
+  ThumbsUp: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.7}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 10.5l3.2-6.4A1.5 1.5 0 0112.04 3h.21a1.5 1.5 0 011.5 1.5V9h4.65a2.1 2.1 0 012.03 2.64l-1.8 6.75A2.25 2.25 0 0116.46 20H7.5m0-9.5H4.75A1.75 1.75 0 003 12.25v5.5c0 .97.78 1.75 1.75 1.75H7.5v-9z" />
+    </svg>
+  ),
+  ThumbsDown: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.7}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 13.5l3.2 6.4a1.5 1.5 0 001.34 1.1h.21a1.5 1.5 0 001.5-1.5V15h4.65a2.1 2.1 0 002.03-2.64l-1.8-6.75A2.25 2.25 0 0016.46 4H7.5m0 9.5H4.75A1.75 1.75 0 013 11.75v-5.5c0-.97.78-1.75 1.75-1.75H7.5v9z" />
+    </svg>
+  ),
   Plus: () => (
     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -432,6 +442,7 @@ function GlobalAudiobookPlayer() {
 
 function PlayerBar(props: {
   nowPlaying: QueueTrack;
+  activeTab: string;
   hasPrev: boolean;
   hasNext: boolean;
   onPrev: () => void;
@@ -475,6 +486,8 @@ function PlayerBar(props: {
   const [volume, setVolume] = useState(1);
   const [showVolume, setShowVolume] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  const [showRecommendationMenu, setShowRecommendationMenu] = useState(false);
+  const [showExpandedOptions, setShowExpandedOptions] = useState(false);
   const [expanded, setExpanded] = useState(false);
   useBodyScrollLock(expanded);
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
@@ -483,6 +496,8 @@ function PlayerBar(props: {
   const [touchDraggedIdx, setTouchDraggedIdx] = useState<number | null>(null);
   const volumeRef = useRef<HTMLDivElement>(null);
   const queueRef = useRef<HTMLDivElement>(null);
+  const recommendationMenuRef = useRef<HTMLDivElement>(null);
+  const expandedOptionsRef = useRef<HTMLDivElement>(null);
   const mobileQueueListRef = useRef<HTMLDivElement>(null);
   const activeQueueItemRef = useRef<HTMLDivElement>(null);
   const playerDragRef = useRef<{
@@ -533,6 +548,8 @@ function PlayerBar(props: {
     const trackId = props.nowPlaying.id;
     const stopped = props.onPlaybackStopped;
     setArtOk(true);
+    setShowRecommendationMenu(false);
+    setShowExpandedOptions(false);
     playedSentRef.current = false;
     playbackMetricsRef.current = {
       trackId,
@@ -559,6 +576,15 @@ function PlayerBar(props: {
     // change as the shell renders and must not split one listen into fragments.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.nowPlaying.id]);
+
+  // Dialogs can navigate while the full player is open (for example, finding
+  // friends from the share sheet). Reveal the destination when that happens.
+  useEffect(() => {
+    setExpanded(false);
+    setPlayerDragY(0);
+    setIsPlayerDragging(false);
+    setShowExpandedOptions(false);
+  }, [props.activeTab]);
 
   useEffect(() => {
     if (lastNotifiedTrackRef.current === props.nowPlaying.id) return;
@@ -600,6 +626,43 @@ function PlayerBar(props: {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showQueue]);
+
+  // Keep recommendation tuning menus transient, like the queue and volume controls.
+  useEffect(() => {
+    if (!showRecommendationMenu) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (recommendationMenuRef.current && !recommendationMenuRef.current.contains(event.target as Node)) {
+        setShowRecommendationMenu(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowRecommendationMenu(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showRecommendationMenu]);
+
+  useEffect(() => {
+    if (!showExpandedOptions) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (expandedOptionsRef.current && !expandedOptionsRef.current.contains(event.target as Node)) {
+        setShowExpandedOptions(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowExpandedOptions(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showExpandedOptions]);
 
   // When opening the queue, scroll to the currently playing track.
   useEffect(() => {
@@ -1071,6 +1134,7 @@ function PlayerBar(props: {
     if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
     playerDragRef.current = null;
     setIsPlayerDragging(false);
+    setShowExpandedOptions(false);
     if (!animate) {
       setExpanded(false);
       setPlayerDragY(0);
@@ -1082,6 +1146,12 @@ function PlayerBar(props: {
       setPlayerDragY(0);
       playerDismissTimerRef.current = null;
     }, 180);
+  };
+
+  const submitPlayerRecommendationFeedback = (action: RecommendationFeedbackAction) => {
+    setShowRecommendationMenu(false);
+    setShowExpandedOptions(false);
+    props.onRecommendationFeedback?.(action);
   };
 
   const handlePlayerDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1192,17 +1262,17 @@ function PlayerBar(props: {
               </div>
 
               {/* Artwork */}
-              <div className="flex-shrink-0 px-8 pt-4 pb-6">
+              <div className="flex-shrink-0 px-8 pt-3 pb-4">
                 {artOk ? (
                   <img
                     src={`/api/art/${props.nowPlaying.id}`}
                     alt=""
                     draggable={false}
-                    className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl object-cover shadow-2xl"
+                    className="mx-auto aspect-square w-[min(72vw,34vh,280px)] rounded-2xl object-cover shadow-2xl"
                     onError={() => setArtOk(false)}
                   />
                 ) : (
-                  <div className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl bg-white/10 flex items-center justify-center">
+                  <div className="mx-auto flex aspect-square w-[min(72vw,34vh,280px)] items-center justify-center rounded-2xl bg-white/10">
                     <Icons.Playlist />
                   </div>
                 )}
@@ -1210,7 +1280,7 @@ function PlayerBar(props: {
             </div>
 
             {/* Track Info */}
-            <div className="px-8 text-center mb-6">
+            <div className="mb-4 px-8 text-center">
               <h2 className="text-xl font-bold text-white truncate">
                 {props.nowPlaying.title ?? `Track #${props.nowPlaying.id}`}
               </h2>
@@ -1220,7 +1290,7 @@ function PlayerBar(props: {
             </div>
 
             {/* Progress bar */}
-            <div className="px-8 mb-4">
+            <div className="mb-3 px-8">
               <SeekSlider
                 currentTime={currentTime}
                 duration={duration}
@@ -1235,7 +1305,7 @@ function PlayerBar(props: {
             </div>
 
             {/* Main Controls */}
-            <div className="flex items-center justify-center gap-6 mb-6">
+            <div className="mb-4 flex items-center justify-center gap-3 min-[380px]:gap-6">
               <button
                 onClick={cyclePlayMode}
                 className={`p-3 rounded-full ${props.playMode !== 'normal' ? 'text-cyan-400' : 'text-white/50'}`}
@@ -1280,61 +1350,105 @@ function PlayerBar(props: {
               </button>
             </div>
 
-            {/* Secondary Controls */}
-            <div className="flex flex-wrap items-center justify-center gap-3 mb-6 px-4 sm:px-8">
+            {/* Compact action shelf — less common controls live under More. */}
+            <div className="mx-auto mb-5 grid w-[calc(100%_-_2rem)] max-w-[330px] grid-cols-4 rounded-2xl border border-white/10 bg-white/[0.04] p-1.5">
               <button
                 onClick={(e) => { e.stopPropagation(); props.onToggleFavorite(); }}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full border ${props.isFavorite ? 'border-pink-500 text-pink-500' : 'border-white/30 text-white/70'}`}
+                className={`flex min-w-0 flex-col items-center gap-1 rounded-xl px-1 py-2 text-xs transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 active:scale-95 ${props.isFavorite ? 'bg-pink-500/10 text-pink-400' : 'text-white/55 hover:bg-white/[0.06] hover:text-white/80'}`}
+                aria-label={props.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
               >
                 {props.isFavorite ? <Icons.HeartFilled /> : <Icons.HeartOutline />}
-                <span className="text-sm">{props.isFavorite ? 'Liked' : 'Like'}</span>
+                <span>{props.isFavorite ? 'Liked' : 'Like'}</span>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); props.onAddToPlaylist(); }}
-                className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/30 text-white/70"
+                className="flex min-w-0 flex-col items-center gap-1 rounded-xl px-1 py-2 text-xs text-white/55 transition hover:bg-white/[0.06] hover:text-white/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 active:scale-95"
+                aria-label="Add to playlist"
               >
                 <Icons.Plus />
-                <span className="text-sm">Add to Playlist</span>
+                <span>Playlist</span>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); props.onShare(); }}
-                className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/30 text-white/70"
+                className="flex min-w-0 flex-col items-center gap-1 rounded-xl px-1 py-2 text-xs text-white/55 transition hover:bg-white/[0.06] hover:text-white/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 active:scale-95"
+                aria-label="Share with a friend"
               >
                 <Icons.Share />
-                <span className="text-sm">Share</span>
+                <span>Share</span>
               </button>
-              {props.onRecommendationFeedback && (
-                <>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); props.onRecommendationFeedback?.('more_like_this'); }}
-                    className="flex items-center gap-2 rounded-full border border-emerald-400/40 px-4 py-2 text-emerald-300"
+
+              <div className="relative min-w-0" ref={expandedOptionsRef}>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setShowExpandedOptions((open) => !open);
+                  }}
+                  className={`flex h-full w-full flex-col items-center gap-1 rounded-xl px-1 py-2 text-xs transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 active:scale-95 ${showExpandedOptions ? 'bg-white/10 text-white' : 'text-white/55 hover:bg-white/[0.06] hover:text-white/80'}`}
+                  aria-label="More player options"
+                  aria-expanded={showExpandedOptions}
+                  aria-haspopup="menu"
+                >
+                  <span className="flex h-5 items-center text-lg leading-none" aria-hidden="true">•••</span>
+                  <span>More</span>
+                </button>
+
+                {showExpandedOptions && (
+                  <div
+                    role="menu"
+                    className="absolute bottom-full right-0 z-30 mb-3 w-[min(16rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-white/10 bg-zinc-900/95 py-1.5 text-sm shadow-2xl backdrop-blur-xl"
                   >
-                    <span aria-hidden="true">＋</span>
-                    <span className="text-sm">More like this</span>
-                  </button>
+                    {props.onRecommendationFeedback && (
+                      <>
+                        <div className="px-3 pb-1.5 pt-1 text-[11px] font-medium uppercase tracking-wider text-white/35">
+                          Tune recommendations
+                        </div>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(event) => { event.stopPropagation(); submitPlayerRecommendationFeedback('more_like_this'); }}
+                          className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-emerald-300 hover:bg-white/10"
+                        >
+                          <Icons.ThumbsUp />
+                          <span>More like this</span>
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(event) => { event.stopPropagation(); submitPlayerRecommendationFeedback('less_like_artist'); }}
+                          className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-amber-200 hover:bg-white/10"
+                        >
+                          <span className="flex h-4 w-4 items-center justify-center text-lg" aria-hidden="true">−</span>
+                          <span>Less from this artist</span>
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(event) => { event.stopPropagation(); submitPlayerRecommendationFeedback('not_for_me'); }}
+                          className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-red-300 hover:bg-white/10"
+                        >
+                          <Icons.ThumbsDown />
+                          <span>Don’t recommend this track</span>
+                        </button>
+                        <div className="my-1 border-t border-white/10" />
+                      </>
+                    )}
                   <button
-                    onClick={(e) => { e.stopPropagation(); props.onRecommendationFeedback?.('less_like_artist'); }}
-                    className="flex items-center gap-2 rounded-full border border-amber-400/40 px-4 py-2 text-amber-200"
-                  >
-                    <span aria-hidden="true">−</span>
-                    <span className="text-sm">Less from this artist</span>
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); props.onRecommendationFeedback?.('not_for_me'); }}
-                    className="flex items-center gap-2 rounded-full border border-red-400/40 px-4 py-2 text-red-300"
+                    type="button"
+                    role="menuitem"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setShowExpandedOptions(false);
+                      props.onClose();
+                    }}
+                    className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-red-300 hover:bg-white/10"
                   >
                     <Icons.Close />
-                    <span className="text-sm">Not for me</span>
+                    <span>Stop and close player</span>
                   </button>
-                </>
-              )}
-              <button
-                onClick={(e) => { e.stopPropagation(); props.onClose(); }}
-                className="flex items-center gap-2 px-4 py-2 rounded-full border border-red-500/50 text-red-400"
-              >
-                <Icons.Close />
-                <span className="text-sm">Close</span>
-              </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Queue Section */}
@@ -1342,9 +1456,9 @@ function PlayerBar(props: {
               <div className="flex-1 px-4 pb-8">
                 <div className="mb-3 flex items-center justify-between gap-3 px-4">
                   <h3 className="text-sm font-semibold uppercase tracking-wide text-white/70">
-                    Queue ({formatCount(props.queue.length, 'track')})
+                    Queue <span className="text-white/40">{props.queue.length}</span>
                   </h3>
-                  <span className="text-[11px] text-white/40">Hold and drag to reorder</span>
+                  <span className="text-[11px] text-white/40">Hold to reorder</span>
                 </div>
                 <div ref={mobileQueueListRef} className="space-y-1 max-h-[300px] overflow-y-auto overscroll-contain">
                   {props.queue.map((track, idx) => (
@@ -1386,6 +1500,37 @@ function PlayerBar(props: {
 
       {/* Mini Player Bar */}
       <div className="fixed bottom-0 left-0 right-0 lg:left-64 z-50 glass border-t border-white/10 animate-slide-up h-[72px]">
+        {/* Lightweight recommendation tuning for the mobile mini player. */}
+        {props.onRecommendationFeedback && (
+          <div className="absolute bottom-full right-3 z-20 mb-3 flex items-center gap-1 rounded-full border border-white/10 bg-black/45 p-1 text-white/55 shadow-lg backdrop-blur-md sm:hidden">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                submitPlayerRecommendationFeedback('more_like_this');
+              }}
+              className="rounded-full p-2 transition hover:bg-white/10 hover:text-emerald-300 active:scale-95"
+              aria-label="More like this"
+              title="More like this"
+            >
+              <Icons.ThumbsUp />
+            </button>
+            <span className="h-4 w-px bg-white/10" aria-hidden="true" />
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                submitPlayerRecommendationFeedback('not_for_me');
+              }}
+              className="rounded-full p-2 transition hover:bg-white/10 hover:text-red-300 active:scale-95"
+              aria-label="Don't recommend this track"
+              title="Don't recommend this track"
+            >
+              <Icons.ThumbsDown />
+            </button>
+          </div>
+        )}
+
         {/* Progress bar - full width on top */}
         <div className="absolute -top-2 left-0 right-0 z-10">
           <SeekSlider
@@ -1556,38 +1701,47 @@ function PlayerBar(props: {
                 <Icons.Lyrics />
               </button>
               {props.onRecommendationFeedback && (
-                <details className="group/recommendation relative">
-                  <summary
-                    className="list-none cursor-pointer rounded-full px-2.5 py-1.5 text-lg leading-none text-white/50 hover:bg-white/10 hover:text-white"
+                <div className="relative" ref={recommendationMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setShowRecommendationMenu((open) => !open)}
+                    className={`rounded-full px-2.5 py-1.5 text-lg leading-none transition hover:bg-white/10 hover:text-white ${showRecommendationMenu ? 'bg-white/10 text-white' : 'text-white/50'}`}
                     title="Tune recommendations"
                     aria-label="Tune recommendations"
+                    aria-expanded={showRecommendationMenu}
+                    aria-haspopup="menu"
                   >
                     ···
-                  </summary>
-                  <div className="absolute bottom-full right-0 z-20 mb-2 w-52 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 py-1 shadow-2xl">
+                  </button>
+                  {showRecommendationMenu && (
+                  <div role="menu" className="absolute bottom-full right-0 z-20 mb-2 w-52 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 py-1 shadow-2xl">
                     <button
                       type="button"
-                      onClick={() => props.onRecommendationFeedback?.('more_like_this')}
+                      role="menuitem"
+                      onClick={() => submitPlayerRecommendationFeedback('more_like_this')}
                       className="block w-full px-3 py-2 text-left text-sm text-emerald-300 hover:bg-white/10"
                     >
                       More like this
                     </button>
                     <button
                       type="button"
-                      onClick={() => props.onRecommendationFeedback?.('less_like_artist')}
+                      role="menuitem"
+                      onClick={() => submitPlayerRecommendationFeedback('less_like_artist')}
                       className="block w-full px-3 py-2 text-left text-sm text-amber-200 hover:bg-white/10"
                     >
                       Less from this artist
                     </button>
                     <button
                       type="button"
-                      onClick={() => props.onRecommendationFeedback?.('not_for_me')}
+                      role="menuitem"
+                      onClick={() => submitPlayerRecommendationFeedback('not_for_me')}
                       className="block w-full px-3 py-2 text-left text-sm text-red-300 hover:bg-white/10"
                     >
                       Don’t recommend this track
                     </button>
                   </div>
-                </details>
+                  )}
+                </div>
               )}
               <div className="relative" ref={queueRef}>
                 <button
@@ -2568,6 +2722,7 @@ export function AppShellNew() {
       {isOpen && nowPlaying && (
         <PlayerBar
           nowPlaying={nowPlaying}
+          activeTab={tab}
           hasPrev={index > 0}
           hasNext={index + 1 < queue.length}
           onPrev={prev}

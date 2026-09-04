@@ -6,7 +6,10 @@ import { recommendationArtistKeys } from './recommendationFeatures.js';
 import { invalidateRecommendationCache } from './recommendationCache.js';
 import {
   clearAllRecommendationPreferences,
+  clearHiddenRecommendationBuckets,
   clearRecommendationPreference,
+  getHiddenRecommendationBuckets,
+  recommendationBucketPreferenceKey,
   setRecommendationPreference,
   type RecommendationFeedback,
   type RecommendationPreferenceSubject,
@@ -62,7 +65,7 @@ export const recommendationFeedbackPlugin: FastifyPluginAsync = fp(async (app) =
       const bucketKey = normalizedBucketKey(body.bucketKey);
       if (!bucketKey) return reply.code(400).send({ ok: false, error: 'invalid_bucket' });
       subjectType = 'bucket';
-      subjectKey = bucketKey;
+      subjectKey = recommendationBucketPreferenceKey(bucketKey);
       preference = -2;
     } else {
       const trackId = Number(body.trackId);
@@ -94,7 +97,10 @@ export const recommendationFeedbackPlugin: FastifyPluginAsync = fp(async (app) =
       subjectType,
       subjectKey,
     });
-    return { ok: true, action, subjectType, subjectKey, preference };
+    const hiddenMixCount = action === 'hide_bucket'
+      ? (await getHiddenRecommendationBuckets(req.user.userId)).count
+      : undefined;
+    return { ok: true, action, subjectType, subjectKey, preference, hiddenMixCount };
   });
 
   app.delete('/api/recommendations/feedback/all', async (req, reply) => {
@@ -102,6 +108,17 @@ export const recommendationFeedbackPlugin: FastifyPluginAsync = fp(async (app) =
     const removed = await clearAllRecommendationPreferences(req.user.userId);
     if (removed > 0) await invalidateRecommendationCache(req.user.userId);
     await audit('recommendation_feedback_reset', {
+      by: req.user.userId,
+      removed,
+    });
+    return { ok: true, removed };
+  });
+
+  app.delete('/api/recommendations/feedback/hidden-buckets', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    const removed = await clearHiddenRecommendationBuckets(req.user.userId);
+    if (removed > 0) await invalidateRecommendationCache(req.user.userId);
+    await audit('recommendation_hidden_buckets_reset', {
       by: req.user.userId,
       removed,
     });

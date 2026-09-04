@@ -9,6 +9,52 @@ export type RecommendationContext = {
   bucketKey?: string | null;
 };
 
+const BUCKET_FAMILY_PREFIXES: Array<[prefix: string, family: string]> = [
+  ['similar_to_', 'similar_artist'],
+  ['because_', 'because_album'],
+  ['daily_mix_', 'daily_mix'],
+  ['genre_country_', 'genre_country'],
+  ['language_', 'language'],
+  ['decade_', 'decade'],
+  ['mood_', 'mood'],
+];
+
+/**
+ * Dynamic bucket keys include the current taste anchor. Persisting only that
+ * generated key lets the same kind of mix return with a different anchor, so
+ * feedback for dynamic buckets is stored against its stable family instead.
+ */
+export function recommendationBucketPreferenceKey(bucketKey: string): string {
+  const normalized = bucketKey.trim().toLowerCase();
+  const family = BUCKET_FAMILY_PREFIXES.find(([prefix]) => normalized.startsWith(prefix))?.[1];
+  return family ? `family:${family}` : normalized;
+}
+
+export function recommendationBucketIsHidden(bucketKey: string, hiddenKeys: ReadonlySet<string>): boolean {
+  const normalized = bucketKey.trim().toLowerCase();
+  return hiddenKeys.has(normalized) || hiddenKeys.has(recommendationBucketPreferenceKey(normalized));
+}
+
+export async function getHiddenRecommendationBuckets(userId: string): Promise<{
+  keys: Set<string>;
+  count: number;
+}> {
+  const result = await db().query<{ subject_key: string }>(
+    `select subject_key
+       from recommendation_preferences
+      where user_id=$1 and subject_type='bucket' and preference < 0`,
+    [userId],
+  );
+  const keys = new Set<string>();
+  for (const row of result.rows) {
+    const exact = row.subject_key.trim().toLowerCase();
+    if (!exact) continue;
+    keys.add(exact);
+    keys.add(recommendationBucketPreferenceKey(exact));
+  }
+  return { keys, count: result.rows.length };
+}
+
 type ImpressionBucket = {
   key: string;
   tracks: Array<{ id: number }>;
@@ -117,6 +163,15 @@ export async function clearRecommendationPreference(
 export async function clearAllRecommendationPreferences(userId: string): Promise<number> {
   const result = await db().query(
     'delete from recommendation_preferences where user_id=$1',
+    [userId],
+  );
+  return result.rowCount ?? 0;
+}
+
+export async function clearHiddenRecommendationBuckets(userId: string): Promise<number> {
+  const result = await db().query(
+    `delete from recommendation_preferences
+      where user_id=$1 and subject_type='bucket' and preference < 0`,
     [userId],
   );
   return result.rowCount ?? 0;

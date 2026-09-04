@@ -18,6 +18,8 @@ import {
   stableRecommendationBucketKey,
 } from './recommendationCuration.js';
 import {
+  getHiddenRecommendationBuckets,
+  recommendationBucketIsHidden,
   recommendationSlateId,
   recordRecommendationImpressions,
 } from './recommendationTelemetry.js';
@@ -50,6 +52,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/recommendations', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
 
+    const requestStartedAt = Date.now();
     const userId = req.user.userId;
     const allowed = await allowedLibrariesForUser(userId, req.user.role);
 
@@ -66,6 +69,30 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     const isBackgroundRevalidation = req.headers['x-mvbar-revalidate'] === revalidationToken;
     const query = req.query as { refresh?: string };
     const forceRefresh = req.user.role === 'admin' && query.refresh === '1';
+    let hiddenBucketsPromise: ReturnType<typeof getHiddenRecommendationBuckets> | null = null;
+    const currentHiddenBuckets = () => {
+      hiddenBucketsPromise ??= getHiddenRecommendationBuckets(userId);
+      return hiddenBucketsPromise;
+    };
+
+    const applyCurrentHiddenBuckets = async (result: {
+      slateId?: string;
+      buckets?: Bucket[];
+      hiddenMixCount?: number;
+      _cached?: boolean;
+      _stale?: boolean;
+      _refreshing?: boolean;
+    }) => {
+      const hidden = await currentHiddenBuckets();
+      const originalBuckets = Array.isArray(result.buckets) ? result.buckets : [];
+      const visibleBuckets = originalBuckets.filter((bucket) => !recommendationBucketIsHidden(bucket.key, hidden.keys));
+      result.buckets = visibleBuckets;
+      result.hiddenMixCount = hidden.count;
+      if (visibleBuckets.length !== originalBuckets.length) {
+        result.slateId = recommendationSlateId(userId, visibleBuckets);
+      }
+      return result;
+    };
 
     const observeSlate = async (result: { slateId?: string; buckets?: Bucket[] }) => {
       if (!result.slateId || !Array.isArray(result.buckets)) return;
@@ -82,17 +109,22 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       const cookie = req.headers.cookie;
       if (!authorization && !cookie) return;
       backgroundRefreshes.add(cacheKey);
+      app.log.info({ userId, revision }, 'Recommendation background refresh scheduled');
       setImmediate(() => {
+        const refreshStartedAt = Date.now();
+        app.log.info({ userId, revision }, 'Recommendation background refresh started');
         const headers: Record<string, string> = { 'x-mvbar-revalidate': revalidationToken };
         if (authorization) headers.authorization = authorization;
         if (cookie) headers.cookie = cookie;
         void app.inject({ method: 'GET', url: '/api/recommendations', headers })
           .then((response) => {
             if (response.statusCode >= 400) {
-              app.log.warn({ userId, statusCode: response.statusCode }, 'Background recommendation refresh failed');
+              app.log.warn({ userId, revision, statusCode: response.statusCode, durationMs: Date.now() - refreshStartedAt }, 'Background recommendation refresh failed');
+            } else {
+              app.log.info({ userId, revision, statusCode: response.statusCode, durationMs: Date.now() - refreshStartedAt }, 'Recommendation background refresh completed');
             }
           })
-          .catch((error) => app.log.warn({ err: error, userId }, 'Background recommendation refresh failed'))
+          .catch((error) => app.log.warn({ err: error, userId, revision, durationMs: Date.now() - refreshStartedAt }, 'Background recommendation refresh failed'))
           .finally(() => backgroundRefreshes.delete(cacheKey));
       });
     };
@@ -101,7 +133,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       try {
         const cached = await redis().get(cacheKey);
         if (cached) {
-          const parsed = JSON.parse(cached);
+          const parsed = await applyCurrentHiddenBuckets(JSON.parse(cached));
           parsed._cached = true;
           parsed._stale = false;
           await observeSlate(parsed);
@@ -111,7 +143,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
         if (!isBackgroundRevalidation) {
           const lastGood = await redis().get(lastGoodKey);
           if (lastGood) {
-            const parsed = JSON.parse(lastGood);
+            const parsed = await applyCurrentHiddenBuckets(JSON.parse(lastGood));
             parsed._cached = true;
             parsed._stale = true;
             parsed._refreshing = true;
@@ -1450,7 +1482,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // ========================================================================
 
     const curatedBuckets = curateRecommendationBuckets(
-      buckets.filter((bucket) => !tasteProfile.hiddenBucketKeys.has(bucket.key)),
+      buckets.filter((bucket) => !recommendationBucketIsHidden(bucket.key, tasteProfile.hiddenBucketKeys)),
       {
       confidence: tasteProfile.confidence,
       positiveSamples: tasteProfile.positiveSamples,
@@ -1470,6 +1502,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       recommendationProfile,
       buckets: hydratedBuckets,
       slateId: recommendationSlateId(userId, hydratedBuckets),
+      hiddenMixCount: tasteProfile.hiddenBucketCount,
     };
 
     // Cache the computed result
@@ -1482,6 +1515,18 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     } catch { /* Redis unavailable → skip caching */ }
 
     await observeSlate(result);
+
+    app.log.info({
+      userId,
+      revision,
+      background: isBackgroundRevalidation,
+      forced: forceRefresh,
+      profile: recommendationProfile,
+      bucketCount: hydratedBuckets.length,
+      trackCount: hydratedBuckets.reduce((count, bucket) => count + bucket.tracks.length, 0),
+      hiddenMixCount: tasteProfile.hiddenBucketCount,
+      durationMs: Date.now() - requestStartedAt,
+    }, 'Recommendation slate generated');
 
     return result;
   });
