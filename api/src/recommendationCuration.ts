@@ -81,6 +81,14 @@ const GROUP_CAPS: Record<string, number> = {
 const MAX_TRACKS_PER_BUCKET = 30;
 const MAX_TRACKS_PER_ARTIST_ACROSS_SLATE = 6;
 const MAX_TRACKS_PER_ALBUM_ACROSS_SLATE = 6;
+export const MIN_PERSONALIZATION_SAMPLES = 5;
+const NEW_LISTENER_BUCKETS = new Set([
+  'library_mix',
+  'popular_library',
+  'recently_added',
+  'fresh_finds',
+  'favorites',
+]);
 
 function fallbackPolicy(): BucketPolicy {
   return { role: 'context', group: 'other', priority: 55, rotation: 18 };
@@ -183,14 +191,21 @@ function albumLimitForBucket(key: string): number {
   return 3;
 }
 
-export function recommendationMaturity(confidence: number): RecommendationMaturity {
+export function recommendationMaturity(
+  confidence: number,
+  positiveSamples = MIN_PERSONALIZATION_SAMPLES,
+): RecommendationMaturity {
+  if (positiveSamples < MIN_PERSONALIZATION_SAMPLES) return 'new';
   if (confidence < 0.2) return 'new';
   if (confidence < 0.55) return 'learning';
   return 'personalized';
 }
 
-export function recommendationBucketLimit(confidence: number): number {
-  const maturity = recommendationMaturity(confidence);
+export function recommendationBucketLimit(
+  confidence: number,
+  positiveSamples = MIN_PERSONALIZATION_SAMPLES,
+): number {
+  const maturity = recommendationMaturity(confidence, positiveSamples);
   if (maturity === 'new') return 4;
   if (maturity === 'learning') return 5;
   return 6;
@@ -212,16 +227,71 @@ export function interleaveRecommendationTracks<T>(primary: T[], secondary: T[], 
 }
 
 /**
+ * Preserve the ranked track set while avoiding blocks from the same artist.
+ * Recommendation buckets are played in response order, so exposure caps alone
+ * are not enough: three otherwise valid tracks by one artist must not become
+ * the first three songs in the queue.
+ */
+export function spaceRecommendationTracks<T extends RecommendationTrackLike>(tracks: T[]): T[] {
+  const remaining = [...tracks];
+  const result: T[] = [];
+  let previousArtists = new Set<string>();
+
+  while (remaining.length > 0) {
+    const isEligible = (track: T) => {
+      const artists = normalizedArtists(track.artist);
+      return artists.length === 0 || artists.every((artist) => !previousArtists.has(artist));
+    };
+    const leavesRoomForRemainingArtists = (candidateIndex: number) => {
+      const candidateArtists = new Set(normalizedArtists(remaining[candidateIndex].artist));
+      const pendingCounts = new Map<string, number>();
+      for (let index = 0; index < remaining.length; index++) {
+        if (index === candidateIndex) continue;
+        for (const artist of normalizedArtists(remaining[index].artist)) {
+          pendingCounts.set(artist, (pendingCounts.get(artist) || 0) + 1);
+        }
+      }
+
+      const pendingLength = remaining.length - 1;
+      for (const [artist, count] of pendingCounts) {
+        // If the chosen track credits this artist, the next position is not
+        // available to it; otherwise it may occupy the first pending slot.
+        const availableSlots = candidateArtists.has(artist)
+          ? Math.floor(pendingLength / 2)
+          : Math.ceil(pendingLength / 2);
+        if (count > availableSlots) return false;
+      }
+      return true;
+    };
+
+    let index = remaining.findIndex((track, candidateIndex) =>
+      isEligible(track) && leavesRoomForRemainingArtists(candidateIndex)
+    );
+    if (index < 0) index = remaining.findIndex(isEligible);
+    if (index < 0) index = 0;
+
+    const [next] = remaining.splice(index, 1);
+    result.push(next);
+    previousArtists = new Set(normalizedArtists(next.artist));
+  }
+
+  return result;
+}
+
+/**
  * Turn all eligible bucket ideas into a small recommendation slate. The API
  * intentionally generates more ideas than it presents so weak or repetitive
  * buckets can be dropped without making the home screen sparse.
  */
 export function curateRecommendationBuckets<T extends RecommendationBucketLike>(
   candidates: T[],
-  options: { confidence: number; seed: number; maxBuckets?: number },
+  options: { confidence: number; positiveSamples?: number; seed: number; maxBuckets?: number },
 ): T[] {
-  const maturity = recommendationMaturity(options.confidence);
-  const limit = Math.max(1, options.maxBuckets ?? recommendationBucketLimit(options.confidence));
+  const maturity = recommendationMaturity(options.confidence, options.positiveSamples);
+  const limit = Math.max(
+    1,
+    options.maxBuckets ?? recommendationBucketLimit(options.confidence, options.positiveSamples),
+  );
   const unique = new Map<string, T>();
   for (const bucket of candidates) {
     if (!bucket.key || bucket.tracks.length < 4 || unique.has(bucket.key)) continue;
@@ -244,6 +314,7 @@ export function curateRecommendationBuckets<T extends RecommendationBucketLike>(
 
     // Favorites and Recently Added already have first-class screens. They are
     // useful onboarding material, but become redundant once taste is learned.
+    if (maturity === 'new' && !NEW_LISTENER_BUCKETS.has(bucket.key)) return false;
     if (policy.utilityOnly && maturity !== 'new') return false;
     if (maturity === 'new' && bucket.key === 'fresh_finds' && hasBetterColdStart) return false;
     if ((roleCounts.get(policy.role) || 0) >= ROLE_CAPS[policy.role]) return false;
@@ -272,9 +343,16 @@ export function curateRecommendationBuckets<T extends RecommendationBucketLike>(
       const artists = normalizedArtists(track.artist);
       const album = normalizedAlbum(track);
       if (artists.some((artist) => (artistCounts.get(artist) || 0) >= artistLimit)) continue;
-      if (artists.some((artist) => (slateArtistCounts.get(artist) || 0) >= MAX_TRACKS_PER_ARTIST_ACROSS_SLATE)) continue;
+      if (artists.some((artist) =>
+        (slateArtistCounts.get(artist) || 0) + (artistCounts.get(artist) || 0)
+          >= MAX_TRACKS_PER_ARTIST_ACROSS_SLATE
+      )) continue;
       if (album && (albumCounts.get(album) || 0) >= albumLimit) continue;
-      if (album && (slateAlbumCounts.get(album) || 0) >= MAX_TRACKS_PER_ALBUM_ACROSS_SLATE) continue;
+      if (
+        album
+        && (slateAlbumCounts.get(album) || 0) + (albumCounts.get(album) || 0)
+          >= MAX_TRACKS_PER_ALBUM_ACROSS_SLATE
+      ) continue;
 
       tracks.push(track);
       for (const artist of artists) artistCounts.set(artist, (artistCounts.get(artist) || 0) + 1);
@@ -283,7 +361,8 @@ export function curateRecommendationBuckets<T extends RecommendationBucketLike>(
     }
 
     if (tracks.length < minimumTracksForBucket(bucket.key)) return null;
-    return { ...bucket, tracks, count: tracks.length } as T;
+    const spacedTracks = spaceRecommendationTracks(tracks);
+    return { ...bucket, tracks: spacedTracks, count: spacedTracks.length } as T;
   };
 
   const add = (bucket: T, overlapLimit: number): boolean => {

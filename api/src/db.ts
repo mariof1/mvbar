@@ -430,6 +430,7 @@ export async function initDb() {
     );
   `);
   await pool.query('create index if not exists track_genres_genre_idx on track_genres(genre)');
+  await pool.query('create index if not exists track_genres_genre_lower_idx on track_genres(lower(genre))');
 
   // Track countries table (normalized)
   await pool.query(`
