@@ -252,6 +252,43 @@ export async function initDb() {
   `);
 
   await pool.query('create index if not exists user_track_stats_user_play_count_idx on user_track_stats(user_id, play_count desc)');
+  await pool.query('alter table user_track_stats add column if not exists total_listened_ms bigint not null default 0');
+  await pool.query('alter table user_track_stats add column if not exists completion_count integer not null default 0');
+  await pool.query('alter table user_track_stats add column if not exists early_skip_count integer not null default 0');
+  await pool.query('alter table user_track_stats add column if not exists last_completion_pct double precision');
+
+  await pool.query(`
+    create table if not exists recommendation_preferences (
+      user_id text not null references users(id) on delete cascade,
+      subject_type text not null check (subject_type in ('track', 'artist', 'bucket')),
+      subject_key text not null,
+      preference smallint not null check (preference between -2 and 2 and preference != 0),
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (user_id, subject_type, subject_key)
+    );
+  `);
+  await pool.query('create index if not exists recommendation_preferences_user_idx on recommendation_preferences(user_id, updated_at desc)');
+
+  await pool.query(`
+    create table if not exists recommendation_impressions (
+      user_id text not null references users(id) on delete cascade,
+      slate_id text not null,
+      bucket_key text not null,
+      track_id bigint not null references tracks(id) on delete cascade,
+      position integer not null,
+      served_at timestamptz not null default now(),
+      played_at timestamptz,
+      completed_at timestamptz,
+      skipped_at timestamptz,
+      listened_ms bigint not null default 0,
+      completion_pct double precision,
+      primary key (user_id, slate_id, bucket_key, track_id)
+    );
+  `);
+  await pool.query('create index if not exists recommendation_impressions_user_served_idx on recommendation_impressions(user_id, served_at desc)');
+  await pool.query('create index if not exists recommendation_impressions_track_idx on recommendation_impressions(user_id, track_id, served_at desc)');
+  await pool.query('create index if not exists recommendation_impressions_served_idx on recommendation_impressions(served_at)');
 
   await pool.query(`
     create table if not exists libraries (

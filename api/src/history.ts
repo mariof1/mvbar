@@ -7,6 +7,8 @@ import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import { broadcastToUser } from './websocket.js';
 import { artistDisplay } from './artistDisplay.js';
 import { invalidateRecommendationCache } from './recommendationCache.js';
+import { markRecommendationAction } from './recommendationTelemetry.js';
+import { normalizePlaybackSignal, type PlaybackSignalBody } from './playbackSignal.js';
 
 export const historyPlugin: FastifyPluginAsync = fp(async (app) => {
   app.post('/api/history/:trackId', async (req, reply) => {
@@ -14,16 +16,34 @@ export const historyPlugin: FastifyPluginAsync = fp(async (app) => {
     const trackId = Number((req.params as { trackId: string }).trackId);
     if (!Number.isFinite(trackId)) return reply.code(400).send({ ok: false });
 
-    const r = await db().query<{ library_id: number }>('select library_id from active_tracks where id=$1', [trackId]);
+    const r = await db().query<{ library_id: number; duration_ms: number | null }>(
+      'select library_id, duration_ms from active_tracks where id=$1',
+      [trackId],
+    );
     const row = r.rows[0];
     if (!row) return reply.code(404).send({ ok: false });
     const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
     if (!isLibraryAllowed(Number(row.library_id), allowed)) return reply.code(404).send({ ok: false });
 
+    const signal = normalizePlaybackSignal(req.body as PlaybackSignalBody | undefined, row.duration_ms, 1);
     await hist.addPlay(req.user.userId, trackId);
-    await stats.incPlay(req.user.userId, trackId);
+    await stats.incPlay(req.user.userId, trackId, signal);
+    await markRecommendationAction(
+      req.user.userId,
+      trackId,
+      'completed',
+      signal.context,
+      signal.listenedMs,
+      signal.completionPct,
+    );
     await invalidateRecommendationCache(req.user.userId);
-    await audit('track_played', { by: req.user.userId, trackId });
+    await audit('track_played', {
+      by: req.user.userId,
+      trackId,
+      listenedMs: signal.listenedMs,
+      completionPct: signal.completionPct,
+      recommendation: signal.context.slateId ? signal.context : undefined,
+    });
     broadcastToUser(req.user.userId, 'history:added', { trackId, ts: Date.now() });
     return { ok: true };
   });

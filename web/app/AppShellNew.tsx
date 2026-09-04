@@ -38,7 +38,22 @@ import { useUi } from './uiStore';
 import { useRouter, useRoute, initRouter, getTabFromRoute, type Route } from './router';
 import { NavigationHeader } from './NavigationHeader';
 import { usePreferences } from './preferencesStore';
-import { getHlsStatus, logout, recordPlay, recordSkip, requestHlsTranscode, scrobbleToListenBrainz, nowPlayingListenBrainz, prefetchLyrics, listPlaylists, addTrackToPlaylist, apiFetch } from './apiClient';
+import {
+  getHlsStatus,
+  logout,
+  recordPartialListen,
+  recordPlay,
+  recordSkip,
+  requestHlsTranscode,
+  scrobbleToListenBrainz,
+  nowPlayingListenBrainz,
+  prefetchLyrics,
+  listPlaylists,
+  addTrackToPlaylist,
+  apiFetch,
+  sendRecommendationFeedback,
+  type RecommendationFeedbackAction,
+} from './apiClient';
 import { useWebSocket, useAdminPending, usePluginUpdates } from './useWebSocket';
 import { useSocialUpdates } from './socialStore';
 import { preparePushNotifications, unsubscribeCurrentPushDevice } from './pushNotifications';
@@ -421,7 +436,16 @@ function PlayerBar(props: {
   hasNext: boolean;
   onPrev: () => void;
   onNext: (p?: { currentTime: number; duration: number }) => void;
-  onPlayed: (p: { currentTime: number; duration: number }) => void;
+  onPlayed: (p: { currentTime: number; duration: number; listenedMs: number }) => void;
+  onPlaybackStopped: (p: {
+    trackId: number;
+    currentTime: number;
+    duration: number;
+    listenedMs: number;
+    completed: boolean;
+    slateId?: string;
+    bucketKey?: string;
+  }) => void;
   onClose: () => void;
   onEnded: () => void;
   onPlayModeEnded: () => void;
@@ -434,6 +458,7 @@ function PlayerBar(props: {
   onShare: () => void;
   showLyrics: boolean;
   onToggleLyrics: () => void;
+  onRecommendationFeedback?: (action: RecommendationFeedbackAction) => void;
   onTimeUpdate?: (time: number) => void;
   queue?: QueueTrack[];
   queueIndex?: number;
@@ -477,6 +502,13 @@ function PlayerBar(props: {
   } | null>(null);
   const suppressQueueClickUntilRef = useRef(0);
   const playedSentRef = useRef(false);
+  const playbackMetricsRef = useRef({
+    trackId: props.nowPlaying.id,
+    currentTime: 0,
+    duration: 0,
+    lastPosition: 0,
+    listenedSeconds: 0,
+  });
   const lastNotifiedTrackRef = useRef<number | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const [preferHls, setPreferHls] = useState(true);
@@ -498,8 +530,34 @@ function PlayerBar(props: {
   const canGoNext = props.hasNext || props.playMode !== 'normal';
 
   useEffect(() => {
+    const trackId = props.nowPlaying.id;
+    const stopped = props.onPlaybackStopped;
     setArtOk(true);
     playedSentRef.current = false;
+    playbackMetricsRef.current = {
+      trackId,
+      currentTime: 0,
+      duration: 0,
+      lastPosition: 0,
+      listenedSeconds: 0,
+    };
+
+    return () => {
+      const metrics = playbackMetricsRef.current;
+      if (metrics.trackId !== trackId || metrics.listenedSeconds < 1) return;
+      stopped({
+        trackId,
+        currentTime: metrics.currentTime,
+        duration: metrics.duration,
+        listenedMs: Math.round(metrics.listenedSeconds * 1000),
+        completed: playedSentRef.current,
+        slateId: props.nowPlaying.recommendation_slate_id,
+        bucketKey: props.nowPlaying.recommendation_bucket_key,
+      });
+    };
+    // Finalize only when this track leaves the player; callback identity may
+    // change as the shell renders and must not split one listen into fragments.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.nowPlaying.id]);
 
   useEffect(() => {
@@ -673,14 +731,38 @@ function PlayerBar(props: {
       setCurrentTime(a.currentTime);
       playerEventPropsRef.current.onTimeUpdate?.(a.currentTime);
       updateMediaSessionPosition(a.currentTime, a.duration);
-      if (!playedSentRef.current && a.duration > 0 && a.currentTime / a.duration >= 0.8) {
+      const metrics = playbackMetricsRef.current;
+      if (metrics.trackId === playerEventPropsRef.current.nowPlaying.id) {
+        const delta = a.currentTime - metrics.lastPosition;
+        // Ignore seeks while counting actual media consumed. Normal browser
+        // timeupdate intervals remain comfortably below ten seconds.
+        if (!a.paused && delta > 0 && delta <= 10) metrics.listenedSeconds += delta;
+        metrics.currentTime = a.currentTime;
+        metrics.duration = Number.isFinite(a.duration) ? a.duration : metrics.duration;
+        metrics.lastPosition = a.currentTime;
+      }
+      const meaningfulListenSeconds = Math.min(30, a.duration * 0.5);
+      if (
+        !playedSentRef.current
+        && a.duration > 0
+        && a.currentTime / a.duration >= 0.8
+        && metrics.listenedSeconds >= meaningfulListenSeconds
+      ) {
         playedSentRef.current = true;
-        playerEventPropsRef.current.onPlayed({ currentTime: a.currentTime, duration: a.duration });
+        playerEventPropsRef.current.onPlayed({
+          currentTime: a.currentTime,
+          duration: a.duration,
+          listenedMs: Math.round(metrics.listenedSeconds * 1000),
+        });
       }
     };
     const onLoadedMetadata = () => {
       setDuration(a.duration);
       updateMediaSessionPosition(a.currentTime, a.duration);
+      const metrics = playbackMetricsRef.current;
+      metrics.duration = Number.isFinite(a.duration) ? a.duration : 0;
+      metrics.currentTime = a.currentTime;
+      metrics.lastPosition = a.currentTime;
     };
     const onDurationChange = () => {
       setDuration(a.duration);
@@ -694,6 +776,16 @@ function PlayerBar(props: {
     };
     const onEnded = () => {
       const currentProps = playerEventPropsRef.current;
+      const metrics = playbackMetricsRef.current;
+      const meaningfulListenSeconds = a.duration > 0 ? Math.min(30, a.duration * 0.5) : 30;
+      if (!playedSentRef.current && metrics.listenedSeconds >= meaningfulListenSeconds) {
+        playedSentRef.current = true;
+        currentProps.onPlayed({
+          currentTime: Number.isFinite(a.duration) ? a.duration : a.currentTime,
+          duration: a.duration,
+          listenedMs: Math.round(metrics.listenedSeconds * 1000),
+        });
+      }
       if (currentProps.playMode === 'repeat-one') {
         a.currentTime = 0;
         a.play().catch(reportMusicPlaybackFailure);
@@ -1211,6 +1303,31 @@ function PlayerBar(props: {
                 <Icons.Share />
                 <span className="text-sm">Share</span>
               </button>
+              {props.onRecommendationFeedback && (
+                <>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); props.onRecommendationFeedback?.('more_like_this'); }}
+                    className="flex items-center gap-2 rounded-full border border-emerald-400/40 px-4 py-2 text-emerald-300"
+                  >
+                    <span aria-hidden="true">＋</span>
+                    <span className="text-sm">More like this</span>
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); props.onRecommendationFeedback?.('less_like_artist'); }}
+                    className="flex items-center gap-2 rounded-full border border-amber-400/40 px-4 py-2 text-amber-200"
+                  >
+                    <span aria-hidden="true">−</span>
+                    <span className="text-sm">Less from this artist</span>
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); props.onRecommendationFeedback?.('not_for_me'); }}
+                    className="flex items-center gap-2 rounded-full border border-red-400/40 px-4 py-2 text-red-300"
+                  >
+                    <Icons.Close />
+                    <span className="text-sm">Not for me</span>
+                  </button>
+                </>
+              )}
               <button
                 onClick={(e) => { e.stopPropagation(); props.onClose(); }}
                 className="flex items-center gap-2 px-4 py-2 rounded-full border border-red-500/50 text-red-400"
@@ -1438,6 +1555,40 @@ function PlayerBar(props: {
               >
                 <Icons.Lyrics />
               </button>
+              {props.onRecommendationFeedback && (
+                <details className="group/recommendation relative">
+                  <summary
+                    className="list-none cursor-pointer rounded-full px-2.5 py-1.5 text-lg leading-none text-white/50 hover:bg-white/10 hover:text-white"
+                    title="Tune recommendations"
+                    aria-label="Tune recommendations"
+                  >
+                    ···
+                  </summary>
+                  <div className="absolute bottom-full right-0 z-20 mb-2 w-52 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 py-1 shadow-2xl">
+                    <button
+                      type="button"
+                      onClick={() => props.onRecommendationFeedback?.('more_like_this')}
+                      className="block w-full px-3 py-2 text-left text-sm text-emerald-300 hover:bg-white/10"
+                    >
+                      More like this
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => props.onRecommendationFeedback?.('less_like_artist')}
+                      className="block w-full px-3 py-2 text-left text-sm text-amber-200 hover:bg-white/10"
+                    >
+                      Less from this artist
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => props.onRecommendationFeedback?.('not_for_me')}
+                      className="block w-full px-3 py-2 text-left text-sm text-red-300 hover:bg-white/10"
+                    >
+                      Don’t recommend this track
+                    </button>
+                  </div>
+                </details>
+              )}
               <div className="relative" ref={queueRef}>
                 <button
                   onClick={() => setShowQueue(!showQueue)}
@@ -1859,6 +2010,7 @@ export function AppShellNew() {
   const token = useAuth((s) => s.token);
   const user = useAuth((s) => s.user);
   const clearAuth = useAuth((s) => s.clear);
+  const showRecommendationToast = useToastStore((s) => s.show);
   const isAdmin = user?.role === 'admin';
   const pluginUpdate = usePluginUpdates((state) => state.lastUpdate);
   const unreadShares = useSocialUpdates((state) => state.unreadShares);
@@ -2054,13 +2206,58 @@ export function AppShellNew() {
   };
 
   const onNextWithStats = (p?: { currentTime: number; duration: number }) => {
-    if (token && nowPlaying?.id && p?.duration && Number.isFinite(p.duration) && p.duration > 0) {
-      const pct = Math.max(0, Math.min(1, (p.currentTime ?? 0) / p.duration));
-      if (pct < SKIP_THRESHOLD_PCT) {
-        recordSkip(token, nowPlaying.id, pct).catch((e: any) => { if (e?.status === 401) clearAuth(); });
-      }
-    }
+    void p;
     next();
+  };
+
+  const handlePlaybackStopped = (playback: {
+    trackId: number;
+    currentTime: number;
+    duration: number;
+    listenedMs: number;
+    completed: boolean;
+    slateId?: string;
+    bucketKey?: string;
+  }) => {
+    if (!token || playback.completed || playback.listenedMs < 1000) return;
+    const completionPct = playback.duration > 0
+      ? Math.max(0, Math.min(1, playback.currentTime / playback.duration))
+      : 0;
+    const signal = {
+      currentMs: Math.round(playback.currentTime * 1000),
+      durationMs: Math.round(playback.duration * 1000),
+      listenedMs: playback.listenedMs,
+      completionPct,
+      slateId: playback.slateId,
+      bucketKey: playback.bucketKey,
+    };
+    const request = completionPct < SKIP_THRESHOLD_PCT
+      ? recordSkip(token, playback.trackId, completionPct, signal)
+      : recordPartialListen(token, playback.trackId, signal);
+    request.catch((e: any) => { if (e?.status === 401) clearAuth(); });
+  };
+
+  const submitRecommendationFeedback = async (action: RecommendationFeedbackAction) => {
+    if (!token || !nowPlaying?.recommendation_bucket_key) return;
+    try {
+      await sendRecommendationFeedback(token, {
+        action,
+        trackId: nowPlaying.id,
+        artist: nowPlaying.artist,
+        bucketKey: nowPlaying.recommendation_bucket_key,
+      });
+      const messages: Record<RecommendationFeedbackAction, string> = {
+        more_like_this: 'We’ll use more music like this',
+        not_for_me: 'This track will not be recommended again',
+        less_like_artist: `We’ll play less from ${nowPlaying.artist || 'this artist'}`,
+        hide_bucket: 'This mix has been hidden',
+      };
+      showRecommendationToast(messages[action], 'success');
+      if (action === 'not_for_me') next();
+    } catch (feedbackError: any) {
+      if (feedbackError?.status === 401) clearAuth();
+      showRecommendationToast('Could not save recommendation feedback', 'error');
+    }
   };
 
   // Fetch similar tracks for auto-continue
@@ -2384,6 +2581,7 @@ export function AppShellNew() {
           onShare={() => setTrackToShare(nowPlaying)}
           showLyrics={showLyrics}
           onToggleLyrics={() => setShowLyrics((v) => !v)}
+          onRecommendationFeedback={nowPlaying.recommendation_bucket_key ? submitRecommendationFeedback : undefined}
           onTimeUpdate={setPlayerCurrentTime}
           queue={queue}
           queueIndex={index}
@@ -2397,10 +2595,18 @@ export function AppShellNew() {
             const pct = p.duration > 0 ? p.currentTime / p.duration : 0;
             if (pct < PLAYED_THRESHOLD_PCT) return;
             lastRecordedRef.current = nowPlaying.id;
-            recordPlay(token, nowPlaying.id).catch((e: any) => { if (e?.status === 401) clearAuth(); });
+            recordPlay(token, nowPlaying.id, {
+              currentMs: Math.round(p.currentTime * 1000),
+              durationMs: Math.round(p.duration * 1000),
+              listenedMs: p.listenedMs,
+              completionPct: pct,
+              slateId: nowPlaying.recommendation_slate_id,
+              bucketKey: nowPlaying.recommendation_bucket_key,
+            }).catch((e: any) => { if (e?.status === 401) clearAuth(); });
             // Scrobble to ListenBrainz
             scrobbleToListenBrainz(token, nowPlaying.id).catch(() => {});
           }}
+          onPlaybackStopped={handlePlaybackStopped}
           onClose={close}
           onEnded={handlePlayModeEnded}
           onPlayModeEnded={handlePlayModeEnded}

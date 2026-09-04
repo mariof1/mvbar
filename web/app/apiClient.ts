@@ -935,12 +935,34 @@ export async function listHistory(token: string, limit = 100, offset = 0) {
   };
 }
 
-export async function recordPlay(token: string, trackId: number) {
-  return (await apiFetch(`/history/${trackId}`, { method: 'POST' }, token)) as { ok: boolean };
+export type PlaybackSignal = {
+  currentMs?: number;
+  durationMs?: number;
+  listenedMs?: number;
+  completionPct?: number;
+  slateId?: string;
+  bucketKey?: string;
+};
+
+export async function recordPlay(token: string, trackId: number, signal?: PlaybackSignal) {
+  return (await apiFetch(`/history/${trackId}`, {
+    method: 'POST',
+    body: signal ? JSON.stringify(signal) : undefined,
+  }, token)) as { ok: boolean };
 }
 
-export async function recordSkip(token: string, trackId: number, pct: number) {
-  return (await apiFetch(`/stats/skip/${trackId}`, { method: 'POST', body: JSON.stringify({ pct }) }, token)) as { ok: boolean };
+export async function recordSkip(token: string, trackId: number, pct: number, signal?: PlaybackSignal) {
+  return (await apiFetch(`/stats/skip/${trackId}`, {
+    method: 'POST',
+    body: JSON.stringify({ pct, completionPct: pct, ...signal }),
+  }, token)) as { ok: boolean };
+}
+
+export async function recordPartialListen(token: string, trackId: number, signal: PlaybackSignal) {
+  return (await apiFetch(`/stats/listen/${trackId}`, {
+    method: 'POST',
+    body: JSON.stringify(signal),
+  }, token)) as { ok: boolean };
 }
 
 export async function browseAlbum(token: string, artist: string | null | undefined, album: string, artistId?: number) {
@@ -981,6 +1003,10 @@ export async function getRecommendations(token: string) {
   return (await apiFetch('/recommendations', { method: 'GET' }, token)) as {
     ok: boolean;
     generatedAt?: string;
+    slateId?: string;
+    _cached?: boolean;
+    _stale?: boolean;
+    _refreshing?: boolean;
     recommendationProfile?: 'new' | 'learning' | 'personalized';
     buckets: Array<{
       key: string;
@@ -1000,6 +1026,54 @@ export async function getRecommendations(token: string) {
       art_paths: string[];
       art_hashes: string[];
     }>;
+  };
+}
+
+export type RecommendationFeedbackAction =
+  | 'more_like_this'
+  | 'not_for_me'
+  | 'less_like_artist'
+  | 'hide_bucket';
+
+export async function sendRecommendationFeedback(
+  token: string,
+  feedback: {
+    action: RecommendationFeedbackAction;
+    trackId?: number;
+    artist?: string | null;
+    bucketKey?: string;
+  },
+) {
+  return (await apiFetch('/recommendations/feedback', {
+    method: 'POST',
+    body: JSON.stringify(feedback),
+  }, token)) as {
+    ok: boolean;
+    action: RecommendationFeedbackAction;
+    subjectType: 'track' | 'artist' | 'bucket';
+    subjectKey: string;
+    preference: number;
+  };
+}
+
+export type RecommendationPreference = {
+  subject_type: 'track' | 'artist' | 'bucket';
+  subject_key: string;
+  preference: number;
+  updated_at: string;
+};
+
+export async function getRecommendationFeedback(token: string) {
+  return (await apiFetch('/recommendations/feedback', { method: 'GET' }, token)) as {
+    ok: boolean;
+    preferences: RecommendationPreference[];
+  };
+}
+
+export async function clearAllRecommendationFeedback(token: string) {
+  return (await apiFetch('/recommendations/feedback/all', { method: 'DELETE' }, token)) as {
+    ok: boolean;
+    removed: number;
   };
 }
 

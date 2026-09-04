@@ -3,9 +3,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
-import { getRecommendations } from './apiClient';
-import { useHistoryUpdates } from './useWebSocket';
+import { getRecommendations, sendRecommendationFeedback } from './apiClient';
 import { trackArtistLabel } from './artistDisplay';
+import { useToastStore } from './Toast';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 type Track = {
   id: number;
@@ -154,35 +155,57 @@ function ArtGrid({ paths, hashes }: { paths: string[]; hashes: string[] }) {
 }
 
 // Bucket card with 2x2 art grid
-function BucketCard({ bucket, onClick, flipId }: { bucket: Bucket; onClick?: () => void; flipId?: string }) {
+function BucketCard({
+  bucket,
+  onClick,
+  onDetails,
+  flipId,
+}: {
+  bucket: Bucket;
+  onClick?: () => void;
+  onDetails?: () => void;
+  flipId?: string;
+}) {
   const disabled = bucket.tracks.length === 0;
 
   return (
-    <button
-      type="button"
-      className="group w-full text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 rounded-xl disabled:cursor-default disabled:opacity-60"
-      data-flip-id={flipId}
-      onClick={onClick}
-      disabled={disabled}
-    >
-      <div className="relative mb-3">
-        <ArtGrid paths={bucket.art_paths} hashes={bucket.art_hashes} />
-        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors rounded-xl flex items-center justify-center">
-          <div className="w-12 h-12 bg-cyan-500 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100 transition-all shadow-xl">
-            <svg className="w-5 h-5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
+    <div className="relative" data-flip-id={flipId}>
+      <button
+        type="button"
+        className="group w-full text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 rounded-xl disabled:cursor-default disabled:opacity-60"
+        onClick={onClick}
+        disabled={disabled}
+      >
+        <div className="relative mb-3">
+          <ArtGrid paths={bucket.art_paths} hashes={bucket.art_hashes} />
+          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors rounded-xl flex items-center justify-center">
+            <div className="w-12 h-12 bg-cyan-500 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100 transition-all shadow-xl">
+              <svg className="w-5 h-5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </div>
           </div>
         </div>
-      </div>
-      <div className="px-1">
-        <div className="font-semibold text-white text-sm">{bucket.name}</div>
-        {bucket.subtitle && <div className="text-xs text-slate-400 truncate">{bucket.subtitle}</div>}
-        {bucket.count > 0 && (
-          <div className="text-xs text-slate-500">{bucket.count} songs</div>
-        )}
-      </div>
-    </button>
+        <div className="px-1 pr-7">
+          <div className="font-semibold text-white text-sm">{bucket.name}</div>
+          {bucket.subtitle && <div className="text-xs text-slate-400 truncate">{bucket.subtitle}</div>}
+          {bucket.count > 0 && (
+            <div className="text-xs text-slate-500">{bucket.count} songs</div>
+          )}
+        </div>
+      </button>
+      <button
+        type="button"
+        onClick={onDetails}
+        className="absolute right-0 bottom-0 p-1.5 rounded-full text-slate-500 hover:text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70"
+        aria-label={`Why ${bucket.name} was recommended`}
+        title="Why this mix?"
+      >
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+        </svg>
+      </button>
+    </div>
   );
 }
 
@@ -192,12 +215,14 @@ export function Recommendations() {
   const { setQueueAndPlay } = usePlayer();
 
   const [loading, setLoading] = useState(false);
-  const [wsRefreshing, setWsRefreshing] = useState(false);
+  const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [buckets, setBuckets] = useState<Bucket[]>([]);
-
-  // Live updates
-  const historyLastUpdate = useHistoryUpdates((s) => s.lastUpdate);
+  const [slateId, setSlateId] = useState<string | undefined>();
+  const [detailsBucket, setDetailsBucket] = useState<Bucket | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useToastStore((state) => state.show);
+  useBodyScrollLock(Boolean(detailsBucket));
 
   const bucketsRef = useRef<HTMLDivElement>(null);
 
@@ -211,46 +236,68 @@ export function Recommendations() {
   const playBucket = (bucket: Bucket) => {
     if (bucket.tracks.length > 0) {
       setQueueAndPlay(
-        bucket.tracks.map((track) => ({ ...track, artist: trackArtistLabel(track) })),
+        bucket.tracks.map((track, position) => ({
+          ...track,
+          artist: trackArtistLabel(track),
+          recommendation_slate_id: slateId,
+          recommendation_bucket_key: bucket.key,
+          recommendation_position: position,
+        })),
         0,
       );
     }
   };
 
-  const loadRecommendations = (opts?: { silent?: boolean }) => {
+  const loadRecommendations = (opts?: { silent?: boolean; staleRetries?: number }) => {
     if (!token) return;
     const silent = Boolean(opts?.silent);
 
-    if (silent) setWsRefreshing(true);
+    if (silent) setBackgroundRefreshing(true);
     else setLoading(true);
 
     setError(null);
     getRecommendations(token)
-      .then((r) => setBuckets(r.buckets ?? []))
+      .then((r) => {
+        setBuckets(r.buckets ?? []);
+        setSlateId(r.slateId);
+        const staleRetries = opts?.staleRetries ?? 0;
+        if (r._stale && staleRetries < 3) {
+          if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = setTimeout(() => {
+            loadRecommendations({ silent: true, staleRetries: staleRetries + 1 });
+          }, 5000);
+        }
+      })
       .catch((e: any) => {
         if (e?.status === 401) clear();
         setError(e?.message ?? 'error');
       })
       .finally(() => {
-        if (silent) setWsRefreshing(false);
+        if (silent) setBackgroundRefreshing(false);
         else setLoading(false);
       });
   };
 
   useEffect(() => {
     loadRecommendations();
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  // Live updates: refresh recommendations when history changes (debounced + silent)
-  useEffect(() => {
-    if (!historyLastUpdate || !token) return;
-    const timeout = setTimeout(() => {
-      loadRecommendations({ silent: true });
-    }, 2000);
-    return () => clearTimeout(timeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyLastUpdate]);
+  const hideBucket = async (bucket: Bucket) => {
+    if (!token) return;
+    try {
+      await sendRecommendationFeedback(token, { action: 'hide_bucket', bucketKey: bucket.key });
+      setBuckets((current) => current.filter((item) => item.key !== bucket.key));
+      setDetailsBucket(null);
+      showToast(`Hidden “${bucket.name}”`, 'success');
+    } catch (feedbackError: any) {
+      if (feedbackError?.status === 401) clear();
+      showToast('Could not save recommendation feedback', 'error');
+    }
+  };
 
   if (!token) return null;
 
@@ -280,7 +327,7 @@ export function Recommendations() {
               <h3 className="text-lg font-semibold text-white">Made for you</h3>
               <p className="text-xs text-slate-500">A focused mix of favourites, rediscovery, and new finds</p>
             </div>
-            {wsRefreshing && <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />}
+            {backgroundRefreshing && <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" title="Refreshing recommendations" />}
           </div>
           <div ref={bucketsRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {buckets.map((bucket) => (
@@ -288,6 +335,7 @@ export function Recommendations() {
                 key={bucket.key}
                 bucket={bucket}
                 onClick={() => playBucket(bucket)}
+                onDetails={() => setDetailsBucket(bucket)}
                 flipId={`bucket:${bucket.key}`}
               />
             ))}
@@ -308,6 +356,57 @@ export function Recommendations() {
           <p className="text-slate-500 text-xs">
             Tip: Connect to <a href="/settings" className="text-cyan-400 hover:underline">ListenBrainz</a> for even better recommendations!
           </p>
+        </div>
+      )}
+
+      {detailsBucket && (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          role="presentation"
+          onClick={() => setDetailsBucket(null)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="recommendation-details-title"
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-900 p-5 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 id="recommendation-details-title" className="text-lg font-semibold text-white">{detailsBucket.name}</h3>
+                <p className="mt-1 text-sm leading-6 text-white/60">
+                  {detailsBucket.reason || detailsBucket.subtitle || 'Selected from your listening activity and music library.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded-full p-2 text-white/50 hover:bg-white/10 hover:text-white"
+                onClick={() => setDetailsBucket(null)}
+                aria-label="Close"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                className="rounded-xl px-4 py-2 text-sm text-white/60 hover:bg-white/10 hover:text-white"
+                onClick={() => setDetailsBucket(null)}
+              >
+                Keep this mix
+              </button>
+              <button
+                type="button"
+                className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-red-300 hover:bg-red-500/20"
+                onClick={() => void hideBucket(detailsBucket)}
+              >
+                Hide this mix
+              </button>
+            </div>
+          </section>
         </div>
       )}
     </div>

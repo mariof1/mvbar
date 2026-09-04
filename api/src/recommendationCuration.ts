@@ -1,3 +1,5 @@
+import { recommendationArtistKeys } from './recommendationFeatures.js';
+
 export interface RecommendationTrackLike {
   id: number;
   artist?: string | null;
@@ -154,13 +156,7 @@ function overlapRatio(a: RecommendationBucketLike, b: RecommendationBucketLike):
 }
 
 function normalizedArtists(value: string | null | undefined): string[] {
-  if (!value) return [];
-  return [...new Set(
-    value
-      .split(/\s*(?:;|\||•|\0|\uFEFF)\s*/)
-      .map((artist) => artist.trim().replace(/\s+/g, ' ').toLocaleLowerCase())
-      .filter(Boolean),
-  )];
+  return recommendationArtistKeys(value);
 }
 
 function normalizedAlbum(track: RecommendationTrackLike): string | null {

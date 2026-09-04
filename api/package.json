@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:missing-music-plugin": "node scripts/build-missing-music-plugin.mjs",
+    "audit:recommendations": "node scripts/audit-recommendations.mjs",
     "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs",
     "start": "node dist/index.js",
     "dev": "node --watch --loader ts-node/esm src/index.ts",

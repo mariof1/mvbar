@@ -10,6 +10,8 @@ import {
   getSubsonicSettings,
   setSubsonicPassword,
   clearSubsonicPassword,
+  clearAllRecommendationFeedback,
+  getRecommendationFeedback,
 } from './apiClient';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
@@ -59,6 +61,8 @@ export function Settings() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [recommendationTuningCount, setRecommendationTuningCount] = useState(0);
+  const [resettingRecommendationTuning, setResettingRecommendationTuning] = useState(false);
 
   // Unlink Google state
   const [unlinkAction, setUnlinkAction] = useState<'convert' | 'delete' | null>(null);
@@ -114,10 +118,37 @@ export function Settings() {
           setSubsonicConfigured(r.configured);
         })
         .catch(() => {});
+      getRecommendationFeedback(token)
+        .then((result) => setRecommendationTuningCount(result.preferences.length))
+        .catch(() => {});
     }
     loadVersion();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, loadPreferences]);
+
+  const resetRecommendationTuning = async () => {
+    if (!token || recommendationTuningCount === 0) return;
+    const confirmed = await showConfirm({
+      title: 'Reset recommendation tuning?',
+      message: 'This restores hidden mixes and clears your “more like this”, “less from this artist”, and “not for me” choices. Your listening history and favourites are not changed.',
+      confirmLabel: 'Reset tuning',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    setResettingRecommendationTuning(true);
+    setError(null);
+    try {
+      await clearAllRecommendationFeedback(token);
+      setRecommendationTuningCount(0);
+      setNotice('Recommendation tuning reset');
+    } catch (resetError: any) {
+      if (resetError?.status === 401) clear();
+      setError(resetError?.message || 'Failed to reset recommendation tuning');
+    } finally {
+      setResettingRecommendationTuning(false);
+    }
+  };
 
   // Avatar upload
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -597,6 +628,30 @@ export function Settings() {
                 onChange={(v) => updatePreferences(token, { auto_continue: v })}
                 disabled={!lastfmEnabled}
               />
+            </section>
+
+            <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Recommendation tuning</h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  Your feedback helps mvbar adjust future mixes. Listening history and favourites remain the main signals.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void resetRecommendationTuning()}
+                  disabled={resettingRecommendationTuning || recommendationTuningCount === 0}
+                  className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:text-slate-500"
+                >
+                  {resettingRecommendationTuning ? 'Resetting…' : 'Reset recommendation tuning'}
+                </button>
+                <span className="text-xs text-slate-500">
+                  {recommendationTuningCount === 0
+                    ? 'No manual tuning saved'
+                    : `${recommendationTuningCount} saved ${recommendationTuningCount === 1 ? 'choice' : 'choices'}`}
+                </span>
+              </div>
             </section>
           </>
         )}

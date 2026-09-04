@@ -19,6 +19,9 @@ export type QueueTrack = {
   art_path?: string | null;
   art_hash?: string | null;
   duration_ms?: number | null;
+  recommendation_slate_id?: string;
+  recommendation_bucket_key?: string;
+  recommendation_position?: number;
 };
 
 type PlayerState = {
