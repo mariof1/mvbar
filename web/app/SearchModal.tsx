@@ -2,7 +2,17 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from './store';
-import { apiFetch, browseAlbum, browseArtistTracks } from './apiClient';
+import {
+  apiFetch,
+  browseAlbum,
+  browseArtistTracks,
+  clearRecentSearches,
+  getRecentSearches,
+  removeRecentSearch,
+  saveRecentSearch,
+  type RecentSearch,
+  type RecentSearchInput,
+} from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useRouter } from './router';
 import { useLibraryUpdates } from './useWebSocket';
@@ -29,6 +39,7 @@ type ArtistHit = {
   name: string;
   art_path: string | null;
   art_hash: string | null;
+  art_track_id: number | null;
   track_count: number;
   album_count: number;
 };
@@ -87,6 +98,127 @@ function episodeArtUrl(episode: PodcastEpisodeHit) {
   return `/api/podcasts/episodes/${episode.id}/art`;
 }
 
+function recentItemId(item: Pick<RecentSearch, 'itemType' | 'itemKey'>) {
+  return `${item.itemType}:${item.itemKey}`;
+}
+
+function artistArtUrl(artist: Pick<ArtistHit, 'art_path' | 'art_hash' | 'art_track_id'>) {
+  if (artist.art_path) {
+    return `/api/art/${encodeURIComponent(artist.art_path)}${artist.art_hash ? `?h=${artist.art_hash}` : ''}`;
+  }
+  return artist.art_track_id ? `/api/library/tracks/${artist.art_track_id}/art` : null;
+}
+
+function artistRecentItem(artist: ArtistHit): RecentSearchInput {
+  return {
+    itemType: 'artist',
+    itemKey: String(artist.id),
+    title: artist.name,
+    subtitle: 'Artist',
+    imageUrl: artistArtUrl(artist),
+    payload: { artistId: artist.id, artistName: artist.name },
+  };
+}
+
+function albumRecentItem(album: AlbumHit): RecentSearchInput {
+  const artist = formatArtistValue(album.display_artist) ?? 'Unknown Artist';
+  return {
+    itemType: 'album',
+    itemKey: JSON.stringify([album.artist_id ?? artist, album.album]),
+    title: album.album,
+    subtitle: `${artist} · Album`,
+    imageUrl: album.art_track_id ? `/api/library/tracks/${album.art_track_id}/art` : null,
+    payload: {
+      artist: album.display_artist || '',
+      album: album.album,
+      artistId: album.artist_id,
+    },
+  };
+}
+
+function playlistRecentItem(playlist: PlaylistHit): RecentSearchInput {
+  return {
+    itemType: 'playlist',
+    itemKey: `${playlist.kind ?? 'playlist'}:${playlist.id}`,
+    title: playlist.name,
+    subtitle: playlist.kind === 'smart' ? 'Smart playlist' : 'Playlist',
+    imageUrl: null,
+    payload: { id: playlist.id, kind: playlist.kind ?? 'playlist' },
+  };
+}
+
+function podcastRecentItem(podcast: PodcastHit): RecentSearchInput {
+  return {
+    itemType: 'podcast',
+    itemKey: String(podcast.id),
+    title: podcast.title,
+    subtitle: [podcast.author, 'Podcast'].filter(Boolean).join(' · '),
+    imageUrl: podcastArtUrl(podcast),
+    payload: { podcastId: podcast.id },
+  };
+}
+
+function episodeRecentItem(episode: PodcastEpisodeHit): RecentSearchInput {
+  return {
+    itemType: 'podcast_episode',
+    itemKey: String(episode.id),
+    title: episode.title,
+    subtitle: [episode.podcast_title, 'Podcast episode'].filter(Boolean).join(' · '),
+    imageUrl: episodeArtUrl(episode),
+    payload: {
+      id: episode.id,
+      podcast_id: episode.podcast_id,
+      title: episode.title,
+      description: null,
+      audio_url: episode.audio_url,
+      duration_ms: episode.duration_ms,
+      image_url: episode.image_url,
+      image_path: episode.image_path ?? null,
+      published_at: episode.published_at,
+      position_ms: episode.position_ms,
+      played: episode.played,
+      podcast_title: episode.podcast_title,
+      podcast_image_url: episode.podcast_image_url,
+      podcast_image_path: episode.podcast_image_path ?? null,
+    },
+  };
+}
+
+function trackRecentItem(track: Hit): RecentSearchInput {
+  const artist = trackArtistLabel(track);
+  return {
+    itemType: 'track',
+    itemKey: String(track.id),
+    title: track.title ?? track.path,
+    subtitle: [artist, 'Song'].filter(Boolean).join(' · '),
+    imageUrl: `/api/library/tracks/${track.id}/art`,
+    payload: { id: track.id, title: track.title, artist },
+  };
+}
+
+function RecentSearchArtwork({ item }: { item: RecentSearch }) {
+  const rounded = item.itemType === 'artist' ? 'rounded-full' : 'rounded-lg';
+  return (
+    <span className={`relative flex h-11 w-11 flex-none items-center justify-center overflow-hidden bg-white/[0.07] text-slate-400 ${rounded}`}>
+      {item.itemType === 'artist' ? (
+        <span className="text-xs font-bold text-slate-300">{getInitials(item.title)}</span>
+      ) : (
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.7} aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 18V5l11-2v13M9 18c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2zm11-2c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2zM9 9l11-2" />
+        </svg>
+      )}
+      {item.imageUrl && (
+        <img
+          src={item.imageUrl}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          onError={(event) => { event.currentTarget.style.display = 'none'; }}
+        />
+      )}
+    </span>
+  );
+}
+
 interface SearchModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -111,11 +243,26 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
   const [playlistHits, setPlaylistHits] = useState<PlaylistHit[]>([]);
   const [podcastHits, setPodcastHits] = useState<PodcastHit[]>([]);
   const [podcastEpisodeHits, setPodcastEpisodeHits] = useState<PodcastEpisodeHit[]>([]);
+  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lastRefreshRef = useRef<number>(0);
   const prevLastUpdateRef = useRef(0);
   useBodyScrollLock(isOpen);
+
+  const persistRecentSearch = useCallback(async (item: RecentSearchInput) => {
+    if (!token) return;
+    try {
+      const saved = await saveRecentSearch(token, item);
+      setRecentSearches((current) => [
+        saved,
+        ...current.filter((recent) => recentItemId(recent) !== recentItemId(saved)),
+      ].slice(0, 10));
+    } catch (reason: any) {
+      if (reason?.status === 401) clear();
+    }
+  }, [token, clear]);
 
   // Auto-focus input when opened
   useEffect(() => {
@@ -125,20 +272,32 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
     }
   }, [isOpen]);
 
+  // Recent searches are account-scoped so they follow the user across devices.
+  useEffect(() => {
+    if (!isOpen || !token) return;
+    let active = true;
+    setRecentLoading(true);
+    getRecentSearches(token)
+      .then((response) => { if (active) setRecentSearches(response.searches); })
+      .catch((reason: any) => {
+        if (reason?.status === 401) clear();
+      })
+      .finally(() => { if (active) setRecentLoading(false); });
+    return () => { active = false; };
+  }, [isOpen, token, clear]);
+
   // Reset state when closed
   useEffect(() => {
     if (!isOpen) {
-      const t = setTimeout(() => {
-        setQ('');
-        setHits([]);
-        setArtistHits([]);
-        setAlbumHits([]);
-        setPlaylistHits([]);
-        setPodcastHits([]);
-        setPodcastEpisodeHits([]);
-        setError(null);
-      }, 150);
-      return () => clearTimeout(t);
+      setQ('');
+      setHits([]);
+      setArtistHits([]);
+      setAlbumHits([]);
+      setPlaylistHits([]);
+      setPodcastHits([]);
+      setPodcastEpisodeHits([]);
+      setLoading(false);
+      setError(null);
     }
   }, [isOpen]);
 
@@ -156,6 +315,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
   useEffect(() => {
     if (!isOpen || !token || q.trim().length === 0) {
       if (q.trim().length === 0) {
+        setLoading(false);
         setHits([]);
         setArtistHits([]);
         setAlbumHits([]);
@@ -175,11 +335,16 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
       lastRefreshRef.current = now;
     }
 
+    let active = true;
+    let controller: AbortController | null = null;
+    const query = q.trim().replace(/\s+/g, ' ');
     const id = setTimeout(async () => {
+      controller = new AbortController();
       setLoading(true);
       setError(null);
       try {
-        const r = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=20`, { method: 'GET' }, token);
+        const r = await apiFetch(`/search?q=${encodeURIComponent(query)}&limit=20`, { method: 'GET', signal: controller.signal }, token);
+        if (!active) return;
         setHits((r.hits ?? []).map((h: any) => ({ ...h, id: Number(h.id) })));
         setArtistHits(r.artists ?? []);
         setAlbumHits((r.albums ?? []).map((a: any) => ({
@@ -197,33 +362,124 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
           played: Boolean(e.played),
         })));
       } catch (e: any) {
+        if (!active || e?.name === 'AbortError') return;
         if (e?.status === 401) clear();
         setError(e?.message ?? 'Search failed');
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     }, 200);
-    return () => clearTimeout(id);
+    return () => {
+      active = false;
+      clearTimeout(id);
+      controller?.abort();
+    };
   }, [q, isOpen, token, clear, lastUpdate]);
 
-  const handleNavigate = useCallback((route: Parameters<typeof navigate>[0]) => {
+  const dismissRecentSearch = useCallback(async (item: RecentSearch) => {
+    if (!token) return;
+    const previous = recentSearches;
+    setRecentSearches((current) => current.filter((recent) => recentItemId(recent) !== recentItemId(item)));
+    try {
+      await removeRecentSearch(token, item.itemType, item.itemKey);
+    } catch (reason: any) {
+      if (reason?.status === 401) clear();
+      else {
+        setRecentSearches(previous);
+        setError('Could not remove that recent search.');
+      }
+    }
+  }, [token, recentSearches, clear]);
+
+  const dismissAllRecentSearches = useCallback(async () => {
+    if (!token || recentSearches.length === 0) return;
+    const previous = recentSearches;
+    setRecentSearches([]);
+    try {
+      await clearRecentSearches(token);
+    } catch (reason: any) {
+      if (reason?.status === 401) clear();
+      else {
+        setRecentSearches(previous);
+        setError('Could not clear recent searches.');
+      }
+    }
+  }, [token, recentSearches, clear]);
+
+  const handleNavigate = useCallback((route: Parameters<typeof navigate>[0], recent: RecentSearchInput) => {
+    void persistRecentSearch(recent);
     navigate(route);
     onClose();
-  }, [navigate, onClose]);
+  }, [persistRecentSearch, navigate, onClose]);
 
   const handlePlay = useCallback((t: Hit) => {
+    void persistRecentSearch(trackRecentItem(t));
     onPlay?.({ id: t.id, title: t.title, artist: trackArtistLabel(t) });
     onClose();
-  }, [onPlay, onClose]);
+  }, [persistRecentSearch, onPlay, onClose]);
 
   const handleAddToQueue = useCallback((t: Hit) => {
     onAddToQueue?.({ id: t.id, title: t.title, artist: trackArtistLabel(t) });
   }, [onAddToQueue]);
 
   const handlePodcastEpisodePlay = useCallback((episode: PodcastEpisodeHit) => {
+    void persistRecentSearch(episodeRecentItem(episode));
     setPodcastEpisode(episode);
     onClose();
-  }, [setPodcastEpisode, onClose]);
+  }, [persistRecentSearch, setPodcastEpisode, onClose]);
+
+  const activateRecentSearch = useCallback((item: RecentSearch) => {
+    const payload = item.payload;
+    const id = Number(payload.id ?? payload.artistId ?? payload.podcastId);
+    if (item.itemType === 'track' && Number.isFinite(id)) {
+      void persistRecentSearch(item);
+      onPlay?.({ id, title: typeof payload.title === 'string' ? payload.title : item.title, artist: typeof payload.artist === 'string' ? payload.artist : null });
+      onClose();
+      return;
+    }
+    if (item.itemType === 'artist' && Number.isFinite(id)) {
+      void persistRecentSearch(item);
+      navigate({ type: 'browse-artist', artistId: id, artistName: typeof payload.artistName === 'string' ? payload.artistName : item.title });
+      onClose();
+      return;
+    }
+    if (item.itemType === 'album' && typeof payload.album === 'string') {
+      void persistRecentSearch(item);
+      const artistId = Number(payload.artistId);
+      navigate({
+        type: 'browse-album',
+        artist: typeof payload.artist === 'string' ? payload.artist : '',
+        album: payload.album,
+        artistId: Number.isFinite(artistId) ? artistId : undefined,
+      });
+      onClose();
+      return;
+    }
+    if (item.itemType === 'playlist' && Number.isFinite(id)) {
+      void persistRecentSearch(item);
+      navigate(payload.kind === 'smart' ? { type: 'playlists', sub: 'smart' } : { type: 'playlist', playlistId: String(id) });
+      onClose();
+      return;
+    }
+    if (item.itemType === 'podcast' && Number.isFinite(id)) {
+      void persistRecentSearch(item);
+      navigate({ type: 'podcast', podcastId: id });
+      onClose();
+      return;
+    }
+    if (
+      item.itemType === 'podcast_episode'
+      && Number.isFinite(id)
+      && Number.isFinite(Number(payload.podcast_id))
+      && typeof payload.audio_url === 'string'
+    ) {
+      void persistRecentSearch(item);
+      setPodcastEpisode(payload as unknown as PodcastEpisode);
+      onClose();
+      return;
+    }
+    setError('This recent item is no longer available.');
+  }, [navigate, onClose, onPlay, persistRecentSearch, setPodcastEpisode]);
 
   if (!isOpen || !token) return null;
 
@@ -261,6 +517,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
               placeholder="Search songs, artists, albums, podcasts..."
               className="flex-1 bg-transparent text-white text-lg placeholder-slate-500 focus:outline-none"
               autoComplete="off"
+              maxLength={200}
               spellCheck={false}
             />
             {loading && (
@@ -301,14 +558,17 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                     >
                       <button
                         type="button"
-                        onClick={() => handleNavigate({ type: 'browse-artist', artistId: a.id, artistName: a.name })}
+                        onClick={() => handleNavigate(
+                          { type: 'browse-artist', artistId: a.id, artistName: a.name },
+                          artistRecentItem(a),
+                        )}
                         className="flex min-w-0 flex-1 items-center gap-3 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                       >
                         <div className="w-9 h-9 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex-shrink-0 flex items-center justify-center text-xs font-bold text-white relative overflow-hidden">
                           {getInitials(a.name)}
-                          {a.art_path && (
+                          {artistArtUrl(a) && (
                             <img
-                              src={`/api/art/${encodeURIComponent(a.art_path)}${a.art_hash ? `?h=${a.art_hash}` : ''}`}
+                              src={artistArtUrl(a)!}
                               alt=""
                               className="absolute inset-0 w-full h-full object-cover"
                               onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
@@ -352,7 +612,10 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                     >
                       <button
                         type="button"
-                        onClick={() => handleNavigate({ type: 'browse-album', artist: a.display_artist || '', album: a.album, artistId: a.artist_id || undefined })}
+                        onClick={() => handleNavigate(
+                          { type: 'browse-album', artist: a.display_artist || '', album: a.album, artistId: a.artist_id || undefined },
+                          albumRecentItem(a),
+                        )}
                         className="flex min-w-0 flex-1 items-center gap-3 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                       >
                         <div className="w-9 h-9 rounded-lg bg-slate-700 flex-shrink-0 relative overflow-hidden">
@@ -398,7 +661,10 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                   {playlistHits.slice(0, 4).map((p) => (
                     <button
                       key={p.id}
-                      onClick={() => handleNavigate(p.kind === 'smart' ? { type: 'playlists', sub: 'smart' } : { type: 'playlist', playlistId: String(p.id) })}
+                      onClick={() => handleNavigate(
+                        p.kind === 'smart' ? { type: 'playlists', sub: 'smart' } : { type: 'playlist', playlistId: String(p.id) },
+                        playlistRecentItem(p),
+                      )}
                       className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left"
                     >
                       <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-600/20 to-blue-600/20 flex-shrink-0 flex items-center justify-center">
@@ -426,7 +692,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                   {podcastHits.map((p) => (
                     <button
                       key={p.id}
-                      onClick={() => handleNavigate({ type: 'podcast', podcastId: p.id })}
+                      onClick={() => handleNavigate({ type: 'podcast', podcastId: p.id }, podcastRecentItem(p))}
                       className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left"
                     >
                       <div className="w-9 h-9 rounded-lg bg-cyan-500/10 flex-shrink-0 flex items-center justify-center text-xs font-bold text-cyan-200 relative overflow-hidden">
@@ -565,14 +831,65 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
               </div>
             )}
 
-            {/* Initial state */}
+            {/* Spotify-style recently selected results */}
             {!hasQuery && !error && (
-              <div className="px-5 py-10 text-center text-slate-500">
-                <svg className="w-10 h-10 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                <p className="text-sm">Start typing to search your library</p>
-              </div>
+              recentLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" aria-label="Loading recent searches" />
+                </div>
+              ) : recentSearches.length > 0 ? (
+                <section className="px-3 py-3 sm:px-5 sm:py-4" aria-labelledby="recent-searches-title">
+                  <div className="mb-2 flex items-center justify-between gap-4 px-2">
+                    <h2 id="recent-searches-title" className="text-sm font-semibold text-white">Recent searches</h2>
+                    <button
+                      type="button"
+                      onClick={() => void dismissAllRecentSearches()}
+                      className="rounded-lg px-2 py-1 text-xs font-medium text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                  <div className="space-y-0.5">
+                    {recentSearches.map((recent) => (
+                      <div
+                        key={recentItemId(recent)}
+                        className="group flex items-center gap-2 rounded-xl transition hover:bg-white/[0.06]"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => activateRecentSearch(recent)}
+                          className="flex min-w-0 flex-1 items-center gap-3 rounded-xl px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70"
+                        >
+                          <RecentSearchArtwork item={recent} />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium text-white">{recent.title}</span>
+                            {recent.subtitle && <span className="block truncate text-xs text-slate-500">{recent.subtitle}</span>}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void dismissRecentSearch(recent)}
+                          className="mr-2 rounded-full p-2 text-slate-500 transition hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
+                          aria-label={`Remove ${recent.title} from recent searches`}
+                          title="Remove"
+                        >
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : (
+                <div className="px-5 py-10 text-center text-slate-500">
+                  <svg className="w-10 h-10 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  <p className="text-sm">Search your library</p>
+                  <p className="mt-1 text-xs text-slate-600">Artists, albums, songs, and more that you open will appear here.</p>
+                </div>
+              )
             )}
           </div>
         </div>

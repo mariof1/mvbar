@@ -318,7 +318,13 @@ function entitySearchTerms(query: string): { lower: string; folded: string; stri
   };
 }
 
-function entityMatchCondition(fields: string[], terms: ReturnType<typeof entitySearchTerms>, params: any[], paramIndex: { value: number }): string | null {
+function entityMatchCondition(
+  fields: string[],
+  terms: ReturnType<typeof entitySearchTerms>,
+  params: any[],
+  paramIndex: { value: number },
+  fuzzyFields: string[] = fields,
+): string | null {
   if (!terms) return null;
 
   const originalParam = paramIndex.value++;
@@ -332,6 +338,9 @@ function entityMatchCondition(fields: string[], terms: ReturnType<typeof entityS
     return [
       `lower(coalesce(${field}, '')) like $${originalParam}`,
       `${foldedField} like $${foldedParam}`,
+      ...(terms.folded.length >= 4 && fuzzyFields.includes(field)
+        ? [`word_similarity(replace($${foldedParam}, '%', ''), ${foldedField}) >= 0.5`]
+        : []),
       ...(strippedParam ? [`regexp_replace(${foldedField}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}`] : [])
     ];
   });
@@ -360,13 +369,25 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
   const podcastParams: any[] = [userId];
   const podcastIndex = { value: 2 };
   const podcastConditions = terms
-    .map((term) => entityMatchCondition(['p.title', 'p.author', 'p.description'], term, podcastParams, podcastIndex))
+    .map((term) => entityMatchCondition(
+      ['p.title', 'p.author', 'p.description'],
+      term,
+      podcastParams,
+      podcastIndex,
+      ['p.title', 'p.author'],
+    ))
     .filter((condition): condition is string => Boolean(condition));
 
   const episodeParams: any[] = [userId];
   const episodeIndex = { value: 2 };
   const episodeConditions = terms
-    .map((term) => entityMatchCondition(['e.title', 'p.title', 'e.description', 'p.description'], term, episodeParams, episodeIndex))
+    .map((term) => entityMatchCondition(
+      ['e.title', 'p.title', 'e.description', 'p.description'],
+      term,
+      episodeParams,
+      episodeIndex,
+      ['e.title', 'p.title'],
+    ))
     .filter((condition): condition is string => Boolean(condition));
 
   if (podcastConditions.length === 0 && episodeConditions.length === 0) {
@@ -402,8 +423,18 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
               when ${sqlFold('p.title')} like replace($2, '%', '') || '%' then 1
               when ${sqlFold('p.title')} like $2 then 2
               when ${sqlFold('p.author')} like $2 then 3
-              else 4
+              when word_similarity(replace($3, '%', ''), ${sqlFold('p.title')}) >= 0.5 then 4
+              when word_similarity(replace($3, '%', ''), ${sqlFold('p.author')}) >= 0.5 then 5
+              else 6
             end,
+            greatest(
+              word_similarity(replace($3, '%', ''), ${sqlFold('p.title')}),
+              word_similarity(replace($3, '%', ''), ${sqlFold('p.author')})
+            ) desc,
+            greatest(
+              similarity(replace($3, '%', ''), ${sqlFold('p.title')}),
+              similarity(replace($3, '%', ''), ${sqlFold('p.author')})
+            ) desc,
             p.title asc
           limit 24
         `,
@@ -448,9 +479,19 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
               when ${sqlFold('p.title')} like replace($2, '%', '') || '%' then 3
               when ${sqlFold('e.title')} like $2 then 4
               when ${sqlFold('p.title')} like $2 then 5
-              when ${sqlFold('e.description')} like $2 then 6
-              else 7
+              when word_similarity(replace($3, '%', ''), ${sqlFold('e.title')}) >= 0.5 then 6
+              when word_similarity(replace($3, '%', ''), ${sqlFold('p.title')}) >= 0.5 then 7
+              when ${sqlFold('e.description')} like $2 then 8
+              else 9
             end,
+            greatest(
+              word_similarity(replace($3, '%', ''), ${sqlFold('e.title')}),
+              word_similarity(replace($3, '%', ''), ${sqlFold('p.title')})
+            ) desc,
+            greatest(
+              similarity(replace($3, '%', ''), ${sqlFold('e.title')}),
+              similarity(replace($3, '%', ''), ${sqlFold('p.title')})
+            ) desc,
             e.published_at desc nulls last,
             e.created_at desc
           limit 50
@@ -464,6 +505,106 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
 }
 
 export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
+  app.get('/api/search/recent', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    const requestedLimit = Number((req.query as { limit?: string }).limit ?? 10);
+    const limit = Math.min(20, Math.max(1, Number.isFinite(requestedLimit) ? Math.trunc(requestedLimit) : 10));
+    const result = await db().query<{
+      item_type: string;
+      item_key: string;
+      title: string;
+      subtitle: string | null;
+      image_url: string | null;
+      payload: Record<string, unknown>;
+      accessed_at: Date;
+    }>(
+      `select item_type, item_key, title, subtitle, image_url, payload, accessed_at
+         from user_recent_search_items
+        where user_id=$1
+        order by accessed_at desc
+        limit $2`,
+      [req.user.userId, limit],
+    );
+    return {
+      ok: true,
+      searches: result.rows.map((row) => ({
+        itemType: row.item_type,
+        itemKey: row.item_key,
+        title: row.title,
+        subtitle: row.subtitle,
+        imageUrl: row.image_url,
+        payload: row.payload,
+        accessedAt: row.accessed_at,
+      })),
+    };
+  });
+
+  app.post('/api/search/recent', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const allowedTypes = new Set(['track', 'artist', 'album', 'playlist', 'podcast', 'podcast_episode']);
+    const itemType = typeof body.itemType === 'string' ? body.itemType : '';
+    const itemKey = typeof body.itemKey === 'string' ? body.itemKey.trim() : '';
+    const title = typeof body.title === 'string' ? body.title.trim().replace(/\s+/g, ' ') : '';
+    const subtitle = typeof body.subtitle === 'string' ? body.subtitle.trim().replace(/\s+/g, ' ') || null : null;
+    const imageUrl = typeof body.imageUrl === 'string' ? body.imageUrl.trim() || null : null;
+    const payload = body.payload;
+    if (
+      !allowedTypes.has(itemType)
+      || !itemKey || itemKey.length > 500
+      || !title || title.length > 300
+      || (subtitle?.length ?? 0) > 500
+      || (imageUrl !== null && (imageUrl.length > 1_000 || !imageUrl.startsWith('/api/') || /[\r\n]/.test(imageUrl)))
+      || !payload || typeof payload !== 'object' || Array.isArray(payload)
+      || JSON.stringify(payload).length > 8_000
+    ) {
+      return reply.code(400).send({ ok: false, error: 'invalid_recent_search_item' });
+    }
+    const result = await db().query<{ accessed_at: Date }>(
+      `insert into user_recent_search_items(user_id, item_type, item_key, title, subtitle, image_url, payload, accessed_at)
+       values ($1, $2, $3, $4, $5, $6, $7, now())
+       on conflict (user_id, item_type, item_key) do update
+         set title=excluded.title,
+             subtitle=excluded.subtitle,
+             image_url=excluded.image_url,
+             payload=excluded.payload,
+             accessed_at=now()
+       returning accessed_at`,
+      [req.user.userId, itemType, itemKey, title, subtitle, imageUrl, payload],
+    );
+    // Bound storage while allowing the UI to request fewer entries.
+    await db().query(
+      `delete from user_recent_search_items
+        where user_id=$1
+          and (item_type, item_key) not in (
+            select item_type, item_key
+              from user_recent_search_items
+             where user_id=$1
+             order by accessed_at desc
+             limit 20
+          )`,
+      [req.user.userId],
+    );
+    return { ok: true, itemType, itemKey, title, subtitle, imageUrl, payload, accessedAt: result.rows[0].accessed_at };
+  });
+
+  app.delete('/api/search/recent', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    const query = req.query as { type?: string; key?: string };
+    const itemType = typeof query.type === 'string' ? query.type : '';
+    const itemKey = typeof query.key === 'string' ? query.key : '';
+    if (itemType || itemKey) {
+      if (!itemType || !itemKey) return reply.code(400).send({ ok: false, error: 'invalid_recent_search_selector' });
+      const result = await db().query(
+        'delete from user_recent_search_items where user_id=$1 and item_type=$2 and item_key=$3',
+        [req.user.userId, itemType, itemKey],
+      );
+      return { ok: true, removed: result.rowCount ?? 0 };
+    }
+    const result = await db().query('delete from user_recent_search_items where user_id=$1', [req.user.userId]);
+    return { ok: true, removed: result.rowCount ?? 0 };
+  });
+
   app.get('/api/search', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
 
@@ -614,6 +755,10 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
             where.push(`(
               lower(a.name) like $${originalParam}
               or ${artistAsciiExpr} like $${foldedParam}
+              ${terms.folded.length >= 4 ? `or (
+                ${artistAsciiExpr} % replace($${foldedParam}, '%', '')
+                and word_similarity(replace($${foldedParam}, '%', ''), ${artistAsciiExpr}) >= 0.5
+              )` : ''}
               ${strippedParam ? `or regexp_replace(${artistAsciiExpr}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}` : ''}
             )`);
           }
@@ -647,8 +792,12 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
                  when ${artistAsciiExpr} like replace($2, '%', '') || '%' then 1
                  when lower(a.name) like $1 then 2
                  when ${artistAsciiExpr} like $2 then 2
+                 ${terms && terms.folded.length >= 4 ? `when word_similarity(replace($2, '%', ''), ${artistAsciiExpr}) >= 0.5 then 3` : ''}
                  else 4
-               end, track_count desc, a.name asc`
+               end,
+               ${terms && terms.folded.length >= 4 ? `word_similarity(replace($2, '%', ''), ${artistAsciiExpr}) desc,` : ''}
+               ${terms && terms.folded.length >= 4 ? `similarity(replace($2, '%', ''), ${artistAsciiExpr}) desc,` : ''}
+               track_count desc, a.name asc`
             : 'track_count desc, a.name asc';
 
           const r = await db().query(
@@ -658,6 +807,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
               a.name,
               a.art_path,
               a.art_hash,
+              (array_agg(t.id order by (t.art_path is null) asc, t.path asc))[1]::int as art_track_id,
               count(distinct t.id)::int as track_count,
               count(distinct nullif(t.album, ''))::int as album_count
             from artists a
@@ -693,6 +843,14 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
               or lower(coalesce(t.album_artist, t.artist)) like $${originalParam}
               or ${albumFoldExpr} like $${foldedParam}
               or ${albumArtistFoldExpr} like $${foldedParam}
+              ${terms.folded.length >= 4 ? `or (
+                ${albumFoldExpr} % replace($${foldedParam}, '%', '')
+                and word_similarity(replace($${foldedParam}, '%', ''), ${albumFoldExpr}) >= 0.5
+              )` : ''}
+              ${terms.folded.length >= 4 ? `or (
+                ${albumArtistFoldExpr} % replace($${foldedParam}, '%', '')
+                and word_similarity(replace($${foldedParam}, '%', ''), ${albumArtistFoldExpr}) >= 0.5
+              )` : ''}
               ${strippedParam ? `or regexp_replace(${albumFoldExpr}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}` : ''}
               ${strippedParam ? `or regexp_replace(${albumArtistFoldExpr}, '[^a-z0-9 ]', '', 'g') like $${strippedParam}` : ''}
             )`);
@@ -726,7 +884,22 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
                 t.album,
                 t.id as first_track_id,
                 t.art_path,
-                t.art_hash
+                t.art_hash,
+                ${terms ? `case
+                  when ${albumFoldExpr} = replace($2, '%', '') then 0
+                  when ${albumFoldExpr} like replace($2, '%', '') || '%' then 1
+                  when ${albumFoldExpr} like $2 then 2
+                  when ${albumArtistFoldExpr} = replace($2, '%', '') then 3
+                  when ${albumArtistFoldExpr} like replace($2, '%', '') || '%' then 4
+                  when ${albumArtistFoldExpr} like $2 then 5
+                  else 6
+                end` : '0'} as match_rank,
+                ${terms && terms.folded.length >= 4
+                  ? `greatest(
+                      word_similarity(replace($2, '%', ''), ${albumFoldExpr}),
+                      word_similarity(replace($2, '%', ''), ${albumArtistFoldExpr})
+                    )`
+                  : '0'} as match_similarity
               from active_tracks t
               where ${where.join(' and ')}
               order by t.album, (t.art_path is null) asc, t.path
@@ -758,7 +931,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
               ac.track_count
             from unique_albums ua
             join album_counts ac on ac.album = ua.album
-            order by ac.track_count desc, ua.album asc
+            order by ua.match_rank, ua.match_similarity desc, ac.track_count desc, ua.album asc
             limit 12
           `,
             params as any
@@ -771,20 +944,35 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
           const terms = entitySearchTerms(entityTextQuery);
           const playlistFoldExpr = sqlFold('name');
           const playlistWhere = terms
-            ? `(lower(name) like $2 or ${playlistFoldExpr} like $3${terms.stripped ? ` or regexp_replace(${playlistFoldExpr}, '[^a-z0-9 ]', '', 'g') like $4` : ''})`
+            ? `(
+                lower(name) like $2
+                or ${playlistFoldExpr} like $3
+                ${terms.folded.length >= 4 ? `or word_similarity(replace($3, '%', ''), ${playlistFoldExpr}) >= 0.5` : ''}
+                ${terms.stripped ? `or regexp_replace(${playlistFoldExpr}, '[^a-z0-9 ]', '', 'g') like $4` : ''}
+              )`
             : 'false';
           const playlistParams = terms
             ? [userId, `%${terms.lower}%`, `%${terms.folded}%`, ...(terms.stripped ? [`%${terms.stripped}%`] : [])]
             : [userId];
+          const playlistOrder = terms
+            ? `case
+                 when ${playlistFoldExpr} = replace($3, '%', '') then 0
+                 when ${playlistFoldExpr} like replace($3, '%', '') || '%' then 1
+                 when ${playlistFoldExpr} like $3 then 2
+                 else 3
+               end,
+               ${terms.folded.length >= 4 ? `word_similarity(replace($3, '%', ''), ${playlistFoldExpr}) desc,` : ''}
+               ${terms.folded.length >= 4 ? `similarity(replace($3, '%', ''), ${playlistFoldExpr}) desc,` : ''}`
+            : '';
 
           const r = await db().query(
-            `select id::int, name, created_at from playlists where user_id = $1 and ${playlistWhere} order by id desc limit 12`,
+            `select id::int, name, created_at from playlists where user_id = $1 and ${playlistWhere} order by ${playlistOrder} id desc limit 12`,
             playlistParams
           );
           playlists.push(...r.rows.map((x: any) => ({ ...x, kind: 'playlist' })));
 
           const r2 = await db().query(
-            `select id::int, name, updated_at from smart_playlists where user_id = $1 and ${playlistWhere} order by updated_at desc limit 12`,
+            `select id::int, name, updated_at from smart_playlists where user_id = $1 and ${playlistWhere} order by ${playlistOrder} updated_at desc limit 12`,
             playlistParams
           );
           playlists.push(...r2.rows.map((x: any) => ({ ...x, kind: 'smart' })));

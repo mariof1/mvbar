@@ -24,6 +24,7 @@ export async function initDb() {
 
   pool = new Pool({ connectionString: url });
   await pool.query('select 1');
+  await pool.query('create extension if not exists pg_trgm');
 
   await pool.query(`
     create table if not exists users (
@@ -384,6 +385,22 @@ export async function initDb() {
   await pool.query('alter table artists add column if not exists ascii_name text');
   await pool.query('alter table artists add column if not exists musicbrainz_id text');
   await pool.query('create index if not exists artists_ascii_name_idx on artists(ascii_name)');
+  await pool.query(`
+    create index if not exists artists_search_trgm_idx on artists using gin (
+      (lower(coalesce(nullif(ascii_name, ''), translate(coalesce(name, ''), 'ĄĆĘŁŃÓŚŹŻąćęłńóśźż', 'ACELNOSZZacelnoszz')))) gin_trgm_ops
+    )
+  `);
+
+  await pool.query(`
+    create index if not exists tracks_album_search_trgm_idx on tracks using gin (
+      (lower(translate(coalesce(album, ''), 'ĄĆĘŁŃÓŚŹŻąćęłńóśźż', 'ACELNOSZZacelnoszz'))) gin_trgm_ops
+    )
+  `);
+  await pool.query(`
+    create index if not exists tracks_album_artist_search_trgm_idx on tracks using gin (
+      (lower(translate(coalesce(album_artist, artist, ''), 'ĄĆĘŁŃÓŚŹŻąćęłńóśźż', 'ACELNOSZZacelnoszz'))) gin_trgm_ops
+    )
+  `);
 
   await pool.query(`
     create table if not exists track_artists (
@@ -592,6 +609,24 @@ export async function initDb() {
   `);
   await pool.query('create index if not exists search_logs_user_created_idx on search_logs(user_id, created_at desc)');
   await pool.query('create index if not exists search_logs_user_query_idx on search_logs(user_id, query_normalized)');
+
+  // User-facing search history is intentionally separate from search_logs.
+  // search_logs captures autocomplete traffic for recommendation signals,
+  // while this table stores the entities a user actually selected.
+  await pool.query(`
+    create table if not exists user_recent_search_items (
+      user_id text not null references users(id) on delete cascade,
+      item_type text not null check (item_type in ('track', 'artist', 'album', 'playlist', 'podcast', 'podcast_episode')),
+      item_key text not null,
+      title text not null,
+      subtitle text,
+      image_url text,
+      payload jsonb not null default '{}'::jsonb,
+      accessed_at timestamptz not null default now(),
+      primary key (user_id, item_type, item_key)
+    );
+  `);
+  await pool.query('create index if not exists user_recent_search_items_user_date_idx on user_recent_search_items(user_id, accessed_at desc)');
 
   // Track tempo/bpm for tempo-based recommendations
   await pool.query('alter table tracks add column if not exists bpm real');

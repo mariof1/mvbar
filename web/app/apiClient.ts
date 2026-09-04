@@ -29,6 +29,47 @@ export async function apiFetch(path: string, init: RequestInit = {}, token?: str
   return data;
 }
 
+export type RecentSearch = {
+  itemType: 'track' | 'artist' | 'album' | 'playlist' | 'podcast' | 'podcast_episode';
+  itemKey: string;
+  title: string;
+  subtitle: string | null;
+  imageUrl: string | null;
+  payload: Record<string, unknown>;
+  accessedAt: string;
+};
+
+export type RecentSearchInput = Omit<RecentSearch, 'accessedAt'>;
+
+export async function getRecentSearches(token: string, limit = 10) {
+  const boundedLimit = Math.max(1, Math.min(20, Math.trunc(Number.isFinite(limit) ? limit : 10)));
+  return (await apiFetch(`/search/recent?limit=${boundedLimit}`, { method: 'GET' }, token)) as {
+    ok: true;
+    searches: RecentSearch[];
+  };
+}
+
+export async function saveRecentSearch(token: string, item: RecentSearchInput) {
+  return (await apiFetch('/search/recent', {
+    method: 'POST',
+    body: JSON.stringify(item),
+  }, token)) as { ok: true } & RecentSearch;
+}
+
+export async function removeRecentSearch(token: string, itemType: RecentSearch['itemType'], itemKey: string) {
+  return (await apiFetch(`/search/recent?type=${encodeURIComponent(itemType)}&key=${encodeURIComponent(itemKey)}`, { method: 'DELETE' }, token)) as {
+    ok: true;
+    removed: number;
+  };
+}
+
+export async function clearRecentSearches(token: string) {
+  return (await apiFetch('/search/recent', { method: 'DELETE' }, token)) as {
+    ok: true;
+    removed: number;
+  };
+}
+
 function adminTransferHeaders(token: string) {
   const headers = new Headers();
   if (token && token !== 'cookie') headers.set('authorization', `Bearer ${token}`);
