@@ -38,6 +38,7 @@ services:
       BACKUP_DIR: /data/backups
       PLUGINS_ENABLED: ${PLUGINS_ENABLED:-true}
       PLUGINS_DIR: /data/plugins
+      PLUGIN_REGISTRY_URL: ${PLUGIN_REGISTRY_URL:-https://raw.githubusercontent.com/mariof1/mvbar-plugins/main/registry.json}
       PLUGIN_MAX_UPLOAD_MB: ${PLUGIN_MAX_UPLOAD_MB:-50}
       PLUGIN_TIMEOUT_MS: ${PLUGIN_TIMEOUT_MS:-15000}
       PLUGIN_MEMORY_MB: ${PLUGIN_MEMORY_MB:-64}

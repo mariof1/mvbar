@@ -1,11 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { apiFetch } from './apiClient';
+import {
+  apiFetch,
+  installBundledAdminPlugin,
+  listAdminPlugins,
+  setAdminPluginEnabled,
+  type AdminPlugin,
+  type BundledAdminPlugin,
+} from './apiClient';
 import { useAuth } from './store';
 import { formatCount } from './format';
 import { useToastStore } from './Toast';
 import { useMissingMusicUpdates } from './useWebSocket';
+import { showConfirm } from './ConfirmModal';
 
 type Artist = {
   name: string;
@@ -74,6 +82,11 @@ type RequestItem = {
   completedAt: string | null;
 };
 
+type PluginUpdate = {
+  available: BundledAdminPlugin;
+  installed: AdminPlugin;
+};
+
 function messageForError(error: unknown) {
   const value = error as { data?: { error?: string }; message?: string };
   return value?.data?.error || value?.message || 'Request failed';
@@ -126,6 +139,9 @@ export function MissingMusic() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [status, setStatus] = useState<MissingMusicStatus | null>(null);
+  const [pluginUpdate, setPluginUpdate] = useState<PluginUpdate | null>(null);
+  const [updatingPlugin, setUpdatingPlugin] = useState(false);
+  const [updateNeedsReview, setUpdateNeedsReview] = useState(false);
 
   const loadArtists = useCallback(async (search = '') => {
     if (!token) return;
@@ -160,15 +176,66 @@ export function MissingMusic() {
     }
   }, [token]);
 
+  const loadPluginUpdate = useCallback(async () => {
+    if (!token || !isAdmin) {
+      setPluginUpdate(null);
+      return;
+    }
+    try {
+      const result = await listAdminPlugins(token);
+      const available = result.bundledPlugins.find((plugin) => plugin.id === 'mvbar.missing-music');
+      const installed = result.plugins.find((plugin) => plugin.id === 'mvbar.missing-music');
+      setPluginUpdate(available?.updateAvailable && installed ? { available, installed } : null);
+    } catch {
+      // Discovery remains usable when the optional public registry is offline.
+      setPluginUpdate(null);
+    }
+  }, [isAdmin, token]);
+
   useEffect(() => {
     void loadArtists();
     void loadRequests();
     void loadStatus();
-  }, [loadArtists, loadRequests, loadStatus]);
+    void loadPluginUpdate();
+  }, [loadArtists, loadPluginUpdate, loadRequests, loadStatus]);
 
   useEffect(() => {
     if (liveUpdate) void loadRequests();
   }, [liveUpdate, loadRequests]);
+
+  const updatePlugin = async () => {
+    if (!token || !pluginUpdate) return;
+    const confirmed = await showConfirm({
+      title: 'Update Missing Music?',
+      message: `Install official version ${pluginUpdate.available.version} from the MVBar plugin registry? It will remain enabled automatically only when its permissions are unchanged.`,
+      confirmLabel: 'Install update',
+    });
+    if (!confirmed) return;
+    setUpdatingPlugin(true);
+    setUpdateNeedsReview(false);
+    try {
+      const result = await installBundledAdminPlugin(token, pluginUpdate.available.key);
+      let installed = result.plugin;
+      if (
+        result.state === 'updated'
+        && pluginUpdate.installed.enabled
+        && pluginUpdate.installed.permissionFingerprint === installed.permissionFingerprint
+      ) {
+        installed = (await setAdminPluginEnabled(token, installed, true)).plugin;
+      }
+      if (!installed.enabled) {
+        setUpdateNeedsReview(true);
+        showToast('Missing Music updated. Its permissions changed and must be reviewed before it can be enabled again.', 'queue', 'top-right');
+      } else {
+        showToast(`Missing Music updated to version ${installed.version}`, 'success', 'top-right');
+      }
+      await Promise.all([loadPluginUpdate(), loadStatus()]);
+    } catch (cause) {
+      showToast(messageForError(cause), 'error', 'top-right');
+    } finally {
+      setUpdatingPlugin(false);
+    }
+  };
 
   const loadCatalog = async (selected: Artist, musicBrainzId: string) => {
     if (!token) return;
@@ -385,6 +452,30 @@ export function MissingMusic() {
           </div>
         </div>
       </div>
+
+      {isAdmin && pluginUpdate && (
+        <div className="flex flex-col gap-3 rounded-xl border border-amber-400/25 bg-amber-400/[0.08] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-amber-100">Missing Music {pluginUpdate.available.version} is available</p>
+            <p className="mt-0.5 text-xs text-amber-100/60">
+              {pluginUpdate.available.source === 'repository' ? 'Published in the official public plugin registry.' : 'Included with this MVBar build.'}
+            </p>
+          </div>
+          <button
+            onClick={() => void updatePlugin()}
+            disabled={updatingPlugin}
+            className="shrink-0 rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-200 disabled:opacity-50"
+          >
+            {updatingPlugin ? 'Updating…' : 'Update plugin'}
+          </button>
+        </div>
+      )}
+
+      {isAdmin && updateNeedsReview && (
+        <div className="rounded-xl border border-amber-400/25 bg-amber-400/[0.08] px-4 py-3 text-sm text-amber-100">
+          The update requested different permissions. Open <a href="#/admin" className="font-medium text-cyan-300 hover:text-cyan-200">Admin → Plugins</a> to review and enable it.
+        </div>
+      )}
 
       {error && (
         <div className="rounded-xl border border-red-400/25 bg-red-400/10 px-4 py-3 text-sm text-red-200">{error}</div>

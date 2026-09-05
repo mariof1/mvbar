@@ -246,6 +246,8 @@ export type BundledAdminPlugin = {
   name: string;
   version: string;
   description: string | null;
+  source: 'repository' | 'bundled';
+  repositoryUrl: string | null;
   installed: boolean;
   installedVersion: string | null;
   updateAvailable: boolean;

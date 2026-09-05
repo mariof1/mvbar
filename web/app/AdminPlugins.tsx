@@ -499,9 +499,9 @@ export function AdminPlugins({ token }: { token: string }) {
       {bundledPlugins.some((plugin) => !plugin.installed || plugin.updateAvailable) && (
         <section className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] p-5">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Included with MVBar</p>
-            <h3 className="mt-1 text-lg font-semibold text-white">Start with a first-party plugin</h3>
-            <p className="mt-1 text-sm text-slate-400">No package download or server file setup is needed.</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Official MVBar plugins</p>
+            <h3 className="mt-1 text-lg font-semibold text-white">Install from the public plugin registry</h3>
+            <p className="mt-1 text-sm text-slate-400">Packages are checksum-verified before installation. No server file setup is needed.</p>
           </div>
           <div className="mt-4 grid gap-3">
             {bundledPlugins.filter((plugin) => !plugin.installed || plugin.updateAvailable).map((plugin) => (
@@ -510,9 +510,11 @@ export function AdminPlugins({ token }: { token: string }) {
                   <div className="flex flex-wrap items-center gap-2">
                     <h4 className="font-semibold text-white">{plugin.name}</h4>
                     <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300">v{plugin.version}</span>
+                    <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs text-slate-400">{plugin.source === 'repository' ? 'Public registry' : 'Offline fallback'}</span>
                     {plugin.updateAvailable && <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs text-amber-200">Update available</span>}
                   </div>
                   {plugin.description && <p className="mt-1 max-w-3xl text-sm text-slate-400">{plugin.description}</p>}
+                  {plugin.repositoryUrl && <a href={plugin.repositoryUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs text-cyan-300 hover:text-cyan-200">View plugin repository ↗</a>}
                 </div>
                 <button
                   onClick={() => void installBundled(plugin)}

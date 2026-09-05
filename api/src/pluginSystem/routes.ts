@@ -176,19 +176,21 @@ export const pluginsAdminPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!requireAdmin(req, reply)) return;
     const result = await db().query<PluginDbRow>('select * from plugins order by lower(name), id');
     const rowsById = new Map(result.rows.map((row) => [row.id, row]));
-    const bundledPlugins = await Promise.all((await listBundledPluginPackages()).map(async ({ key, parsed }) => {
-      const installed = rowsById.get(parsed.id);
+    const bundledPlugins = (await listBundledPluginPackages()).map((available) => {
+      const installed = rowsById.get(available.id);
       return {
-        key,
-        id: parsed.id,
-        name: parsed.manifest.name,
-        version: parsed.manifest.version,
-        description: parsed.manifest.description ?? null,
+        key: available.key,
+        id: available.id,
+        name: available.name,
+        version: available.version,
+        description: available.description,
+        source: available.source,
+        repositoryUrl: available.repositoryUrl,
         installed: Boolean(installed),
         installedVersion: installed?.version ?? null,
-        updateAvailable: Boolean(installed && installed.package_sha256 !== parsed.packageSha256),
+        updateAvailable: Boolean(installed && installed.package_sha256 !== available.packageSha256),
       };
-    }));
+    });
     return {
       ok: true,
       executionEnabled: pluginsEnabledGlobally(),
@@ -201,7 +203,7 @@ export const pluginsAdminPlugin: FastifyPluginAsync = fp(async (app) => {
   app.post('/api/admin/plugins/bundled/:key/install', async (req, reply) => {
     if (!requireAdmin(req, reply)) return;
     const { key } = req.params as { key: string };
-    if (!isBundledPluginKey(key)) return reply.code(404).send({ ok: false, error: 'Bundled plugin not found' });
+    if (!await isBundledPluginKey(key)) return reply.code(404).send({ ok: false, error: 'Official plugin not found' });
     try {
       const bundled = await getBundledPluginPackage(key);
       const installed = await installPluginPackage(bundled.buffer, bundled.parsed.filename);
@@ -211,7 +213,7 @@ export const pluginsAdminPlugin: FastifyPluginAsync = fp(async (app) => {
         version: installed.parsed.manifest.version,
         sha256: installed.parsed.packageSha256,
         state: installed.state,
-        source: 'bundled',
+        source: bundled.source,
       });
       await notifyChange(installed.state, installed.parsed.id, installed.parsed.manifest.name);
       const row = await getPluginRow(installed.parsed.id);
