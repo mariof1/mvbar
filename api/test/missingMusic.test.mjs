@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import {
   isPrivateNetworkAddress,
   normalizeCatalogText,
+  normalizeLocalAlbumTitle,
   sameProviderOrigin,
   validateMissingMusicConfig,
 } from '../dist/pluginSystem/missingMusic.js';
@@ -32,6 +33,17 @@ test('the Missing Music package is bundled into production builds for one-click 
 test('catalog text normalization handles punctuation and accents', () => {
   assert.equal(normalizeCatalogText('Beyoncé — Live!'), 'beyonce live');
   assert.equal(normalizeCatalogText('  Album (Deluxe)  '), 'album deluxe');
+});
+
+test('local album normalization ignores edition metadata without changing real titles', () => {
+  assert.equal(
+    normalizeLocalAlbumTitle('Muzyka Współczesna Extended'),
+    normalizeCatalogText('Muzyka współczesna'),
+  );
+  assert.equal(normalizeLocalAlbumTitle('Album (Deluxe Edition)'), 'album');
+  assert.equal(normalizeLocalAlbumTitle('Album – 2024 Remaster'), 'album');
+  assert.equal(normalizeLocalAlbumTitle('Album (Disc 2)'), 'album');
+  assert.equal(normalizeLocalAlbumTitle('Extended Play'), 'extended play');
 });
 
 test('private network detection covers loopback, RFC1918, link-local, and IPv6 ULA', () => {

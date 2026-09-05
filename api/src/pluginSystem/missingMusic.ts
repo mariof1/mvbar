@@ -102,6 +102,40 @@ export function normalizeCatalogText(value: string) {
     .trim();
 }
 
+const LOCAL_ALBUM_EDITION_SUFFIXES = [
+  /\s+(?:deluxe|extended|expanded)(?:\s+(?:edition|version))?$/,
+  /\s+(?:special|limited|collector s)(?:\s+edition)$/,
+  /\s+(?:(?:19|20)\d{2}\s+)?remaster(?:ed)?(?:\s+(?:edition|version))?$/,
+  /\s+remaster(?:ed)?\s+(?:19|20)\d{2}$/,
+  /\s+(?:\d+(?:st|nd|rd|th)\s+)?anniversary(?:\s+edition)?$/,
+  /\s+bonus(?:\s+tracks?)?(?:\s+edition)?$/,
+  /\s+(?:mono|stereo)(?:\s+(?:mix|version|edition))?$/,
+  /\s+(?:cd|disc|disk)\s*\d+$/,
+] as const;
+
+/**
+ * Return the base title used when a local album name includes packaging or
+ * edition information that MusicBrainz normally keeps in release metadata.
+ * MusicBrainz titles themselves are not reduced before comparison, avoiding
+ * a base album incorrectly satisfying a genuinely distinct release group.
+ */
+export function normalizeLocalAlbumTitle(value: string) {
+  const original = normalizeCatalogText(value);
+  let normalized = original;
+  let changed = true;
+  while (changed && normalized) {
+    changed = false;
+    for (const suffix of LOCAL_ALBUM_EDITION_SUFFIXES) {
+      const reduced = normalized.replace(suffix, '').trim();
+      if (reduced && reduced !== normalized) {
+        normalized = reduced;
+        changed = true;
+      }
+    }
+  }
+  return normalized || original;
+}
+
 function artistMatchKey(userId: string, name: string) {
   return `artist-match:${userId}:${normalizeCatalogText(name)}`;
 }
@@ -697,16 +731,20 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     try {
       const [groups, local] = await Promise.all([releaseGroupsForArtist(plugin, artistMbid), localCatalog(req, artistMbid, localArtist)]);
       const localTitles = new Set(local.map((item) => normalizeCatalogText(item.album ?? '')).filter(Boolean));
+      const localBaseTitles = new Set(local.map((item) => normalizeLocalAlbumTitle(item.album ?? '')).filter(Boolean));
       return {
         ok: true,
-        releaseGroups: groups.map((group) => ({
-          id: group.id,
-          title: group.title,
-          primaryType: group['primary-type'] ?? null,
-          secondaryTypes: group['secondary-types'] ?? [],
-          firstReleaseDate: group['first-release-date'] ?? null,
-          present: localTitles.has(normalizeCatalogText(group.title ?? '')),
-        })),
+        releaseGroups: groups.map((group) => {
+          const musicBrainzTitle = normalizeCatalogText(group.title ?? '');
+          return {
+            id: group.id,
+            title: group.title,
+            primaryType: group['primary-type'] ?? null,
+            secondaryTypes: group['secondary-types'] ?? [],
+            firstReleaseDate: group['first-release-date'] ?? null,
+            present: localTitles.has(musicBrainzTitle) || localBaseTitles.has(musicBrainzTitle),
+          };
+        }),
       };
     } catch (error) {
       return reply.code(502).send({ ok: false, error: errorMessage(error) });
@@ -731,7 +769,10 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       const releases = Array.isArray(releasesResult.releases) ? releasesResult.releases : [];
       const local = await localCatalog(req, artistMbid, optionalText(localArtist, 500) ?? '');
       const wantedAlbum = normalizeCatalogText(album ?? '');
-      const matching = local.filter((row) => normalizeCatalogText(row.album ?? '') === wantedAlbum);
+      const matching = local.filter((row) => {
+        const localTitle = row.album ?? '';
+        return normalizeCatalogText(localTitle) === wantedAlbum || normalizeLocalAlbumTitle(localTitle) === wantedAlbum;
+      });
       const localReleaseIds = new Set(matching.flatMap((row) => row.release_ids ?? []));
       const release = [...releases].sort((left, right) => {
         const localMatch = Number(Boolean(right.id && localReleaseIds.has(right.id)))
