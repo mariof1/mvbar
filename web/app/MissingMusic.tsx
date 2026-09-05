@@ -9,9 +9,30 @@ import { useMissingMusicUpdates } from './useWebSocket';
 
 type Artist = {
   name: string;
-  musicBrainzId: string;
+  musicBrainzId: string | null;
+  musicBrainzName?: string | null;
+  matchSource?: 'tags' | 'saved' | null;
   albumCount: number;
   trackCount: number;
+};
+
+type ArtistMatch = {
+  id: string;
+  name: string;
+  sortName: string | null;
+  disambiguation: string | null;
+  country: string | null;
+  type: string | null;
+  score: number | null;
+};
+
+type MissingMusicStatus = {
+  enabled: boolean;
+  providerConfigured: boolean;
+  mode: 'provider' | 'wanted-list';
+  requireAdminApproval: boolean;
+  localArtistCount: number;
+  taggedArtistCount: number;
 };
 
 type ReleaseGroup = {
@@ -71,6 +92,16 @@ function statusClasses(status: RequestItem['status']) {
   return 'border-amber-400/30 bg-amber-400/10 text-amber-300';
 }
 
+function statusLabel(status: RequestItem['status'], providerConfigured: boolean) {
+  if (status === 'requested') return 'Waiting for approval';
+  if (status === 'approved') return providerConfigured ? 'Ready for provider' : 'On wanted list';
+  if (status === 'submitted') return 'With provider';
+  if (status === 'completed') return 'Fulfilled';
+  if (status === 'failed') return 'Needs attention';
+  if (status === 'rejected') return 'Declined';
+  return 'Cancelled';
+}
+
 function Spinner() {
   return <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />;
 }
@@ -85,14 +116,16 @@ export function MissingMusic() {
   const [query, setQuery] = useState('');
   const [artists, setArtists] = useState<Artist[]>([]);
   const [artist, setArtist] = useState<Artist | null>(null);
+  const [artistMatches, setArtistMatches] = useState<ArtistMatch[]>([]);
   const [catalog, setCatalog] = useState<ReleaseGroup[]>([]);
+  const [catalogFilter, setCatalogFilter] = useState<'missing' | 'all' | 'present'>('missing');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [tracks, setTracks] = useState<Record<string, { releaseId: string; tracks: CatalogTrack[] }>>({});
   const [requests, setRequests] = useState<RequestItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [providerConfigured, setProviderConfigured] = useState(true);
+  const [status, setStatus] = useState<MissingMusicStatus | null>(null);
 
   const loadArtists = useCallback(async (search = '') => {
     if (!token) return;
@@ -118,31 +151,36 @@ export function MissingMusic() {
     }
   }, [token]);
 
+  const loadStatus = useCallback(async () => {
+    if (!token) return;
+    try {
+      setStatus(await apiFetch('/plugins/missing-music/status', {}, token) as MissingMusicStatus);
+    } catch {
+      setStatus(null);
+    }
+  }, [token]);
+
   useEffect(() => {
     void loadArtists();
     void loadRequests();
-    if (token) {
-      void apiFetch('/plugins/missing-music/status', {}, token)
-        .then((status: any) => setProviderConfigured(Boolean(status.configured)))
-        .catch(() => undefined);
-    }
-  }, [loadArtists, loadRequests, token]);
+    void loadStatus();
+  }, [loadArtists, loadRequests, loadStatus]);
 
   useEffect(() => {
     if (liveUpdate) void loadRequests();
   }, [liveUpdate, loadRequests]);
 
-  const selectArtist = async (selected: Artist) => {
+  const loadCatalog = async (selected: Artist, musicBrainzId: string) => {
     if (!token) return;
-    setArtist(selected);
     setCatalog([]);
     setTracks({});
     setExpanded(null);
+    setCatalogFilter('missing');
     setLoading(true);
     setError('');
     try {
       const data = await apiFetch(
-        `/plugins/missing-music/artists/${selected.musicBrainzId}/catalog`,
+        `/plugins/missing-music/artists/${musicBrainzId}/catalog?localArtist=${encodeURIComponent(selected.name)}`,
         {},
         token,
       ) as { releaseGroups: ReleaseGroup[] };
@@ -154,8 +192,56 @@ export function MissingMusic() {
     }
   };
 
+  const selectArtist = async (selected: Artist) => {
+    if (!token) return;
+    setArtist(selected);
+    setArtistMatches([]);
+    setCatalog([]);
+    setTracks({});
+    setExpanded(null);
+    setError('');
+    if (selected.musicBrainzId) {
+      await loadCatalog(selected, selected.musicBrainzId);
+      return;
+    }
+    setBusyKey('artist-match');
+    try {
+      const data = await apiFetch(
+        `/plugins/missing-music/artists/matches?q=${encodeURIComponent(selected.name)}`,
+        {},
+        token,
+      ) as { matches: ArtistMatch[] };
+      setArtistMatches(data.matches);
+    } catch (cause) {
+      setError(messageForError(cause));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const chooseArtistMatch = async (match: ArtistMatch) => {
+    if (!artist || !token) return;
+    setBusyKey('artist-match-save');
+    setError('');
+    try {
+      await apiFetch('/plugins/missing-music/artists/match', {
+        method: 'PUT',
+        body: JSON.stringify({ localArtist: artist.name, musicBrainzId: match.id, musicBrainzName: match.name }),
+      }, token);
+      const matched: Artist = { ...artist, musicBrainzId: match.id, musicBrainzName: match.name, matchSource: 'saved' };
+      setArtist(matched);
+      setArtistMatches([]);
+      setArtists((current) => current.map((item) => item.name === artist.name ? matched : item));
+      await loadCatalog(matched, match.id);
+    } catch (cause) {
+      setError(messageForError(cause));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
   const inspectTracks = async (group: ReleaseGroup) => {
-    if (!token || !artist) return;
+    if (!token || !artist?.musicBrainzId) return;
     if (expanded === group.id) {
       setExpanded(null);
       return;
@@ -166,7 +252,7 @@ export function MissingMusic() {
     setError('');
     try {
       const data = await apiFetch(
-        `/plugins/missing-music/release-groups/${group.id}/tracks?artistMbid=${artist.musicBrainzId}&album=${encodeURIComponent(group.title)}`,
+        `/plugins/missing-music/release-groups/${group.id}/tracks?artistMbid=${artist.musicBrainzId}&album=${encodeURIComponent(group.title)}&localArtist=${encodeURIComponent(artist.name)}`,
         {},
         token,
       ) as { releaseId: string; tracks: CatalogTrack[] };
@@ -200,7 +286,7 @@ export function MissingMusic() {
     if (!artist) return;
     return createRequest({
       itemType: 'album',
-      artist: artist.name,
+      artist: artist.musicBrainzName ?? artist.name,
       title: group.title,
       album: group.title,
       musicBrainzArtistId: artist.musicBrainzId,
@@ -212,7 +298,7 @@ export function MissingMusic() {
     if (!artist || !track.recordingId) return;
     return createRequest({
       itemType: 'track',
-      artist: artist.name,
+      artist: artist.musicBrainzName ?? artist.name,
       title: track.title,
       album: group.title,
       musicBrainzArtistId: artist.musicBrainzId,
@@ -222,7 +308,7 @@ export function MissingMusic() {
     }, `track:${track.recordingId}`);
   };
 
-  const changeRequest = async (request: RequestItem, action: 'approve' | 'reject' | 'retry') => {
+  const changeRequest = async (request: RequestItem, action: 'approve' | 'reject' | 'retry' | 'complete') => {
     if (!token) return;
     setBusyKey(`${action}:${request.id}`);
     try {
@@ -253,16 +339,38 @@ export function MissingMusic() {
   };
 
   const missingCount = useMemo(() => catalog.filter((group) => !group.present).length, [catalog]);
+  const visibleCatalog = useMemo(() => catalog.filter((group) => (
+    catalogFilter === 'all' || (catalogFilter === 'missing' ? !group.present : group.present)
+  )), [catalog, catalogFilter]);
+  const requestByCatalogId = useMemo(() => {
+    const map = new Map<string, RequestItem>();
+    for (const request of requests) {
+      if (['failed', 'rejected', 'cancelled'].includes(request.status)) continue;
+      const id = request.itemType === 'album' ? request.musicBrainzReleaseGroupId : request.musicBrainzRecordingId;
+      if (id && !map.has(`${request.itemType}:${id}`)) map.set(`${request.itemType}:${id}`, request);
+    }
+    return map;
+  }, [requests]);
+  const providerConfigured = status?.providerConfigured ?? false;
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6">
       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h3 className="text-xl font-semibold text-white">Missing Music</h3>
             <p className="mt-1 text-sm text-white/55">
-              Compare your library with MusicBrainz and send requests to the configured external service.
+              Compare local artists with MusicBrainz, find gaps, and keep a server-side wanted list.
             </p>
+            {status && (
+              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-white/55">{formatCount(status.localArtistCount, 'local artist')}</span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-white/55">{formatCount(status.taggedArtistCount, 'MusicBrainz-tagged artist')}</span>
+                <span className={`rounded-full border px-2.5 py-1 ${providerConfigured ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-cyan-400/25 bg-cyan-400/10 text-cyan-200'}`}>
+                  {providerConfigured ? 'Automatic provider hand-off' : 'Wanted-list mode'}
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex rounded-xl border border-white/10 bg-black/20 p-1">
             {(['discover', 'requests'] as const).map((item) => (
@@ -283,14 +391,14 @@ export function MissingMusic() {
       )}
 
       {!providerConfigured && isAdmin && (
-        <div className="rounded-xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-          Configure the external request-provider URL in Admin → Plugins. Approved requests will stay queued until then.
+        <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/[0.07] px-4 py-3 text-sm text-cyan-100">
+          Missing Music is ready in wanted-list mode. Administrators can approve and manually mark requests fulfilled. Configure an optional request-provider URL in Admin → Plugins only if you want automatic hand-off.
         </div>
       )}
 
       {view === 'discover' && (
-        <div className="grid gap-5 lg:grid-cols-[280px_1fr]">
-          <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+        <div className="grid min-w-0 max-w-full gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <section className="min-w-0 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
             <form
               className="flex gap-2"
               onSubmit={(event) => { event.preventDefault(); void loadArtists(query); }}
@@ -309,100 +417,170 @@ export function MissingMusic() {
                 <button
                   key={`${item.musicBrainzId}:${item.name}`}
                   onClick={() => void selectArtist(item)}
-                  className={`w-full rounded-xl px-3 py-2.5 text-left transition ${artist?.musicBrainzId === item.musicBrainzId ? 'bg-cyan-500/15 text-cyan-200' : 'hover:bg-white/[0.06]'}`}
+                  className={`w-full rounded-xl px-3 py-2.5 text-left transition ${artist?.name === item.name ? 'bg-cyan-500/15 text-cyan-200' : 'hover:bg-white/[0.06]'}`}
                 >
                   <div className="truncate text-sm font-medium">{item.name}</div>
-                  <div className="mt-0.5 text-xs text-white/40">{formatCount(item.albumCount, 'album')} · {formatCount(item.trackCount, 'track')}</div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-white/40">
+                    <span>{formatCount(item.albumCount, 'album')} · {formatCount(item.trackCount, 'track')}</span>
+                    {item.matchSource === 'saved' && <span className="rounded bg-emerald-400/10 px-1.5 py-0.5 text-emerald-200">Matched</span>}
+                    {!item.musicBrainzId && <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-amber-200">Choose MusicBrainz match</span>}
+                  </div>
                 </button>
               ))}
-              {!loading && artists.length === 0 && <p className="py-8 text-center text-sm text-white/40">No tagged artists found.</p>}
+              {!loading && artists.length === 0 && <p className="py-8 text-center text-sm text-white/40">No local artists found.</p>}
             </div>
           </section>
 
-          <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
+          <section className="min-w-0 rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
             {!artist && <p className="py-20 text-center text-white/45">Choose a local artist to compare their releases.</p>}
             {artist && (
               <>
                 <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
                   <div>
                     <h4 className="text-lg font-semibold">{artist.name}</h4>
-                    <p className="text-sm text-white/45">{catalog.length} releases · {missingCount} missing</p>
+                    <p className="text-sm text-white/45">
+                      {artist.musicBrainzId
+                        ? `${catalog.length} releases · ${missingCount} missing${artist.musicBrainzName && artist.musicBrainzName !== artist.name ? ` · matched to ${artist.musicBrainzName}` : ''}`
+                        : 'This artist has no MusicBrainz tag. Choose the correct match once to compare the catalog.'}
+                    </p>
                   </div>
-                  <a
-                    href={`https://musicbrainz.org/artist/${artist.musicBrainzId}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-cyan-300 hover:text-cyan-200"
-                  >
-                    Open in MusicBrainz ↗
-                  </a>
+                  {artist.musicBrainzId && (
+                    <div className="flex items-center gap-3">
+                      {artist.matchSource === 'saved' && (
+                        <button
+                          onClick={() => void selectArtist({ ...artist, musicBrainzId: null, musicBrainzName: null, matchSource: null })}
+                          className="text-xs text-white/45 hover:text-white/70"
+                        >
+                          Change match
+                        </button>
+                      )}
+                      <a
+                        href={`https://musicbrainz.org/artist/${artist.musicBrainzId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-cyan-300 hover:text-cyan-200"
+                      >
+                        Open in MusicBrainz ↗
+                      </a>
+                    </div>
+                  )}
                 </div>
-                {loading && catalog.length === 0 && <div className="flex justify-center py-20"><Spinner /></div>}
-                <div className="space-y-2">
-                  {catalog.map((group) => {
-                    const detail = tracks[group.id];
-                    return (
-                      <div key={group.id} className="overflow-hidden rounded-xl border border-white/10 bg-black/20">
-                        <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="truncate font-medium text-white">{group.title}</span>
-                              <span className={`rounded-full border px-2 py-0.5 text-[11px] ${group.present ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-amber-400/25 bg-amber-400/10 text-amber-300'}`}>
-                                {group.present ? 'In library' : 'Missing'}
-                              </span>
+                {!artist.musicBrainzId && (
+                  <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.05] p-3 sm:p-4">
+                    {busyKey === 'artist-match' ? (
+                      <div className="flex items-center justify-center gap-3 py-12 text-sm text-white/55"><Spinner /> Finding MusicBrainz matches…</div>
+                    ) : artistMatches.length > 0 ? (
+                      <div className="space-y-2">
+                        <p className="mb-3 text-sm text-white/60">Select the artist that represents <strong className="text-white">{artist.name}</strong>:</p>
+                        {artistMatches.map((match) => (
+                          <button
+                            key={match.id}
+                            onClick={() => void chooseArtistMatch(match)}
+                            disabled={busyKey === 'artist-match-save'}
+                            className="flex w-full items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5 text-left hover:border-cyan-400/35 hover:bg-cyan-400/[0.06] disabled:opacity-50"
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-medium text-white">{match.name}</span>
+                              <span className="mt-0.5 block truncate text-xs text-white/40">{[match.disambiguation, match.type, match.country].filter(Boolean).join(' · ') || 'No additional details'}</span>
+                            </span>
+                            {match.score !== null && <span className="shrink-0 text-xs text-white/35">{match.score}% match</span>}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="py-10 text-center text-sm text-white/45">MusicBrainz did not return a confident match. Check the artist name in your local tags and try again.</p>
+                    )}
+                  </div>
+                )}
+
+                {artist.musicBrainzId && loading && catalog.length === 0 && <div className="flex justify-center py-20"><Spinner /></div>}
+                {artist.musicBrainzId && !loading && catalog.length > 0 && (
+                  <div className="mb-4 flex flex-wrap gap-2">
+                    {(['missing', 'all', 'present'] as const).map((filter) => (
+                      <button
+                        key={filter}
+                        onClick={() => setCatalogFilter(filter)}
+                        className={`rounded-lg border px-3 py-1.5 text-xs font-medium capitalize ${catalogFilter === filter ? 'border-cyan-400/40 bg-cyan-400/15 text-cyan-200' : 'border-white/10 text-white/50 hover:bg-white/[0.06]'}`}
+                      >
+                        {filter === 'missing' ? `Missing (${missingCount})` : filter === 'present' ? `In library (${catalog.length - missingCount})` : `All (${catalog.length})`}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {artist.musicBrainzId && (
+                  <div className="space-y-2">
+                    {visibleCatalog.map((group) => {
+                      const detail = tracks[group.id];
+                      const albumRequest = requestByCatalogId.get(`album:${group.id}`);
+                      return (
+                        <div key={group.id} className="overflow-hidden rounded-xl border border-white/10 bg-black/20">
+                          <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="truncate font-medium text-white">{group.title}</span>
+                                <span className={`rounded-full border px-2 py-0.5 text-[11px] ${group.present ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-amber-400/25 bg-amber-400/10 text-amber-300'}`}>
+                                  {group.present ? 'In library' : 'Missing'}
+                                </span>
+                              </div>
+                              <div className="mt-1 text-xs text-white/40">
+                                {[group.primaryType, ...group.secondaryTypes, group.firstReleaseDate?.slice(0, 4)].filter(Boolean).join(' · ')}
+                              </div>
                             </div>
-                            <div className="mt-1 text-xs text-white/40">
-                              {[group.primaryType, group.firstReleaseDate?.slice(0, 4)].filter(Boolean).join(' · ')}
-                            </div>
-                          </div>
-                          <div className="flex gap-2">
-                            {group.present && (
+                            <div className="flex flex-wrap gap-2">
                               <button
                                 onClick={() => void inspectTracks(group)}
                                 disabled={busyKey === `tracks:${group.id}`}
                                 className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-50"
                               >
-                                {busyKey === `tracks:${group.id}` ? 'Checking…' : expanded === group.id ? 'Hide tracks' : 'Check tracks'}
+                                {busyKey === `tracks:${group.id}` ? 'Checking…' : expanded === group.id ? 'Hide tracks' : 'View tracks'}
                               </button>
-                            )}
-                            {!group.present && (
-                              <button
-                                onClick={() => void requestAlbum(group)}
-                                disabled={busyKey === `album:${group.id}`}
-                                className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-cyan-400 disabled:opacity-50"
-                              >
-                                {busyKey === `album:${group.id}` ? 'Requesting…' : 'Request album'}
-                              </button>
-                            )}
+                              {!group.present && (
+                                <button
+                                  onClick={() => void requestAlbum(group)}
+                                  disabled={Boolean(albumRequest) || busyKey === `album:${group.id}`}
+                                  className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-cyan-400 disabled:opacity-50"
+                                >
+                                  {busyKey === `album:${group.id}` ? 'Requesting…' : albumRequest ? statusLabel(albumRequest.status, providerConfigured) : 'Request album'}
+                                </button>
+                              )}
+                            </div>
                           </div>
+                          {expanded === group.id && detail && (
+                            <div className="border-t border-white/10 px-3 py-2">
+                              {detail.tracks.map((track, index) => {
+                                const trackRequest = track.recordingId ? requestByCatalogId.get(`track:${track.recordingId}`) : undefined;
+                                return (
+                                  <div key={`${track.recordingId ?? track.title}:${index}`} className="flex items-center gap-3 border-b border-white/[0.06] py-2 last:border-0">
+                                    <span className="w-8 text-right text-xs text-white/35">{track.number ?? track.trackNumber ?? index + 1}</span>
+                                    <span className="min-w-0 flex-1 truncate text-sm text-white/75">{track.title}</span>
+                                    <span className="text-xs text-white/35">{formatDuration(track.durationMs)}</span>
+                                    {track.missing ? (
+                                      <button
+                                        onClick={() => void requestTrack(group, track)}
+                                        disabled={!track.recordingId || Boolean(trackRequest) || busyKey === `track:${track.recordingId}`}
+                                        className="rounded-md bg-amber-400/15 px-2.5 py-1 text-xs text-amber-200 hover:bg-amber-400/25 disabled:opacity-40"
+                                      >
+                                        {busyKey === `track:${track.recordingId}` ? 'Requesting…' : trackRequest ? statusLabel(trackRequest.status, providerConfigured) : 'Request'}
+                                      </button>
+                                    ) : (
+                                      <span className="px-2.5 text-xs text-emerald-300/70">Present</span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                              {!detail.tracks.length && <p className="py-4 text-center text-sm text-white/40">No track list available.</p>}
+                            </div>
+                          )}
                         </div>
-                        {expanded === group.id && detail && (
-                          <div className="border-t border-white/10 px-3 py-2">
-                            {detail.tracks.map((track, index) => (
-                              <div key={`${track.recordingId ?? track.title}:${index}`} className="flex items-center gap-3 border-b border-white/[0.06] py-2 last:border-0">
-                                <span className="w-8 text-right text-xs text-white/35">{track.number ?? track.trackNumber ?? index + 1}</span>
-                                <span className="min-w-0 flex-1 truncate text-sm text-white/75">{track.title}</span>
-                                <span className="text-xs text-white/35">{formatDuration(track.durationMs)}</span>
-                                {track.missing ? (
-                                  <button
-                                    onClick={() => void requestTrack(group, track)}
-                                    disabled={!track.recordingId || busyKey === `track:${track.recordingId}`}
-                                    className="rounded-md bg-amber-400/15 px-2.5 py-1 text-xs text-amber-200 hover:bg-amber-400/25 disabled:opacity-40"
-                                  >
-                                    Request
-                                  </button>
-                                ) : (
-                                  <span className="px-2.5 text-xs text-emerald-300/70">Present</span>
-                                )}
-                              </div>
-                            ))}
-                            {!detail.tracks.length && <p className="py-4 text-center text-sm text-white/40">No track list available.</p>}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                    {!loading && visibleCatalog.length === 0 && (
+                      <p className="py-16 text-center text-sm text-white/40">
+                        {catalog.length === 0 ? 'MusicBrainz has no releases matching the configured types.' : `No ${catalogFilter === 'present' ? 'in-library' : catalogFilter} releases in this view.`}
+                      </p>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </section>
@@ -414,7 +592,11 @@ export function MissingMusic() {
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <h4 className="font-semibold">{isAdmin ? 'All requests' : 'My requests'}</h4>
-              <p className="mt-1 text-sm text-white/45">Downloads and delivery are handled entirely by the external service.</p>
+              <p className="mt-1 text-sm text-white/45">
+                {providerConfigured
+                  ? 'Approved requests are handed to the configured provider and update automatically.'
+                  : 'This is a managed wanted list. Administrators can approve requests and mark them fulfilled manually.'}
+              </p>
             </div>
             <button onClick={() => void loadRequests()} className="rounded-lg border border-white/10 px-3 py-2 text-xs hover:bg-white/10">Refresh</button>
           </div>
@@ -425,7 +607,7 @@ export function MissingMusic() {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate font-medium">{request.title}</span>
-                      <span className={`rounded-full border px-2 py-0.5 text-[11px] capitalize ${statusClasses(request.status)}`}>{request.status}</span>
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${statusClasses(request.status)}`}>{statusLabel(request.status, providerConfigured)}</span>
                       <span className="text-[11px] uppercase tracking-wide text-white/35">{request.itemType}</span>
                     </div>
                     <p className="mt-1 truncate text-sm text-white/50">{request.artist}{request.album && request.album !== request.title ? ` · ${request.album}` : ''}</p>
@@ -444,6 +626,9 @@ export function MissingMusic() {
                     )}
                     {isAdmin && request.status === 'failed' && (
                       <button onClick={() => void changeRequest(request, 'retry')} disabled={busyKey === `retry:${request.id}`} className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-black disabled:opacity-50">Retry</button>
+                    )}
+                    {isAdmin && ['requested', 'approved', 'submitted', 'failed'].includes(request.status) && (
+                      <button onClick={() => void changeRequest(request, 'complete')} disabled={busyKey === `complete:${request.id}`} className="rounded-lg bg-emerald-400/15 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-400/25 disabled:opacity-50">Mark fulfilled</button>
                     )}
                     <button onClick={() => void deleteRequest(request)} disabled={busyKey === `delete:${request.id}`} className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/55 hover:bg-white/10 disabled:opacity-50">Delete</button>
                   </div>

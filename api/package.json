@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-bundled-plugins.mjs",
     "build:missing-music-plugin": "node scripts/build-missing-music-plugin.mjs",
     "audit:recommendations": "node scripts/audit-recommendations.mjs",
     "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs",

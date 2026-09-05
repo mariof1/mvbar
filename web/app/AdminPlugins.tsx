@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   configureAdminPlugin,
   deleteAdminPlugin,
+  installBundledAdminPlugin,
   listAdminPluginRuns,
   listAdminPlugins,
   rescanAdminPlugins,
@@ -14,6 +15,7 @@ import {
   type AdminPlugin,
   type AdminPluginAction,
   type AdminPluginRun,
+  type BundledAdminPlugin,
   type PluginSchemaProperty,
 } from './apiClient';
 import { showConfirm } from './ConfirmModal';
@@ -150,6 +152,8 @@ function PluginActionPanel({ token, plugin, action }: { token: string; plugin: A
 }
 function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPlugin; refresh: () => Promise<void> }) {
   const showToast = useToastStore((state) => state.show);
+  const isMissingMusic = plugin.id === 'mvbar.missing-music';
+  const providerConfigured = isMissingMusic && typeof plugin.config.providerBaseUrl === 'string' && plugin.config.providerBaseUrl.trim().length > 0;
   const defaults = useMemo(() => Object.fromEntries(
     Object.entries(plugin.configSchema?.properties ?? {}).map(([key, property]) => [key, plugin.config[key] ?? property.default ?? (property.type === 'boolean' ? false : '')])
   ), [plugin]);
@@ -181,7 +185,9 @@ function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPl
         : 'No host permissions requested';
       const confirmed = await showConfirm({
         title: `Enable ${plugin.name}?`,
-        message: `This runs third-party WebAssembly code with these declared permissions: ${permissionText}.`,
+        message: isMissingMusic
+          ? `This enables MVBar's first-party missing-catalog extension with these declared permissions: ${permissionText}.`
+          : `This runs third-party WebAssembly code with these declared permissions: ${permissionText}.`,
         confirmLabel: 'Approve and enable',
       });
       if (!confirmed) return;
@@ -203,7 +209,11 @@ function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPl
     setError(null);
     try {
       const result = await testAdminPlugin(token, plugin.id);
-      showToast(`${plugin.name} loaded successfully (${result.exports.length} exports)`, 'success', 'top-right');
+      showToast(
+        isMissingMusic ? `${plugin.name} package integrity verified` : `${plugin.name} loaded successfully (${result.exports.length} exports)`,
+        'success',
+        'top-right',
+      );
     } catch (caught) {
       setError(errorText(caught));
     } finally {
@@ -268,6 +278,29 @@ function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPl
         </button>
       </div>
 
+      {isMissingMusic && (
+        <section className="mt-5 rounded-xl border border-cyan-500/25 bg-cyan-500/[0.06] p-4">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h4 className="font-semibold text-white">Missing Music setup</h4>
+              <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-300">
+                Enable the plugin to compare every local artist with MusicBrainz. An external provider is optional: without one, requests stay in MVBar as a wanted list that administrators can manage and mark fulfilled.
+              </p>
+            </div>
+            {plugin.enabled ? (
+              <a href="#/missing-music" className="shrink-0 rounded-lg bg-cyan-500 px-4 py-2 text-center text-sm font-semibold text-slate-950 hover:bg-cyan-400">Open Missing Music</a>
+            ) : (
+              <span className="shrink-0 rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-2 text-sm text-amber-200">Review permissions, then enable</span>
+            )}
+          </div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            <div className="rounded-lg border border-emerald-400/20 bg-emerald-400/[0.06] px-3 py-2 text-sm text-emerald-200">1. Package installed ✓</div>
+            <div className={`rounded-lg border px-3 py-2 text-sm ${plugin.enabled ? 'border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-200' : 'border-white/10 bg-black/20 text-slate-400'}`}>2. Discovery {plugin.enabled ? 'enabled ✓' : 'not enabled'}</div>
+            <div className={`rounded-lg border px-3 py-2 text-sm ${plugin.enabled ? 'border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-200' : 'border-white/10 bg-black/20 text-slate-400'}`}>3. {providerConfigured ? `Provider connected${plugin.enabled ? ' ✓' : ''}` : `Wanted-list mode${plugin.enabled ? ' ✓' : ''}`}</div>
+          </div>
+        </section>
+      )}
+
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <section className="rounded-xl border border-slate-700/40 bg-slate-950/20 p-4">
           <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Requested permissions</h4>
@@ -293,12 +326,12 @@ function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPl
           <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
             <dt className="text-slate-500">Package</dt><dd className="truncate font-mono text-slate-300">{plugin.filename}</dd>
             <dt className="text-slate-500">SHA-256</dt><dd className="truncate font-mono text-slate-300" title={plugin.packageSha256}>{plugin.packageSha256.slice(0, 16)}…</dd>
-            <dt className="text-slate-500">Exports</dt><dd className="text-slate-300">{plugin.exports.length}</dd>
-            <dt className="text-slate-500">Last call</dt><dd className="text-slate-300">{plugin.lastLoadedAt ? new Date(plugin.lastLoadedAt).toLocaleString() : 'Never'}</dd>
+            <dt className="text-slate-500">{isMissingMusic ? 'Engine' : 'Exports'}</dt><dd className="text-slate-300">{isMissingMusic ? 'Built-in MVBar extension' : plugin.exports.length}</dd>
+            <dt className="text-slate-500">{isMissingMusic ? 'Delivery' : 'Last call'}</dt><dd className="text-slate-300">{isMissingMusic ? (providerConfigured ? 'External provider' : 'Managed wanted list') : plugin.lastLoadedAt ? new Date(plugin.lastLoadedAt).toLocaleString() : 'Never'}</dd>
           </dl>
           <div className="mt-4 flex flex-wrap gap-2">
-            <button onClick={() => void validate()} disabled={Boolean(busy) || !plugin.present} className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-40">{busy === 'test' ? 'Loading…' : 'Validate package'}</button>
-            <button onClick={() => void toggleRuns()} disabled={Boolean(busy)} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700/50 disabled:opacity-40">{runs === null ? 'Recent runs' : 'Hide runs'}</button>
+            <button onClick={() => void validate()} disabled={Boolean(busy) || !plugin.present} className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-40">{busy === 'test' ? 'Checking…' : isMissingMusic ? 'Verify package' : 'Validate package'}</button>
+            {!isMissingMusic && <button onClick={() => void toggleRuns()} disabled={Boolean(busy)} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700/50 disabled:opacity-40">{runs === null ? 'Recent runs' : 'Hide runs'}</button>}
             <button onClick={() => void remove()} disabled={Boolean(busy)} className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300 hover:bg-red-500/20 disabled:opacity-40">{busy === 'remove' ? 'Removing…' : 'Remove'}</button>
           </div>
         </section>
@@ -355,11 +388,14 @@ function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPl
 
 export function AdminPlugins({ token }: { token: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
+  const showToast = useToastStore((state) => state.show);
   const [plugins, setPlugins] = useState<AdminPlugin[]>([]);
+  const [bundledPlugins, setBundledPlugins] = useState<BundledAdminPlugin[]>([]);
   const [executionEnabled, setExecutionEnabled] = useState(true);
   const [uploadLimit, setUploadLimit] = useState(0);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [installingBundled, setInstallingBundled] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -369,6 +405,7 @@ export function AdminPlugins({ token }: { token: string }) {
     try {
       const result = await listAdminPlugins(token);
       setPlugins(result.plugins);
+      setBundledPlugins(result.bundledPlugins ?? []);
       setExecutionEnabled(result.executionEnabled);
       setUploadLimit(result.uploadLimitBytes);
       setError(null);
@@ -397,6 +434,26 @@ export function AdminPlugins({ token }: { token: string }) {
     } finally {
       setUploading(false);
       if (fileInput.current) fileInput.current.value = '';
+    }
+  }
+
+  async function installBundled(plugin: BundledAdminPlugin) {
+    setInstallingBundled(plugin.key);
+    setError(null);
+    try {
+      const result = await installBundledAdminPlugin(token, plugin.key);
+      showToast(
+        result.state === 'updated'
+          ? `${plugin.name} updated. Review its permissions before enabling it again.`
+          : `${plugin.name} installed. Review its permissions, then enable it.`,
+        'success',
+        'top-right',
+      );
+      await load();
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setInstallingBundled(null);
     }
   }
 
@@ -438,6 +495,37 @@ export function AdminPlugins({ token }: { token: string }) {
           {uploadLimit > 0 && <p className="mt-2 text-xs text-slate-500">Maximum package size: {readableBytes(uploadLimit)}</p>}
         </div>
       </section>
+
+      {bundledPlugins.some((plugin) => !plugin.installed || plugin.updateAvailable) && (
+        <section className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] p-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Included with MVBar</p>
+            <h3 className="mt-1 text-lg font-semibold text-white">Start with a first-party plugin</h3>
+            <p className="mt-1 text-sm text-slate-400">No package download or server file setup is needed.</p>
+          </div>
+          <div className="mt-4 grid gap-3">
+            {bundledPlugins.filter((plugin) => !plugin.installed || plugin.updateAvailable).map((plugin) => (
+              <div key={plugin.key} className="flex flex-col gap-4 rounded-xl border border-white/10 bg-black/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="font-semibold text-white">{plugin.name}</h4>
+                    <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300">v{plugin.version}</span>
+                    {plugin.updateAvailable && <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-xs text-amber-200">Update available</span>}
+                  </div>
+                  {plugin.description && <p className="mt-1 max-w-3xl text-sm text-slate-400">{plugin.description}</p>}
+                </div>
+                <button
+                  onClick={() => void installBundled(plugin)}
+                  disabled={installingBundled !== null}
+                  className="shrink-0 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+                >
+                  {installingBundled === plugin.key ? 'Installing…' : plugin.updateAvailable ? 'Install update' : 'Install with one click'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {error && <div className="whitespace-pre-wrap rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>}
       {loading ? (

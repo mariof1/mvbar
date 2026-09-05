@@ -2,8 +2,8 @@
   "id": "mvbar.missing-music",
   "name": "Missing Music",
   "author": "MVBar",
-  "version": "1.0.0",
-  "description": "Find albums and tracks missing from an MVBar library with MusicBrainz and hand approved requests to an external request service.",
+  "version": "1.1.0",
+  "description": "Find albums and tracks missing from an MVBar library with MusicBrainz, keep a wanted list, and optionally hand approved requests to an external service.",
   "homepage": "https://github.com/mariof1/mvbar",
   "config": {
     "schema": {
@@ -12,8 +12,8 @@
       "properties": {
         "providerBaseUrl": {
           "type": "string",
-          "title": "Request provider URL",
-          "description": "Base URL of the external service that accepts and tracks requests. MVBar does not download media."
+          "title": "Request provider URL (optional)",
+          "description": "Leave blank to use a managed wanted list. Set this only when an external service accepts and tracks requests for you."
         },
         "providerApiToken": {
           "type": "string",
@@ -36,13 +36,19 @@
         "musicBrainzContact": {
           "type": "string",
           "title": "MusicBrainz contact",
-          "description": "Contact email or URL included in the MusicBrainz User-Agent."
+          "description": "Optional contact email or URL included in the MusicBrainz User-Agent. MVBar uses its project URL when left blank."
         },
         "releaseGroupTypes": {
           "type": "string",
           "title": "Release types",
           "description": "Comma-separated MusicBrainz release-group types to compare.",
           "default": "Album,EP"
+        },
+        "excludedSecondaryTypes": {
+          "type": "string",
+          "title": "Exclude release variants",
+          "description": "Comma-separated secondary types to hide so live, remix, compilation, and spoken releases do not overwhelm results. Leave blank to show everything.",
+          "default": "Compilation,Live,Remix,DJ-mix,Mixtape/Street,Interview,Audio drama,Spokenword,Soundtrack,Audiobook,Demo"
         }
       }
     }

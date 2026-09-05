@@ -240,13 +240,31 @@ export type AdminPluginRun = {
   created_at: string;
 };
 
+export type BundledAdminPlugin = {
+  key: string;
+  id: string;
+  name: string;
+  version: string;
+  description: string | null;
+  installed: boolean;
+  installedVersion: string | null;
+  updateAvailable: boolean;
+};
+
 export async function listAdminPlugins(token: string) {
   return (await apiFetch('/admin/plugins', { method: 'GET' }, token)) as {
     ok: true;
     executionEnabled: boolean;
     uploadLimitBytes: number;
+    bundledPlugins: BundledAdminPlugin[];
     plugins: AdminPlugin[];
   };
+}
+
+export async function installBundledAdminPlugin(token: string, key: string) {
+  return (await apiFetch(`/admin/plugins/bundled/${encodeURIComponent(key)}/install`, {
+    method: 'POST',
+  }, token)) as { ok: true; state: 'installed' | 'updated' | 'unchanged'; plugin: AdminPlugin };
 }
 
 export async function uploadAdminPlugin(token: string, file: File) {

@@ -15,6 +15,7 @@ import {
 import { callPluginExport, effectivePluginConfig, inspectPlugin } from './runtime.js';
 import type { JsonSchemaProperty, NdpManifest, PluginAction, PluginDbRow } from './types.js';
 import { MISSING_MUSIC_PLUGIN_ID, validateMissingMusicConfig } from './missingMusic.js';
+import { getBundledPluginPackage, isBundledPluginKey, listBundledPluginPackages } from './bundled.js';
 
 function requireAdmin(req: FastifyRequest, reply: FastifyReply) {
   if (!req.user) {
@@ -174,12 +175,56 @@ export const pluginsAdminPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/admin/plugins', async (req, reply) => {
     if (!requireAdmin(req, reply)) return;
     const result = await db().query<PluginDbRow>('select * from plugins order by lower(name), id');
+    const rowsById = new Map(result.rows.map((row) => [row.id, row]));
+    const bundledPlugins = await Promise.all((await listBundledPluginPackages()).map(async ({ key, parsed }) => {
+      const installed = rowsById.get(parsed.id);
+      return {
+        key,
+        id: parsed.id,
+        name: parsed.manifest.name,
+        version: parsed.manifest.version,
+        description: parsed.manifest.description ?? null,
+        installed: Boolean(installed),
+        installedVersion: installed?.version ?? null,
+        updateAvailable: Boolean(installed && installed.package_sha256 !== parsed.packageSha256),
+      };
+    }));
     return {
       ok: true,
       executionEnabled: pluginsEnabledGlobally(),
       uploadLimitBytes: pluginUploadLimitBytes(),
+      bundledPlugins,
       plugins: await Promise.all(result.rows.map(serializePlugin)),
     };
+  });
+
+  app.post('/api/admin/plugins/bundled/:key/install', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const { key } = req.params as { key: string };
+    if (!isBundledPluginKey(key)) return reply.code(404).send({ ok: false, error: 'Bundled plugin not found' });
+    try {
+      const bundled = await getBundledPluginPackage(key);
+      const installed = await installPluginPackage(bundled.buffer, bundled.parsed.filename);
+      await audit('plugin_installed', {
+        by: req.user!.userId,
+        pluginId: installed.parsed.id,
+        version: installed.parsed.manifest.version,
+        sha256: installed.parsed.packageSha256,
+        state: installed.state,
+        source: 'bundled',
+      });
+      await notifyChange(installed.state, installed.parsed.id, installed.parsed.manifest.name);
+      const row = await getPluginRow(installed.parsed.id);
+      return reply.code(installed.state === 'installed' ? 201 : 200).send({
+        ok: true,
+        state: installed.state,
+        plugin: await serializePlugin(row!),
+      });
+    } catch (error) {
+      const message = errorMessage(error);
+      broadcastToAdmins('plugin:error', { operation: 'install-bundled', key, error: message });
+      return reply.code(400).send({ ok: false, error: message });
+    }
   });
 
   app.post('/api/admin/plugins/upload', async (req, reply) => {

@@ -15,6 +15,7 @@ const EXTENSION_TYPE = 'missing-music';
 const MUSICBRAINZ_ORIGIN = 'https://musicbrainz.org';
 const MUSICBRAINZ_CACHE_TTL_MS = 24 * 60 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+const MUSICBRAINZ_MAX_ATTEMPTS = 3;
 
 type MissingMusicConfig = {
   providerBaseUrl?: string;
@@ -23,6 +24,7 @@ type MissingMusicConfig = {
   requireAdminApproval?: boolean;
   musicBrainzContact?: string;
   releaseGroupTypes?: string;
+  excludedSecondaryTypes?: string;
 };
 
 type MissingMusicPluginRow = PluginDbRow & { config: MissingMusicConfig };
@@ -64,13 +66,27 @@ type MbReleaseGroup = {
   'primary-type'?: string | null;
   'secondary-types'?: string[];
   'first-release-date'?: string;
-  releases?: Array<{ id?: string }>;
 };
 
 type MbRelease = {
   id?: string;
   status?: string;
   date?: string;
+};
+
+type MbArtist = {
+  id?: string;
+  name?: string;
+  'sort-name'?: string;
+  disambiguation?: string;
+  country?: string;
+  type?: string | null;
+  score?: number;
+};
+
+type SavedArtistMatch = {
+  musicBrainzId: string;
+  musicBrainzName: string;
 };
 
 function errorMessage(error: unknown) {
@@ -84,6 +100,20 @@ export function normalizeCatalogText(value: string) {
     .toLocaleLowerCase('en')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+}
+
+function artistMatchKey(userId: string, name: string) {
+  return `artist-match:${userId}:${normalizeCatalogText(name)}`;
+}
+
+function parseSavedArtistMatch(value: Buffer): SavedArtistMatch | null {
+  try {
+    const parsed = JSON.parse(value.toString('utf8')) as Partial<SavedArtistMatch>;
+    if (!validMbid(parsed.musicBrainzId) || typeof parsed.musicBrainzName !== 'string' || !parsed.musicBrainzName.trim()) return null;
+    return { musicBrainzId: parsed.musicBrainzId, musicBrainzName: parsed.musicBrainzName.trim() };
+  } catch {
+    return null;
+  }
 }
 
 function validMbid(value: unknown): value is string {
@@ -229,17 +259,38 @@ async function musicBrainzFetch<T>(plugin: MissingMusicPluginRow, cacheKey: stri
   if (cached.rows[0]) return JSON.parse(cached.rows[0].value.toString('utf8')) as T;
 
   const run = musicBrainzQueue.then(async () => {
-    const waitMs = Math.max(0, 1100 - (Date.now() - lastMusicBrainzRequestAt));
-    if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
     const url = new URL(`/ws/2/${pathname.replace(/^\/+/, '')}`, MUSICBRAINZ_ORIGIN);
     for (const [key, value] of Object.entries({ ...parameters, fmt: 'json' })) url.searchParams.set(key, value);
     const contact = (plugin.config.musicBrainzContact ?? 'https://github.com/mariof1/mvbar').replace(/[\r\n()]/g, '').slice(0, 300);
-    lastMusicBrainzRequestAt = Date.now();
-    const response = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': `MVBar/1.0 (${contact})` },
-      redirect: 'error',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    let response: Response | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= MUSICBRAINZ_MAX_ATTEMPTS; attempt += 1) {
+      const waitMs = Math.max(0, 1100 - (Date.now() - lastMusicBrainzRequestAt));
+      if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+      lastMusicBrainzRequestAt = Date.now();
+      try {
+        response = await fetch(url, {
+          headers: { Accept: 'application/json', 'User-Agent': `MVBar/1.1 (${contact})` },
+          redirect: 'error',
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+        if (response.ok || ![429, 502, 503, 504].includes(response.status) || attempt === MUSICBRAINZ_MAX_ATTEMPTS) break;
+        const retryAfterSeconds = Number(response.headers.get('retry-after'));
+        await response.body?.cancel().catch(() => undefined);
+        await new Promise((resolve) => setTimeout(
+          resolve,
+          Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+            ? Math.min(retryAfterSeconds * 1000, 10_000)
+            : 1100 * attempt
+        ));
+      } catch (error) {
+        lastError = error;
+        response = null;
+        if (attempt === MUSICBRAINZ_MAX_ATTEMPTS) break;
+        await new Promise((resolve) => setTimeout(resolve, 1100 * attempt));
+      }
+    }
+    if (!response) throw new Error(`MusicBrainz request failed: ${errorMessage(lastError)}`);
     const text = await response.text();
     if (text.length > 8 * 1024 * 1024) throw new Error('MusicBrainz response is too large');
     if (!response.ok) throw new Error(`MusicBrainz request failed (${response.status})`);
@@ -274,6 +325,12 @@ function configuredReleaseTypes(plugin: MissingMusicPluginRow) {
   return new Set(values.length ? values : ['album', 'ep']);
 }
 
+function configuredExcludedSecondaryTypes(plugin: MissingMusicPluginRow) {
+  const raw = plugin.config.excludedSecondaryTypes
+    ?? 'Compilation,Live,Remix,DJ-mix,Mixtape/Street,Interview,Audio drama,Spokenword,Soundtrack,Audiobook,Demo';
+  return new Set(raw.split(',').map((value) => value.trim().toLocaleLowerCase('en')).filter(Boolean));
+}
+
 async function releaseGroupsForArtist(plugin: MissingMusicPluginRow, artistMbid: string) {
   const output: MbReleaseGroup[] = [];
   for (let offset = 0; offset < 1000; offset += 100) {
@@ -281,19 +338,24 @@ async function releaseGroupsForArtist(plugin: MissingMusicPluginRow, artistMbid:
       plugin,
       `artist:${artistMbid}:release-groups:${offset}`,
       'release-group',
-      { artist: artistMbid, inc: 'releases', limit: '100', offset: String(offset) }
+      { artist: artistMbid, limit: '100', offset: String(offset) }
     );
     const groups = Array.isArray(page['release-groups']) ? page['release-groups'] : [];
     output.push(...groups);
     if (groups.length < 100 || output.length >= Number(page['release-group-count'] ?? 0)) break;
   }
   const types = configuredReleaseTypes(plugin);
-  return output.filter((group) => types.has(String(group['primary-type'] ?? '').toLocaleLowerCase('en')));
+  const excludedSecondaryTypes = configuredExcludedSecondaryTypes(plugin);
+  return output.filter((group) => {
+    if (!types.has(String(group['primary-type'] ?? '').toLocaleLowerCase('en'))) return false;
+    return !(group['secondary-types'] ?? []).some((type) => excludedSecondaryTypes.has(type.toLocaleLowerCase('en')));
+  }).sort((left, right) => String(left['first-release-date'] || '9999').localeCompare(String(right['first-release-date'] || '9999'))
+    || String(left.title ?? '').localeCompare(String(right.title ?? '')));
 }
 
-async function localCatalog(req: FastifyRequest, artistMbid: string) {
+async function localCatalog(req: FastifyRequest, artistMbid: string, localArtistName = '') {
   const allowed = await allowedLibrariesForUser(req.user!.userId, req.user!.role);
-  const filter = libraryFilter(allowed, 2);
+  const filter = libraryFilter(allowed, 3);
   const result = await db().query<{
     album: string | null;
     release_ids: string[] | null;
@@ -305,10 +367,14 @@ async function localCatalog(req: FastifyRequest, artistMbid: string) {
             array_remove(array_agg(distinct track.musicbrainz_track_id), null) recording_ids,
             array_remove(array_agg(distinct track.title), null) track_titles
        from active_tracks track
-      where ($1 = track.musicbrainz_album_artist_id or $1 = track.musicbrainz_artist_id)
+      where (
+        $1 = track.musicbrainz_album_artist_id
+        or $1 = track.musicbrainz_artist_id
+        or ($2 <> '' and lower(coalesce(nullif(track.album_artist,''),track.artist,'')) = lower($2))
+      )
         ${filter.sql}
       group by track.album`,
-    [artistMbid, ...filter.params]
+    [artistMbid, localArtistName, ...filter.params]
   );
   return result.rows;
 }
@@ -480,12 +546,35 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/plugins/missing-music/status', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false, error: 'Authentication required' });
     const installed = await getMissingMusicPlugin(false);
+    const providerConfigured = Boolean(installed?.config.providerBaseUrl?.trim());
+    let localArtistCount = 0;
+    let taggedArtistCount = 0;
+    if (installed) {
+      const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
+      const filter = libraryFilter(allowed, 1);
+      const stats = await db().query<{ local_artist_count: string | number; tagged_artist_count: string | number }>(
+        `select count(distinct coalesce(nullif(track.album_artist,''),track.artist)) local_artist_count,
+                count(distinct coalesce(nullif(track.album_artist,''),track.artist)) filter (
+                  where coalesce(track.musicbrainz_album_artist_id,track.musicbrainz_artist_id) is not null
+                ) tagged_artist_count
+           from active_tracks track
+          where coalesce(nullif(track.album_artist,''),track.artist,'') <> ''
+            ${filter.sql}`,
+        filter.params
+      );
+      localArtistCount = Number(stats.rows[0]?.local_artist_count ?? 0);
+      taggedArtistCount = Number(stats.rows[0]?.tagged_artist_count ?? 0);
+    }
     return {
       ok: true,
       installed: Boolean(installed),
       enabled: Boolean(installed?.enabled && pluginsEnabledGlobally()),
-      configured: Boolean(installed?.config.providerBaseUrl),
+      configured: providerConfigured,
+      providerConfigured,
+      mode: providerConfigured ? 'provider' : 'wanted-list',
       requireAdminApproval: installed?.config.requireAdminApproval !== false,
+      localArtistCount,
+      taggedArtistCount,
     };
   });
 
@@ -497,41 +586,117 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     const filter = libraryFilter(allowed, 2);
     const result = await db().query<{
       name: string;
-      musicbrainz_id: string;
+      musicbrainz_id: string | null;
       album_count: string | number;
       track_count: string | number;
     }>(
       `select coalesce(nullif(track.album_artist,''),track.artist) name,
-              coalesce(track.musicbrainz_album_artist_id,track.musicbrainz_artist_id) musicbrainz_id,
+              max(coalesce(track.musicbrainz_album_artist_id,track.musicbrainz_artist_id)) musicbrainz_id,
               count(distinct nullif(track.album,'')) album_count,
               count(*) track_count
          from active_tracks track
-        where coalesce(track.musicbrainz_album_artist_id,track.musicbrainz_artist_id) is not null
-          and ($1='' or lower(coalesce(nullif(track.album_artist,''),track.artist,'')) like '%' || $1 || '%')
+        where coalesce(nullif(track.album_artist,''),track.artist,'') <> ''
+          and ($1='' or position($1 in lower(coalesce(nullif(track.album_artist,''),track.artist,''))) > 0)
           ${filter.sql}
-        group by 1,2 order by lower(coalesce(nullif(track.album_artist,''),track.artist)) limit 200`,
+        group by 1 order by lower(coalesce(nullif(track.album_artist,''),track.artist)) limit 200`,
       [query, ...filter.params]
     );
+    const matchKeys = result.rows.map((row) => artistMatchKey(req.user!.userId, row.name));
+    const savedMatches = matchKeys.length
+      ? await db().query<{ key: string; value: Buffer }>(
+        'select key,value from plugin_kv where plugin_id=$1 and key = any($2::text[])',
+        [plugin.id, matchKeys]
+      )
+      : { rows: [] as Array<{ key: string; value: Buffer }> };
+    const savedByKey = new Map(savedMatches.rows.map((row) => [row.key, parseSavedArtistMatch(row.value)]));
     return {
       ok: true,
-      artists: result.rows.map((row) => ({
-        name: row.name,
-        musicBrainzId: row.musicbrainz_id,
-        albumCount: Number(row.album_count),
-        trackCount: Number(row.track_count),
-      })),
+      artists: result.rows.map((row) => {
+        const saved = row.musicbrainz_id ? null : savedByKey.get(artistMatchKey(req.user!.userId, row.name));
+        return {
+          name: row.name,
+          musicBrainzId: row.musicbrainz_id ?? saved?.musicBrainzId ?? null,
+          musicBrainzName: saved?.musicBrainzName ?? null,
+          matchSource: row.musicbrainz_id ? 'tags' : saved ? 'saved' : null,
+          albumCount: Number(row.album_count),
+          trackCount: Number(row.track_count),
+        };
+      }),
     };
+  });
+
+  app.get('/api/plugins/missing-music/artists/matches', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    let query: string;
+    try {
+      query = safeText((req.query as { q?: string }).q, 'Artist name', 200);
+    } catch (error) {
+      return reply.code(400).send({ ok: false, error: errorMessage(error) });
+    }
+    try {
+      const normalizedQuery = normalizeCatalogText(query);
+      const result = await musicBrainzFetch<{ artists?: MbArtist[] }>(
+        plugin,
+        `artist-search:${normalizedQuery}`,
+        'artist',
+        { query, limit: '10' }
+      );
+      const matches = (result.artists ?? [])
+        .filter((candidate) => validMbid(candidate.id) && typeof candidate.name === 'string' && candidate.name.trim())
+        .map((candidate) => ({
+          id: candidate.id!,
+          name: candidate.name!.trim(),
+          sortName: candidate['sort-name']?.trim() || null,
+          disambiguation: candidate.disambiguation?.trim() || null,
+          country: candidate.country?.trim() || null,
+          type: candidate.type?.trim() || null,
+          score: Number.isFinite(Number(candidate.score)) ? Number(candidate.score) : null,
+        }));
+      return { ok: true, matches };
+    } catch (error) {
+      return reply.code(502).send({ ok: false, error: errorMessage(error) });
+    }
+  });
+
+  app.put('/api/plugins/missing-music/artists/match', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    try {
+      const body = req.body as Record<string, unknown>;
+      const localArtist = safeText(body.localArtist, 'Local artist', 500);
+      const musicBrainzId = validMbid(body.musicBrainzId) ? body.musicBrainzId : null;
+      if (!musicBrainzId) throw new Error('A valid MusicBrainz artist id is required');
+      const musicBrainzName = safeText(body.musicBrainzName, 'MusicBrainz artist name', 500);
+      const value = Buffer.from(JSON.stringify({ musicBrainzId, musicBrainzName }));
+      await db().query(
+        `insert into plugin_kv(plugin_id,key,value,expires_at,updated_at)
+         values($1,$2,$3,null,now())
+         on conflict(plugin_id,key) do update set value=excluded.value,expires_at=null,updated_at=now()`,
+        [plugin.id, artistMatchKey(req.user!.userId, localArtist), value]
+      );
+      await audit('plugin_artist_match_saved', {
+        pluginId: plugin.id,
+        localArtist,
+        musicBrainzId,
+        musicBrainzName,
+        by: req.user!.userId,
+      });
+      return { ok: true, match: { localArtist, musicBrainzId, musicBrainzName } };
+    } catch (error) {
+      return reply.code(400).send({ ok: false, error: errorMessage(error) });
+    }
   });
 
   app.get('/api/plugins/missing-music/artists/:artistMbid/catalog', async (req, reply) => {
     const plugin = await requireExtension(req, reply);
     if (!plugin) return;
     const { artistMbid } = req.params as { artistMbid: string };
+    const localArtist = optionalText((req.query as { localArtist?: string }).localArtist, 500) ?? '';
     if (!validMbid(artistMbid)) return reply.code(400).send({ ok: false, error: 'Invalid MusicBrainz artist id' });
     try {
-      const [groups, local] = await Promise.all([releaseGroupsForArtist(plugin, artistMbid), localCatalog(req, artistMbid)]);
+      const [groups, local] = await Promise.all([releaseGroupsForArtist(plugin, artistMbid), localCatalog(req, artistMbid, localArtist)]);
       const localTitles = new Set(local.map((item) => normalizeCatalogText(item.album ?? '')).filter(Boolean));
-      const localReleaseIds = new Set(local.flatMap((item) => item.release_ids ?? []));
       return {
         ok: true,
         releaseGroups: groups.map((group) => ({
@@ -540,8 +705,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
           primaryType: group['primary-type'] ?? null,
           secondaryTypes: group['secondary-types'] ?? [],
           firstReleaseDate: group['first-release-date'] ?? null,
-          present: (group.releases ?? []).some((release) => release.id && localReleaseIds.has(release.id))
-            || localTitles.has(normalizeCatalogText(group.title ?? '')),
+          present: localTitles.has(normalizeCatalogText(group.title ?? '')),
         })),
       };
     } catch (error) {
@@ -553,20 +717,20 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     const plugin = await requireExtension(req, reply);
     if (!plugin) return;
     const { releaseGroupMbid } = req.params as { releaseGroupMbid: string };
-    const { artistMbid, album } = req.query as { artistMbid?: string; album?: string };
+    const { artistMbid, album, localArtist } = req.query as { artistMbid?: string; album?: string; localArtist?: string };
     if (!validMbid(releaseGroupMbid) || !validMbid(artistMbid)) {
       return reply.code(400).send({ ok: false, error: 'Invalid MusicBrainz id' });
     }
     try {
-      const group = await musicBrainzFetch<{ title?: string; releases?: MbRelease[] }>(
+      const releasesResult = await musicBrainzFetch<{ releases?: MbRelease[] }>(
         plugin,
         `release-group:${releaseGroupMbid}:releases`,
-        `release-group/${releaseGroupMbid}`,
-        { inc: 'releases' }
+        'release',
+        { 'release-group': releaseGroupMbid, limit: '100' }
       );
-      const releases = Array.isArray(group.releases) ? group.releases : [];
-      const local = await localCatalog(req, artistMbid);
-      const wantedAlbum = normalizeCatalogText(album ?? group.title ?? '');
+      const releases = Array.isArray(releasesResult.releases) ? releasesResult.releases : [];
+      const local = await localCatalog(req, artistMbid, optionalText(localArtist, 500) ?? '');
+      const wantedAlbum = normalizeCatalogText(album ?? '');
       const matching = local.filter((row) => normalizeCatalogText(row.album ?? '') === wantedAlbum);
       const localReleaseIds = new Set(matching.flatMap((row) => row.release_ids ?? []));
       const release = [...releases].sort((left, right) => {
@@ -588,7 +752,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
             recording?: { id?: string; title?: string };
           }>;
         }>;
-      }>(plugin, `release:${release.id}:recordings`, `release/${release.id}`, { inc: 'recordings+media+artist-credits' });
+      }>(plugin, `release:${release.id}:recordings`, `release/${release.id}`, { inc: 'recordings' });
       const recordingIds = new Set(matching.flatMap((row) => row.recording_ids ?? []));
       const titles = new Set(matching.flatMap((row) => row.track_titles ?? []).map(normalizeCatalogText));
       const tracks = (detail.media ?? []).flatMap((medium) => (medium.tracks ?? []).map((track) => {
@@ -604,7 +768,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
           missing: recordingId ? !recordingIds.has(recordingId) : !titles.has(normalizeCatalogText(title)),
         };
       }));
-      return { ok: true, releaseId: release.id, releaseTitle: detail.title ?? group.title ?? null, tracks };
+      return { ok: true, releaseId: release.id, releaseTitle: detail.title ?? album ?? null, tracks };
     } catch (error) {
       return reply.code(502).send({ ok: false, error: errorMessage(error) });
     }
@@ -694,11 +858,19 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
         row = await updateRequest(id, { status: 'rejected', approved_by: req.user!.userId, approved_at: new Date(), provider_error: null });
       } else if (action === 'retry' && current.status === 'failed') {
         row = await updateRequest(id, { status: current.provider_request_id ? 'submitted' : 'approved', provider_error: null });
+      } else if (action === 'complete' && ['requested', 'approved', 'submitted', 'failed'].includes(current.status)) {
+        row = await updateRequest(id, {
+          status: 'completed',
+          completed_at: new Date(),
+          provider_error: null,
+          approved_by: current.approved_by ?? req.user!.userId,
+          approved_at: current.approved_at ?? new Date(),
+        });
       } else {
         throw new Error(`Action ${String(action)} is not valid for a ${current.status} request`);
       }
       await audit('plugin_media_request_changed', { pluginId: plugin.id, requestId: id, action, by: req.user!.userId });
-      await notifyRequest(row, String(action));
+      await notifyRequest(row, String(action), action === 'complete' ? 'An administrator marked this request as fulfilled' : undefined);
       if (row.status === 'approved' || row.status === 'submitted') void runMissingMusicJobs().catch(() => undefined);
       return { ok: true, request: serializeRequest(row) };
     } catch (error) {

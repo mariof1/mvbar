@@ -8,14 +8,25 @@ import {
   validateMissingMusicConfig,
 } from '../dist/pluginSystem/missingMusic.js';
 import { parsePluginPackage } from '../dist/pluginSystem/package.js';
+import { getBundledPluginPackage, listBundledPluginPackages } from '../dist/pluginSystem/bundled.js';
 
 test('the bundled Missing Music package is a valid request-only extension', async () => {
   const packageUrl = new URL('../../plugins/missing-music/dist/mvbar-missing-music.ndp', import.meta.url);
   const parsed = await parsePluginPackage(await fs.readFile(packageUrl), 'mvbar-missing-music.ndp');
   assert.equal(parsed.id, 'mvbar.missing-music');
   assert.equal(parsed.manifest.mvbar.extension.type, 'missing-music');
+  assert.equal(parsed.manifest.version, '1.1.0');
+  assert.match(parsed.manifest.config.schema.properties.excludedSecondaryTypes.default, /Compilation/);
   assert.equal('storage' in parsed.manifest.permissions, false);
   assert.equal('http' in parsed.manifest.permissions, false);
+});
+
+test('the Missing Music package is bundled into production builds for one-click installation', async () => {
+  const bundled = await getBundledPluginPackage('missing-music');
+  assert.equal(bundled.parsed.id, 'mvbar.missing-music');
+  assert.equal(bundled.parsed.manifest.version, '1.1.0');
+  assert.ok(bundled.buffer.length > 100);
+  assert.deepEqual((await listBundledPluginPackages()).map((plugin) => plugin.key), ['missing-music']);
 });
 
 test('catalog text normalization handles punctuation and accents', () => {

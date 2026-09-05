@@ -8,6 +8,8 @@ const repositoryRoot = path.resolve(scriptDirectory, '..', '..');
 const sourceDirectory = path.join(repositoryRoot, 'plugins', 'missing-music');
 const outputDirectory = path.join(sourceDirectory, 'dist');
 const outputPath = path.join(outputDirectory, 'mvbar-missing-music.ndp');
+const bundledOutputDirectory = path.join(repositoryRoot, 'api', 'assets', 'plugins');
+const bundledOutputPath = path.join(bundledOutputDirectory, 'mvbar-missing-music.ndp');
 
 // A valid inert WebAssembly module. The feature is declarative: MVBar supplies
 // the constrained catalog/request host capability only for this extension type.
@@ -33,5 +35,9 @@ archive.append(await fs.readFile(path.join(sourceDirectory, 'manifest.json')), {
 archive.append(wasm, { name: 'plugin.wasm' });
 await archive.finalize();
 await complete;
-await fs.writeFile(outputPath, Buffer.concat(chunks));
+const packageBuffer = Buffer.concat(chunks);
+await fs.writeFile(outputPath, packageBuffer);
+await fs.mkdir(bundledOutputDirectory, { recursive: true });
+await fs.writeFile(bundledOutputPath, packageBuffer);
 console.log(outputPath);
+console.log(bundledOutputPath);

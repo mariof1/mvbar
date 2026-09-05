@@ -12,6 +12,10 @@ upload area. Every new or changed package starts disabled. Review its requested
 permissions and select **Review & enable**. Updating the package disables it
 again so new code cannot run without another administrator approval.
 
+First-party packages included with MVBar appear separately with an
+**Install with one click** action. They follow the same permission review and
+disabled-by-default rules; no server file copy is required.
+
 Packages can also be copied directly into `PLUGINS_DIR` and loaded with
 **Rescan folder**. Defaults are:
 
@@ -161,15 +165,19 @@ example-tools.ndp
 ## First-party Missing Music request plugin
 
 The repository includes `plugins/missing-music`, a removable request-only
-extension. It compares MusicBrainz album and recording identifiers with the
-enabled MVBar libraries, presents missing albums or tracks to users, and stores
-an approval queue in plugin-owned database rows.
+extension. Install it directly from **Admin → Plugins → Included with MVBar**.
+It compares MusicBrainz album and recording identifiers with the enabled MVBar
+libraries, presents missing albums or tracks to users, and stores an approval
+queue in plugin-owned database rows. Local artists without MusicBrainz tags are
+included and can be matched once through MusicBrainz; the saved match is reused.
 
-Approved requests can be handed to an administrator-configured external HTTP
-service. MVBar sends metadata and MusicBrainz identifiers only. The extension
-has no download, media storage, import, or streaming path; delivery stays
-outside the plugin. Removing the package cascades its request rows and
-MusicBrainz cache.
+The plugin works without external configuration as a managed wanted list.
+Administrators can approve, reject, and manually mark requests fulfilled.
+Optionally, approved requests can be handed to an administrator-configured
+external HTTP service. MVBar sends metadata and MusicBrainz identifiers only.
+The extension has no download, media storage, import, or streaming path;
+delivery stays outside the plugin. Removing the package cascades its request
+rows, saved artist matches, and MusicBrainz cache.
 
 Build the installable package with:
 
@@ -178,8 +186,10 @@ cd api
 npm run build:missing-music-plugin
 ```
 
-The output is `plugins/missing-music/dist/mvbar-missing-music.ndp`. See
-`plugins/missing-music/README.md` for the provider API contract.
+The output is `plugins/missing-music/dist/mvbar-missing-music.ndp` and is also
+copied into the API's bundled-plugin assets for production packaging. See
+`plugins/missing-music/README.md` for setup, troubleshooting, and the optional
+provider API contract.
 
 ## Backups
 
