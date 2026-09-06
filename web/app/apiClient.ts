@@ -35,7 +35,7 @@ export async function apiFetch(path: string, init: RequestInit = {}, token?: str
 }
 
 export type RecentSearch = {
-  itemType: 'track' | 'artist' | 'album' | 'playlist' | 'podcast' | 'podcast_episode';
+  itemType: 'track' | 'artist' | 'album' | 'playlist' | 'podcast' | 'podcast_episode' | 'audiobook';
   itemKey: string;
   title: string;
   subtitle: string | null;

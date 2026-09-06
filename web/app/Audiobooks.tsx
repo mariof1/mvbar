@@ -1,5 +1,7 @@
 'use client';
 
+import { useRouter } from './router';
+
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from './store';
 import { useUi, AudiobookChapter as AudiobookPlayerChapter } from './uiStore';
@@ -431,6 +433,7 @@ export function AudiobookPlayer({
                 -15
               </button>
               <button
+                aria-label={playing ? "Pause audiobook" : "Play audiobook"}
                 onClick={togglePlay}
                 className="p-5 rounded-full bg-white text-black shadow-lg"
               >
@@ -534,6 +537,7 @@ export function AudiobookPlayer({
                 -15
               </button>
               <button
+                aria-label={playing ? "Pause audiobook" : "Play audiobook"}
                 onClick={(e) => { e.stopPropagation(); togglePlay(); }}
                 className="p-2 rounded-full bg-white text-black"
               >
@@ -564,6 +568,7 @@ export function AudiobookPlayer({
                 -15
               </button>
               <button
+                aria-label={playing ? "Pause audiobook" : "Play audiobook"}
                 onClick={(e) => { e.stopPropagation(); togglePlay(); }}
                 className="p-3 rounded-full bg-white text-black hover:bg-white/90 hover:scale-105 transition-all shadow-lg"
               >
@@ -1055,7 +1060,9 @@ export function Audiobooks() {
   const [books, setBooks] = useState<Audiobook[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedBookId, setSelectedBookId] = useState<number | null>(null);
+  const route = useRouter((s) => s.route);
+  const navigate = useRouter((s) => s.navigate);
+  const selectedBookId = route.type === 'audiobook' ? route.audiobookId : null;
   const [languageFilter, setLanguageFilter] = useState<string>('all');
 
   const load = useCallback(async () => {
@@ -1083,7 +1090,7 @@ export function Audiobooks() {
     return (
       <AudiobookDetailView
         bookId={selectedBookId}
-        onBack={() => { setSelectedBookId(null); load(); }}
+        onBack={() => { navigate({ type: 'audiobooks' }); load(); }}
       />
     );
   }
@@ -1161,7 +1168,7 @@ export function Audiobooks() {
             <button
               type="button"
               key={book.id}
-              onClick={() => setSelectedBookId(book.id)}
+              onClick={() => navigate({ type: 'audiobook', audiobookId: book.id })}
               className="bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 overflow-hidden cursor-pointer transition group text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
               aria-label={`Open ${book.title}`}
             >

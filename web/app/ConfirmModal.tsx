@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
 import { create } from 'zustand';
+import { useDialogFocus } from './useDialogFocus';
 import { useBodyScrollLock } from './useBodyScrollLock';
 
 type ConfirmOptions = {
@@ -47,21 +48,9 @@ export const showAlert = (title: string, message: string) =>
 
 export function ConfirmModal() {
   const { open, options, close } = useConfirmStore();
-  const confirmRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, () => close(false), open);
   useBodyScrollLock(open);
-
-  useEffect(() => {
-    if (open) confirmRef.current?.focus();
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close(false);
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, close]);
 
   if (!open || !options) return null;
 
@@ -74,6 +63,11 @@ export function ConfirmModal() {
       onClick={() => close(false)}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
         className="bg-slate-800 border border-slate-700/60 rounded-2xl shadow-2xl shadow-black/40 p-6 max-w-sm w-[90vw] mx-4"
         onClick={(e) => e.stopPropagation()}
       >
@@ -89,7 +83,6 @@ export function ConfirmModal() {
             </button>
           )}
           <button
-            ref={confirmRef}
             onClick={() => close(true)}
             className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
               danger

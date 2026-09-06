@@ -1,3 +1,4 @@
+import { searchAudiobooks } from './audiobookSearch.js';
 import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
 import { meili } from './meili.js';
@@ -542,7 +543,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
   app.post('/api/search/recent', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const allowedTypes = new Set(['track', 'artist', 'album', 'playlist', 'podcast', 'podcast_episode']);
+    const allowedTypes = new Set(['track', 'artist', 'album', 'playlist', 'podcast', 'podcast_episode', 'audiobook']);
     const itemType = typeof body.itemType === 'string' ? body.itemType : '';
     const itemKey = typeof body.itemKey === 'string' ? body.itemKey.trim() : '';
     const title = typeof body.title === 'string' ? body.title.trim().replace(/\s+/g, ' ') : '';
@@ -614,11 +615,12 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
     const userId = req.user.userId;
 
     if (q.trim().length === 0) {
-      return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [], podcasts: [], podcastEpisodes: [] };
+      return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [], podcasts: [], podcastEpisodes: [], audiobooks: [] };
     }
 
     const index = meili().index('tracks');
     const allowed = await allowedLibrariesForUser(userId, req.user.role);
+    const audiobooks = offset === 0 ? await searchAudiobooks(q, allowed) : [];
 
     // Parse query for smart matching
     const parsed = parseQuery(q);
@@ -1001,7 +1003,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         if (!isPrefix) {
           await db().query(
             `INSERT INTO search_logs(user_id, query, query_normalized, result_count) VALUES ($1, $2, $3, $4)`,
-            [userId, q.trim(), normalized, (res.estimatedTotalHits || 0) + podcasts.length + podcastEpisodes.length]
+            [userId, q.trim(), normalized, (res.estimatedTotalHits || 0) + podcasts.length + podcastEpisodes.length + audiobooks.length]
           );
           await invalidateRecommendationCache(userId);
         }
@@ -1019,6 +1021,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         playlists,
         podcasts,
         podcastEpisodes,
+        audiobooks,
         parsed: {
           genreFamily: parsed.genreFamily,
           country: parsed.country,
@@ -1032,7 +1035,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
         const podcastResults = offset === 0
           ? await searchPodcastEntities(userId, q, q)
           : { podcasts: [], podcastEpisodes: [] };
-        return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [], ...podcastResults };
+        return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [], audiobooks, ...podcastResults };
       }
       throw e;
     }

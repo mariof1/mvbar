@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useId } from 'react';
 import {
   listSmartPlaylists,
   getSmartPlaylist,
@@ -12,6 +12,7 @@ import {
   type SmartPlaylist,
   type SmartFilters,
 } from './apiClient';
+import { useRouter } from './router';
 import { useAuth } from './store';
 import { useConnectPlayer } from './connectPlayer';
 import { useLibraryUpdates } from './useWebSocket';
@@ -89,8 +90,13 @@ function SmartPicker({
   displayFn: (item: any) => string;
   valueKey?: string;
 }) {
+  const inputId = useId();
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const [query, setQuery] = useState('');
-  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [suggestionResults, setSuggestions] = useState<any[]>([]);
+  const identity = (item: any) => valueKey === 'value' ? item : item[valueKey];
+  const suggestions = suggestionResults.filter(item => !selected.some(value => identity(value) === identity(item)));
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   useEffect(() => {
@@ -98,14 +104,24 @@ function SmartPicker({
       setSuggestions([]);
       return;
     }
+    let active = true;
     const t = setTimeout(async () => {
       try {
         const r = await suggestSmartPlaylist(token, kind, query);
-        setSuggestions(r.items ?? []);
+        if (active) { setSuggestions(r.items ?? []); setActiveIndex(-1); }
       } catch {}
     }, 300);
-    return () => clearTimeout(t);
+    return () => { active = false; clearTimeout(t); };
   }, [query, token, kind]);
+
+  useEffect(() => {
+    if (!showSuggestions) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!pickerRef.current?.contains(event.target as Node)) setShowSuggestions(false);
+    };
+    document.addEventListener('pointerdown', dismiss);
+    return () => document.removeEventListener('pointerdown', dismiss);
+  }, [showSuggestions]);
 
   const addItem = (item: any) => {
     const val = valueKey === 'value' ? item : item[valueKey];
@@ -124,8 +140,16 @@ function SmartPicker({
   };
 
   return (
-    <div className="space-y-2">
-      <label className="block text-sm font-medium text-slate-300">{label}</label>
+    <div ref={pickerRef} className="space-y-2" onBlur={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setShowSuggestions(false);
+    }} onKeyDown={(event) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setShowSuggestions(false);
+        setActiveIndex(-1);
+      }
+    }}>
+      <label htmlFor={inputId} className="block text-sm font-medium text-slate-300">{label}</label>
       <div className="flex flex-wrap gap-2 mb-2">
         {selected.map((item, idx) => (
           <span
@@ -133,15 +157,34 @@ function SmartPicker({
             className="px-3 py-1 bg-cyan-500/20 text-cyan-400 rounded-full text-sm flex items-center gap-2"
           >
             {displayFn(item)}
-            <button onClick={() => removeItem(item)} className="hover:text-white">×</button>
+            <button aria-label={`Remove ${displayFn(item)}`} onClick={() => removeItem(item)} className="hover:text-white">×</button>
           </span>
         ))}
       </div>
       <div className="relative">
         <input
+          id={inputId}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={showSuggestions && suggestions.length > 0}
+          aria-controls={showSuggestions && suggestions.length > 0 ? `${inputId}-list` : undefined}
+          aria-activedescendant={showSuggestions && activeIndex >= 0 ? `${inputId}-option-${activeIndex}` : undefined}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              setShowSuggestions(true);
+              setActiveIndex((index) => event.key === 'ArrowDown' ? Math.min(index + 1, suggestions.length - 1) : Math.max(index - 1, 0));
+            } else if (event.key === 'Enter' && showSuggestions && suggestions[activeIndex]) {
+              event.preventDefault();
+              addItem(suggestions[activeIndex]);
+              setActiveIndex(-1);
+            }
+          }}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
+            setActiveIndex(-1);
+            setSuggestions([]);
             setShowSuggestions(true);
           }}
           onFocus={() => setShowSuggestions(true)}
@@ -149,12 +192,16 @@ function SmartPicker({
           placeholder={placeholder || `Search ${label.toLowerCase()}...`}
         />
         {showSuggestions && suggestions.length > 0 && (
-          <div className="absolute z-10 mt-1 w-full p-2 bg-slate-800 rounded-lg border border-slate-700 max-h-40 overflow-y-auto">
+          <div id={`${inputId}-list`} role="listbox" aria-label={label} className="absolute z-10 mt-1 w-full p-2 bg-slate-800 rounded-lg border border-slate-700 max-h-40 overflow-y-auto">
             {suggestions.map((item, idx) => (
               <button
                 key={idx}
+                id={`${inputId}-option-${idx}`}
+                role="option"
+                aria-selected={idx === activeIndex}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => addItem(item)}
-                className="block w-full text-left px-3 py-2 text-sm text-slate-300 hover:bg-slate-700 rounded"
+                className={`block w-full text-left px-3 py-2 text-sm text-slate-300 hover:bg-slate-700 rounded ${idx === activeIndex ? "bg-slate-700" : ""}`}
               >
                 {displayFn(item)}
               </button>
@@ -174,7 +221,10 @@ export function SmartPlaylists() {
   const lastRefreshRef = useRef<number>(0);
 
   const [playlists, setPlaylists] = useState<SmartPlaylist[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const route = useRouter((s) => s.route);
+  const navigate = useRouter((s) => s.navigate);
+  const selectedId = route.type === 'playlists' && route.sub === 'smart' ? route.smartPlaylistId ?? null : null;
+  const setSelectedId = (id: number | null) => navigate({ type: 'playlists', sub: 'smart', ...(id == null ? {} : { smartPlaylistId: id }) });
   const [tracks, setTracks] = useState<Track[]>([]);
   const [trackCount, setTrackCount] = useState(0);
   const [truncated, setTruncated] = useState(false);
@@ -185,6 +235,9 @@ export function SmartPlaylists() {
   const [editing, setEditing] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
+  const editorRef = useRef<HTMLDivElement>(null);
+  const detailRequest = useRef(0);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [editSort, setEditSort] = useState('random');
   const [editMaxResults, setEditMaxResults] = useState<string>('');
   const [editFavoriteOnly, setEditFavoriteOnly] = useState(false);
@@ -229,17 +282,22 @@ export function SmartPlaylists() {
 
   async function loadPlaylist(id: number) {
     if (!token) return;
+    const request = ++detailRequest.current;
     setLoading(true);
+    setTracks([]);
+    setTrackCount(0);
+    setTruncated(false);
     try {
       const r = await getSmartPlaylist(token, id);
+      if (request !== detailRequest.current) return;
       setTracks(r.tracks ?? []);
       setTrackCount(r.trackCount);
       setTruncated(r.truncated);
     } catch (e: any) {
       if (e?.status === 401) clear();
-      setError(e?.message ?? 'error');
+      if (request === detailRequest.current) setError(e?.message ?? 'error');
     } finally {
-      setLoading(false);
+      if (request === detailRequest.current) setLoading(false);
     }
   }
 
@@ -304,24 +362,63 @@ export function SmartPlaylists() {
         languages: excludeLanguages,
       },
       duration: {
-        min: editDurationMin ? parseInt(editDurationMin, 10) : null,
-        max: editDurationMax ? parseInt(editDurationMax, 10) : null,
+        min: editDurationMin ? Number(editDurationMin) : null,
+        max: editDurationMax ? Number(editDurationMax) : null,
       },
       bpm: {
-        min: editBpmMin ? parseInt(editBpmMin, 10) : null,
-        max: editBpmMax ? parseInt(editBpmMax, 10) : null,
+        min: editBpmMin ? Number(editBpmMin) : null,
+        max: editBpmMax ? Number(editBpmMax) : null,
       },
       dateAdded: {
         from: editDateAddedFrom || null,
         to: editDateAddedTo || null,
       },
       favoriteOnly: editFavoriteOnly,
-      maxResults: editMaxResults ? parseInt(editMaxResults, 10) : null,
+      maxResults: editMaxResults ? Number(editMaxResults) : null,
     };
   }
 
   async function handleSave() {
-    if (!token || !editName.trim()) return;
+    if (!token) return;
+    if (!editName.trim()) {
+      setError('Enter a playlist name.');
+      nameInputRef.current?.focus();
+      nameInputRef.current?.scrollIntoView({ block: 'center' });
+      return;
+    }
+    const invalid = (id: string, message: string) => {
+      setError(message);
+      const input = editorRef.current?.querySelector<HTMLInputElement>(`#${id}`);
+      input?.focus();
+      input?.scrollIntoView({ block: 'center' });
+    };
+    const fields: [string, string, string, number, number][] = [
+      ['smart-max-tracks', editMaxResults, 'Max Tracks', 1, 2000],
+      ['smart-min-duration-sec', editDurationMin, 'Min Duration', 0, 86400],
+      ['smart-max-duration-sec', editDurationMax, 'Max Duration', 0, 86400],
+      ['smart-min-bpm', editBpmMin, 'Min BPM', 0, 400],
+      ['smart-max-bpm', editBpmMax, 'Max BPM', 0, 400],
+    ];
+    for (const [id, value, label, min, max] of fields) {
+      const input = editorRef.current?.querySelector<HTMLInputElement>(`#${id}`);
+      if (input?.validity.badInput || (value !== '' && (!Number.isInteger(Number(value)) || Number(value) < min || Number(value) > max))) {
+        invalid(id, `${label} must be a whole number from ${min} to ${max}.`);
+        return;
+      }
+    }
+    for (const [id, min, max, label] of [
+      ['smart-min-duration-sec', editDurationMin, editDurationMax, 'Duration'],
+      ['smart-min-bpm', editBpmMin, editBpmMax, 'BPM'],
+    ]) {
+      if (min !== '' && max !== '' && Number(min) > Number(max)) {
+        invalid(id, `${label} minimum must not exceed maximum.`);
+        return;
+      }
+    }
+    if (editDateAddedFrom && editDateAddedTo && editDateAddedFrom > editDateAddedTo) {
+      invalid('smart-date-added-from', 'Date Added From must not be after Date Added To.');
+      return;
+    }
     setError(null);
     try {
       const filters = buildFilters();
@@ -330,6 +427,7 @@ export function SmartPlaylists() {
       } else {
         await createSmartPlaylist(token, editName.trim(), editSort, filters);
       }
+      if (editId != null && selectedId === editId) await loadPlaylist(editId);
       setEditing(false);
       setEditId(null);
       await loadPlaylists();
@@ -478,13 +576,13 @@ export function SmartPlaylists() {
   // Editor Modal
   if (editing) {
     return (
-      <div className="space-y-6 max-w-4xl">
+      <div ref={editorRef} className="space-y-6 max-w-4xl">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-bold text-white">{editId ? 'Edit Smart Playlist' : 'New Smart Playlist'}</h2>
-          <button onClick={() => setEditing(false)} className="text-slate-400 hover:text-white text-2xl">×</button>
+          <button aria-label="Close smart playlist editor" onClick={() => setEditing(false)} className="text-slate-400 hover:text-white text-2xl">×</button>
         </div>
 
-        {error && <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">{error}</div>}
+        {error && <div id="smart-playlist-error" role="alert" className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">{error}</div>}
 
         {/* General Settings */}
         <div className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/30 space-y-4">
@@ -492,17 +590,21 @@ export function SmartPlaylists() {
           
           <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Name</label>
-              <input
+              <label htmlFor="smart-name" className="block text-sm font-medium text-slate-300 mb-2">Name</label>
+              <input id="smart-name"
+                ref={nameInputRef}
+                aria-required="true"
+                aria-invalid={error === 'Enter a playlist name.'}
+                aria-describedby={error ? "smart-playlist-error" : undefined}
                 value={editName}
-                onChange={(e) => setEditName(e.target.value)}
+                onChange={(e) => { setEditName(e.target.value); if (error) setError(null); }}
                 className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
                 placeholder="My Smart Playlist"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Sort Order</label>
-              <select
+              <label htmlFor="smart-sort-order" className="block text-sm font-medium text-slate-300 mb-2">Sort Order</label>
+              <select id="smart-sort-order"
                 value={editSort}
                 onChange={(e) => setEditSort(e.target.value)}
                 className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
@@ -516,8 +618,8 @@ export function SmartPlaylists() {
 
           <div className="grid md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Max Tracks</label>
-              <input
+              <label htmlFor="smart-max-tracks" className="block text-sm font-medium text-slate-300 mb-2">Max Tracks</label>
+              <input id="smart-max-tracks"
                 type="number"
                 value={editMaxResults}
                 onChange={(e) => setEditMaxResults(e.target.value)}
@@ -528,8 +630,8 @@ export function SmartPlaylists() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Min Duration (sec)</label>
-              <input
+              <label htmlFor="smart-min-duration-sec" className="block text-sm font-medium text-slate-300 mb-2">Min Duration (sec)</label>
+              <input id="smart-min-duration-sec"
                 type="number"
                 value={editDurationMin}
                 onChange={(e) => setEditDurationMin(e.target.value)}
@@ -539,8 +641,8 @@ export function SmartPlaylists() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Max Duration (sec)</label>
-              <input
+              <label htmlFor="smart-max-duration-sec" className="block text-sm font-medium text-slate-300 mb-2">Max Duration (sec)</label>
+              <input id="smart-max-duration-sec"
                 type="number"
                 value={editDurationMax}
                 onChange={(e) => setEditDurationMax(e.target.value)}
@@ -553,8 +655,8 @@ export function SmartPlaylists() {
 
           <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Date Added From</label>
-              <input
+              <label htmlFor="smart-date-added-from" className="block text-sm font-medium text-slate-300 mb-2">Date Added From</label>
+              <input id="smart-date-added-from"
                 type="date"
                 value={editDateAddedFrom}
                 onChange={(e) => setEditDateAddedFrom(e.target.value)}
@@ -562,8 +664,8 @@ export function SmartPlaylists() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Date Added To</label>
-              <input
+              <label htmlFor="smart-date-added-to" className="block text-sm font-medium text-slate-300 mb-2">Date Added To</label>
+              <input id="smart-date-added-to"
                 type="date"
                 value={editDateAddedTo}
                 onChange={(e) => setEditDateAddedTo(e.target.value)}
@@ -574,8 +676,8 @@ export function SmartPlaylists() {
 
           <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Min BPM</label>
-              <input
+              <label htmlFor="smart-min-bpm" className="block text-sm font-medium text-slate-300 mb-2">Min BPM</label>
+              <input id="smart-min-bpm"
                 type="number"
                 value={editBpmMin}
                 onChange={(e) => setEditBpmMin(e.target.value)}
@@ -586,8 +688,8 @@ export function SmartPlaylists() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Max BPM</label>
-              <input
+              <label htmlFor="smart-max-bpm" className="block text-sm font-medium text-slate-300 mb-2">Max BPM</label>
+              <input id="smart-max-bpm"
                 type="number"
                 value={editBpmMax}
                 onChange={(e) => setEditBpmMax(e.target.value)}
@@ -613,7 +715,7 @@ export function SmartPlaylists() {
         {/* Include/Exclude Grid */}
         <div className="grid lg:grid-cols-2 gap-6">
           {/* Include Rules */}
-          <div className="bg-emerald-900/20 p-4 rounded-xl border border-emerald-800/50 space-y-4">
+          <div role="group" aria-label="Include rules" className="bg-emerald-900/20 p-4 rounded-xl border border-emerald-800/50 space-y-4">
             <h3 className="text-lg font-bold text-emerald-400 flex items-center gap-2">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
@@ -631,6 +733,7 @@ export function SmartPlaylists() {
             />
             <div className="-mt-2">
               <select
+                aria-label="Included artists matching rule"
                 value={includeArtistsMode}
                 onChange={(e) => setIncludeArtistsMode(e.target.value as 'any' | 'all')}
                 className="text-xs bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-300"
@@ -661,6 +764,7 @@ export function SmartPlaylists() {
             />
             <div className="-mt-2">
               <select
+                aria-label="Included genres matching rule"
                 value={includeGenresMode}
                 onChange={(e) => setIncludeGenresMode(e.target.value as 'any' | 'all')}
                 className="text-xs bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-300"
@@ -702,7 +806,7 @@ export function SmartPlaylists() {
           </div>
 
           {/* Exclude Rules */}
-          <div className="bg-red-900/20 p-4 rounded-xl border border-red-800/50 space-y-4">
+          <div role="group" aria-label="Exclude rules" className="bg-red-900/20 p-4 rounded-xl border border-red-800/50 space-y-4">
             <h3 className="text-lg font-bold text-red-400 flex items-center gap-2">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
@@ -918,8 +1022,9 @@ export function SmartPlaylists() {
                 {/* Play buttons */}
                 <div className="flex gap-2 flex-shrink-0">
                   <button
+                    aria-label={`Play ${selectedPlaylist.name}`}
                     onClick={playAll}
-                    disabled={tracks.length === 0}
+                    disabled={loading || tracks.length === 0}
                     className="p-2 sm:px-4 sm:py-2 bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-400 text-white rounded-full sm:rounded-lg font-medium transition-colors flex items-center gap-2"
                   >
                     <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -928,8 +1033,9 @@ export function SmartPlaylists() {
                     <span className="hidden sm:inline">Play</span>
                   </button>
                   <button
+                    aria-label={`Shuffle ${selectedPlaylist.name}`}
                     onClick={shufflePlay}
-                    disabled={tracks.length === 0}
+                    disabled={loading || tracks.length === 0}
                     className="p-2 sm:px-4 sm:py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded-full sm:rounded-lg font-medium transition-colors flex items-center gap-2"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

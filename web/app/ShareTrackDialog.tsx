@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getShareTargets, shareTrack, type SocialUser } from './apiClient';
 import { useAuth } from './store';
@@ -8,6 +8,7 @@ import { useToastStore } from './Toast';
 import { useRouter } from './router';
 import { useSocialUpdates } from './socialStore';
 import type { QueueTrack } from './playerStore';
+import { useDialogFocus } from './useDialogFocus';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { trackArtistLabel } from './artistDisplay';
 
@@ -35,6 +36,8 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useBodyScrollLock(Boolean(track));
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose, !!track);
 
   useEffect(() => {
     if (!track || !token) return;
@@ -96,6 +99,8 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
   return createPortal(
     <div className="fixed inset-0 z-[320] flex items-end justify-center bg-black/70 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={onClose}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="share-track-title"

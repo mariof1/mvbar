@@ -243,6 +243,7 @@ export function RecentlyAdded({
             />
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
               <button
+                aria-label={`Play album ${album.album}`}
                 onClick={(e) => handlePlayAlbum(album, e)}
                 className="w-12 h-12 bg-cyan-500 rounded-full flex items-center justify-center transform scale-90 group-hover:scale-100 transition-transform"
               >

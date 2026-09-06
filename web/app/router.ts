@@ -24,7 +24,7 @@ export type Route =
   | { type: 'browse-genre'; genre: string }
   | { type: 'browse-country'; country: string }
   | { type: 'browse-language'; language: string }
-  | { type: 'playlists'; sub?: 'regular' | 'smart' }
+  | { type: 'playlists'; sub?: 'regular' | 'smart'; smartPlaylistId?: number }
   | { type: 'playlist'; playlistId: string }
   | { type: 'favorites' }
   | { type: 'social'; sub?: 'shares' | 'friends' }
@@ -67,7 +67,7 @@ function routeToHash(route: Route): string {
     case 'browse-genre': return `#/browse/genre/${encodeURIComponent(route.genre)}`;
     case 'browse-country': return `#/browse/country/${encodeURIComponent(route.country)}`;
     case 'browse-language': return `#/browse/language/${encodeURIComponent(route.language)}`;
-    case 'playlists': return route.sub ? `#/playlists/${route.sub}` : '#/playlists';
+    case 'playlists': return route.sub ? `#/playlists/${route.sub}${route.sub === 'smart' && route.smartPlaylistId ? `/${route.smartPlaylistId}` : ''}` : '#/playlists';
     case 'playlist': return `#/playlist/${route.playlistId}`;
     case 'favorites': return '#/favorites';
     case 'social': return route.sub ? `#/social/${route.sub}` : '#/social';
@@ -129,6 +129,9 @@ function hashToRoute(hash: string): Route {
   
   // Playlist routes
   if (parts[0] === 'playlists') {
+    if (parts[1] === 'smart' && /^\d+$/.test(parts[2] || '') && Number(parts[2]) > 0) {
+      return { type: 'playlists', sub: 'smart', smartPlaylistId: Number(parts[2]) };
+    }
     if (parts[1] === 'regular' || parts[1] === 'smart') {
       return { type: 'playlists', sub: parts[1] };
     }

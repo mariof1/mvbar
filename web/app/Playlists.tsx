@@ -78,7 +78,6 @@ export function Playlists(props: {
   // Navigation using new router
   const route = useRouter((s) => s.route);
   const navigate = useRouter((s) => s.navigate);
-  const back = useRouter((s) => s.back);
   
   // Derive state from route
   const tab = (route.type === 'playlists' && route.sub ? route.sub : 'regular') as PlaylistTab;
@@ -108,8 +107,8 @@ export function Playlists(props: {
 
   // Wrapper to go back to list
   const goBackToList = useCallback(() => {
-    back();
-  }, [back]);
+    navigate({ type: 'playlists', sub: 'regular' });
+  }, [navigate]);
 
   // Switch tab with router
   const switchTab = useCallback((newTab: PlaylistTab) => {
@@ -398,6 +397,7 @@ export function Playlists(props: {
           {/* Back button and header */}
           <div className="flex items-center gap-3">
             <button
+              aria-label="Back to playlists"
               onClick={goBackToList}
               className="p-2 rounded-lg hover:bg-slate-800/50 text-slate-400 hover:text-white transition-colors"
             >
@@ -420,6 +420,7 @@ export function Playlists(props: {
                   }))
                 )
               }
+              aria-label={`Play playlist ${selectedPlaylist.name}`}
               disabled={items.length === 0}
               className={`p-3 rounded-full transition-colors ${
                 items.length > 0
@@ -590,6 +591,7 @@ export function Playlists(props: {
                 {/* Actions - always visible on mobile, hover on desktop */}
                 <div className="flex items-center gap-0.5 sm:gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                   <button
+                    aria-label={`Move ${it.title} up`}
                     onClick={() => handleMove(Number(it.track_id), -1)}
                     disabled={idx === 0}
                     className={`p-1.5 rounded-lg transition-colors ${
@@ -601,6 +603,7 @@ export function Playlists(props: {
                     </svg>
                   </button>
                   <button
+                    aria-label={`Move ${it.title} down`}
                     onClick={() => handleMove(Number(it.track_id), 1)}
                     disabled={idx === items.length - 1}
                     className={`p-1.5 rounded-lg transition-colors ${
@@ -612,6 +615,7 @@ export function Playlists(props: {
                     </svg>
                   </button>
                   <button
+                    aria-label={`Remove ${it.title} from playlist`}
                     onClick={() => handleRemove(Number(it.track_id))}
                     className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/20 transition-colors"
                   >

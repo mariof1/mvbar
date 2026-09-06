@@ -9,6 +9,7 @@ import { apiFetch } from './apiClient';
 import { showConfirm, showAlert } from './ConfirmModal';
 import { sendWebSocketMessage, usePodcastProgress, updateLocalPodcastProgress } from './useWebSocket';
 import { useBodyScrollLock } from './useBodyScrollLock';
+import { useDialogFocus } from './useDialogFocus';
 import { formatCalendarDate } from './format';
 import { mediaSessionArtwork } from './mediaSessionArtwork';
 import { SeekSlider } from './SeekSlider';
@@ -118,6 +119,8 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
     error?: string;
   } | null>(null);
   useBodyScrollLock(true);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose);
 
   // Search podcasts via iTunes API
   const handleSearch = useCallback(async () => {
@@ -195,7 +198,7 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-slate-800 rounded-2xl p-6 w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Add Podcast" tabIndex={-1} className="bg-slate-800 rounded-2xl p-6 w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-xl font-bold text-white mb-4">Add Podcast</h2>
 
         {/* Tabs */}
@@ -227,6 +230,7 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                aria-label="Search for podcasts"
                 placeholder="Search for podcasts..."
                 className="flex-1 min-w-0 px-4 py-3 rounded-lg bg-slate-700 text-white placeholder-slate-400 border border-slate-600 focus:border-cyan-500 focus:outline-none"
                 autoFocus
@@ -299,6 +303,7 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
               type="url"
               value={feedUrl}
               onChange={(e) => setFeedUrl(e.target.value)}
+              aria-label="Podcast RSS feed URL"
               placeholder="https://example.com/podcast/feed.xml"
               className="w-full px-4 py-3 rounded-lg bg-slate-700 text-white placeholder-slate-400 border border-slate-600 focus:border-cyan-500 focus:outline-none"
             />
@@ -646,10 +651,17 @@ function PodcastTextDialog({
   onClose: () => void;
 }) {
   useBodyScrollLock(true);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose);
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        tabIndex={-1}
         className="max-h-[82vh] w-full max-w-2xl overflow-hidden rounded-lg border border-white/10 bg-slate-900 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >

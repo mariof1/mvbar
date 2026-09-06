@@ -1,4 +1,5 @@
 import fp from 'fastify-plugin';
+import { validateSmartPlaylistFilters } from './smartPlaylistValidation.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
@@ -53,7 +54,7 @@ function coerceStrList(values: any): string[] {
 function coerceNullableInt(value: any, min: number, max: number): number | null {
   if (value == null || String(value).trim() === '') return null;
   try {
-    const n = parseInt(String(value), 10);
+    const n = Math.trunc(Number(value));
     if (isNaN(n)) return null;
     return Math.max(min, Math.min(max, n));
   } catch {
@@ -170,7 +171,7 @@ export function normalizeFilters(raw: any): SmartFilters {
 
   try {
     if (raw.maxResults != null && String(raw.maxResults).trim() !== '') {
-      filters.maxResults = Math.max(1, Math.min(2000, parseInt(String(raw.maxResults), 10)));
+      filters.maxResults = Math.max(1, Math.min(2000, Math.trunc(Number(raw.maxResults))));
     }
   } catch {}
 
@@ -408,6 +409,8 @@ export const smartPlaylistsPlugin: FastifyPluginAsync = fp(async (app) => {
     let sortMode = String(body?.sort || 'random').toLowerCase();
     if (!SORT_MODES.has(sortMode)) sortMode = 'random';
 
+    const filterError = validateSmartPlaylistFilters(body?.filters);
+    if (filterError) return reply.code(400).send({ ok: false, error: filterError });
     const filters = normalizeFilters(body?.filters);
 
     const r = await db().query(
@@ -510,6 +513,8 @@ export const smartPlaylistsPlugin: FastifyPluginAsync = fp(async (app) => {
     let sortMode = String(body?.sort || 'random').toLowerCase();
     if (!SORT_MODES.has(sortMode)) sortMode = 'random';
 
+    const filterError = validateSmartPlaylistFilters(body?.filters);
+    if (filterError) return reply.code(400).send({ ok: false, error: filterError });
     const filters = normalizeFilters(body?.filters);
 
     const r = await db().query(

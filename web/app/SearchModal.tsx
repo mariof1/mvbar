@@ -1,5 +1,7 @@
 'use client';
 
+import { useDialogFocus } from './useDialogFocus';
+
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from './store';
 import {
@@ -263,16 +265,21 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
   const [hits, setHits] = useState<Hit[]>([]);
   const [artistHits, setArtistHits] = useState<ArtistHit[]>([]);
   const [albumHits, setAlbumHits] = useState<AlbumHit[]>([]);
+  const [audiobookHits, setAudiobookHits] = useState<Array<{ id: number; title: string; author: string | null; has_cover: boolean }>>([]);
   const [playlistHits, setPlaylistHits] = useState<PlaylistHit[]>([]);
   const [podcastHits, setPodcastHits] = useState<PodcastHit[]>([]);
   const [podcastEpisodeHits, setPodcastEpisodeHits] = useState<PodcastEpisodeHit[]>([]);
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [searchedQuery, setSearchedQuery] = useState<string | null>(null);
+  const [scanInProgress, setScanInProgress] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lastRefreshRef = useRef<number>(0);
   const prevLastUpdateRef = useRef(0);
   useBodyScrollLock(isOpen);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, onClose, isOpen && !!token);
 
   const persistRecentSearch = useCallback(async (item: RecentSearchInput) => {
     if (!token) return;
@@ -313,10 +320,12 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
   useEffect(() => {
     if (!isOpen) {
       setQ('');
+      setSearchedQuery(null);
       setHits([]);
       setArtistHits([]);
       setAlbumHits([]);
       setPlaylistHits([]);
+      setAudiobookHits([]);
       setPodcastHits([]);
       setPodcastEpisodeHits([]);
       setLoading(false);
@@ -329,15 +338,21 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
     }
   }, [isOpen]);
 
-  // Close on Escape key
+  // Existing authenticated endpoint also covers users who joined mid-scan.
   useEffect(() => {
-    if (!isOpen) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+    if (!isOpen || mode !== 'library' || !token) return;
+    const controller = new AbortController();
+    let active = true;
+    const refresh = async () => {
+      try {
+        const progress = await apiFetch('/scan/progress', { signal: controller.signal }, token);
+        if (active) setScanInProgress(['scanning', 'indexing'].includes(progress.status));
+      } catch { /* Search remains usable when progress is unavailable. */ }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [isOpen, onClose]);
+    void refresh();
+    const interval = setInterval(refresh, 5000);
+    return () => { active = false; controller.abort(); clearInterval(interval); };
+  }, [isOpen, mode, token]);
 
   // Search API call (debounced)
   useEffect(() => {
@@ -348,6 +363,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
         setArtistHits([]);
         setAlbumHits([]);
         setPlaylistHits([]);
+        setAudiobookHits([]);
         setPodcastHits([]);
         setPodcastEpisodeHits([]);
       }
@@ -355,21 +371,22 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
     }
 
     // Only throttle searches triggered by library updates, not user typing
+    let delay = 200;
     const isLibraryUpdate = lastUpdate !== prevLastUpdateRef.current;
     if (isLibraryUpdate) {
       prevLastUpdateRef.current = lastUpdate;
       const now = Date.now();
-      if (now - lastRefreshRef.current < 3000) return;
+      delay = Math.max(delay, 3000 - (now - lastRefreshRef.current));
       lastRefreshRef.current = now;
     }
 
     let active = true;
     let controller: AbortController | null = null;
     const query = q.trim().replace(/\s+/g, ' ');
+    setLoading(true);
+    setError(null);
     const id = setTimeout(async () => {
       controller = new AbortController();
-      setLoading(true);
-      setError(null);
       try {
         const r = await apiFetch(`/search?q=${encodeURIComponent(query)}&limit=20`, { method: 'GET', signal: controller.signal }, token);
         if (!active) return;
@@ -380,6 +397,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
           artist_id: a.artist_id == null ? null : Number(a.artist_id),
           art_track_id: a.art_track_id == null ? null : Number(a.art_track_id),
         })));
+        setAudiobookHits(r.audiobooks ?? []);
         setPlaylistHits((r.playlists ?? []).map((p: any) => ({ ...p, id: Number(p.id) })));
         setPodcastHits((r.podcasts ?? []).map((p: any) => ({ ...p, id: Number(p.id), unplayed_count: Number(p.unplayed_count ?? 0) })));
         setPodcastEpisodeHits((r.podcastEpisodes ?? []).map((e: any) => ({
@@ -394,15 +412,15 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
         if (e?.status === 401) clear();
         setError(e?.message ?? 'Search failed');
       } finally {
-        if (active) setLoading(false);
+        if (active) { setSearchedQuery(query); setLoading(false); }
       }
-    }, 200);
+    }, delay);
     return () => {
       active = false;
       clearTimeout(id);
       controller?.abort();
     };
-  }, [q, mode, isOpen, token, clear, lastUpdate]);
+  }, [q, mode, isOpen, token, clear, lastUpdate, scanInProgress]);
 
   const handleAiSearch = useCallback(async () => {
     const prompt = aiPrompt.trim();
@@ -533,7 +551,13 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
     }
     if (item.itemType === 'playlist' && Number.isFinite(id)) {
       void persistRecentSearch(item);
-      navigate(payload.kind === 'smart' ? { type: 'playlists', sub: 'smart' } : { type: 'playlist', playlistId: String(id) });
+      navigate(payload.kind === 'smart' ? { type: 'playlists', sub: 'smart', smartPlaylistId: id } : { type: 'playlist', playlistId: String(id) });
+      onClose();
+      return;
+    }
+    if (item.itemType === 'audiobook' && Number.isFinite(id)) {
+      void persistRecentSearch(item);
+      navigate({ type: 'audiobook', audiobookId: id });
       onClose();
       return;
     }
@@ -559,8 +583,10 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
 
   if (!isOpen || !token) return null;
 
-  const hasResults = hits.length > 0 || artistHits.length > 0 || albumHits.length > 0 || playlistHits.length > 0 || podcastHits.length > 0 || podcastEpisodeHits.length > 0;
-  const hasQuery = q.trim().length > 0;
+  const hasResults = audiobookHits.length > 0 || hits.length > 0 || artistHits.length > 0 || albumHits.length > 0 || playlistHits.length > 0 || podcastHits.length > 0 || podcastEpisodeHits.length > 0;
+  const normalizedQuery = q.trim().replace(/\s+/g, ' ');
+  const hasQuery = normalizedQuery.length > 0;
+  const searchPending = hasQuery && (loading || searchedQuery !== normalizedQuery);
 
   return (
     <div className="fixed inset-0 z-[150] flex items-start justify-center pt-[8vh] sm:pt-[12vh] px-4">
@@ -575,6 +601,8 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
       <div
         className="relative w-full max-w-2xl animate-slide-up"
         onClick={(e) => e.stopPropagation()}
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label="Search library"
@@ -616,7 +644,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
               autoComplete="off"
               spellCheck={false}
             />
-            {(loading || aiLoading) && (
+            {((mode === 'library' && searchPending) || aiLoading) && (
               <div className="w-5 h-5 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
             )}
             {(mode === 'ai' ? aiPrompt : q) && !loading && !aiLoading && (
@@ -628,6 +656,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                     setAiResult(null);
                   } else {
                     setQ('');
+                    setSearchedQuery(null);
                   }
                   inputRef.current?.focus();
                 }}
@@ -952,7 +981,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                     <button
                       key={p.id}
                       onClick={() => handleNavigate(
-                        p.kind === 'smart' ? { type: 'playlists', sub: 'smart' } : { type: 'playlist', playlistId: String(p.id) },
+                        p.kind === 'smart' ? { type: 'playlists', sub: 'smart', smartPlaylistId: p.id } : { type: 'playlist', playlistId: String(p.id) },
                         playlistRecentItem(p),
                       )}
                       className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 transition-colors text-left"
@@ -1009,6 +1038,27 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
               </div>
             )}
 
+            {audiobookHits.length > 0 && (
+              <div className="px-3 py-2 border-b border-white/5">
+                <h3 className="px-2 py-1 text-xs font-semibold text-slate-500 uppercase tracking-wider">Audiobooks</h3>
+                {audiobookHits.map((book) => (
+                  <button key={book.id} className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-white/5"
+                    onClick={() => handleNavigate({ type: 'audiobook', audiobookId: Number(book.id) }, {
+                      itemType: 'audiobook', itemKey: String(book.id), title: book.title, subtitle: book.author ? `Audiobook · ${book.author}` : 'Audiobook',
+                      imageUrl: book.has_cover ? `/api/audiobook-art/${book.id}` : null, payload: { id: Number(book.id) },
+                    })}>
+                    <div className="w-9 h-9 flex-shrink-0 rounded-lg bg-cyan-500/10 overflow-hidden flex items-center justify-center" aria-hidden="true">
+                      {book.has_cover ? <img src={`/api/audiobook-art/${book.id}`} alt="" className="w-full h-full object-cover" /> : '📖'}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-white truncate">{book.title}</div>
+                      <div className="text-xs text-slate-400 truncate">{book.author || 'Audiobook'}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Podcast Episodes */}
             {podcastEpisodeHits.length > 0 && (
               <div className="px-5 py-3 border-b border-white/5">
@@ -1056,6 +1106,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                     >
                       {/* Album art with play overlay */}
                       <button
+                        aria-label={`Play ${t.title ?? "track"}`}
                         onClick={() => handlePlay(t)}
                         className="relative w-9 h-9 rounded-lg overflow-hidden flex-shrink-0 group/art"
                       >
@@ -1110,14 +1161,18 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
               </div>
             )}
 
+            {scanInProgress && hasResults && (
+              <p role="status" className="px-5 py-3 text-sm text-slate-400">Library indexing is in progress. Search results may be incomplete.</p>
+            )}
+            {searchPending && !hasResults && <p role="status" className="px-5 py-12 text-center text-slate-400">Searching…</p>}
             {/* No results */}
-            {hasQuery && !loading && !hasResults && (
+            {hasQuery && !searchPending && !hasResults && !error && (
               <div className="px-5 py-12 text-center">
                 <svg className="w-12 h-12 mx-auto mb-3 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <p className="text-slate-400">No results found</p>
-                <p className="text-sm text-slate-500 mt-1">Try a different search term</p>
+                <p className="text-slate-400">{scanInProgress ? "Library indexing is in progress" : "No results found"}</p>
+                <p className="text-sm text-slate-500 mt-1">{scanInProgress ? "Search results will appear as indexing finishes. You can browse your library now." : "Try a different search term"}</p>
               </div>
             )}
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useDialogFocus } from './useDialogFocus';
 import { createPortal } from 'react-dom';
 import { useAuth } from './store';
 import { type QueueTrack } from './playerStore';
@@ -85,20 +86,11 @@ export function AddMenu({
     };
   }, [open, computeCoords]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-        setPlistOpen(false);
-        setCreating(false);
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  useDialogFocus(menuRef, () => {
+    setOpen(false);
+    setPlistOpen(false);
+    setCreating(false);
+  }, open && !!coords);
 
   const loadPlaylists = useCallback(async () => {
     if (!token) return;
@@ -277,6 +269,7 @@ export function AddMenu({
             />
             <div
               ref={menuRef}
+              tabIndex={-1}
               role="menu"
               className="fixed z-[300] w-56 rounded-xl bg-slate-900/95 backdrop-blur-md border border-white/10 shadow-2xl shadow-black/60 py-1 text-sm text-white"
               style={{ top: coords.top, left: coords.left }}

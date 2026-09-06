@@ -626,6 +626,12 @@ export async function initDb() {
       primary key (user_id, item_type, item_key)
     );
   `);
+  await pool.query(`
+    alter table user_recent_search_items
+      drop constraint if exists user_recent_search_items_item_type_check,
+      add constraint user_recent_search_items_item_type_check
+        check (item_type in ('track', 'artist', 'album', 'playlist', 'podcast', 'podcast_episode', 'audiobook'));
+  `);
   await pool.query('create index if not exists user_recent_search_items_user_date_idx on user_recent_search_items(user_id, accessed_at desc)');
 
   // Track tempo/bpm for tempo-based recommendations
