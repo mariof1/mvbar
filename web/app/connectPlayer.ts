@@ -8,6 +8,7 @@ import {
   useMvbarConnect,
 } from './useWebSocket';
 import { useToastStore } from './Toast';
+import { closePodcastPlayer, closeAudiobookPlayer } from './uiStore';
 
 function asConnectTrack(track: QueueTrack): MvbarConnectTrack {
   return {
@@ -36,6 +37,10 @@ export function useConnectPlayer() {
 
   const sendTracks = useCallback((command: 'play_tracks' | 'add_tracks' | 'play_next', tracks: QueueTrack[], extra: Record<string, unknown> = {}) => {
     if (!remoteTarget || tracks.length === 0) return false;
+    if (command === 'play_tracks') {
+      closePodcastPlayer();
+      closeAudiobookPlayer();
+    }
     sendMvbarConnectCommand(remoteTarget.id, command, {
       tracks: tracks.map(asConnectTrack),
       ...extra,

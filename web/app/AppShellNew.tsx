@@ -2439,6 +2439,10 @@ export function AppShellNew() {
   const handleConnectDevice = useCallback((target: MvbarConnectDevice) => {
     const state = useMvbarConnect.getState();
     if (target.id === state.selectedDeviceId) return;
+    if (target.id !== state.localDeviceId) {
+      useUi.getState().closePodcastPlayer();
+      useUi.getState().closeAudiobookPlayer();
+    }
     const selected = state.devices.find((device) => device.id === state.selectedDeviceId);
     const local = state.devices.find((device) => device.id === state.localDeviceId);
     const source = selected?.state.track ? selected

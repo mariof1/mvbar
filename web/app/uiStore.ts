@@ -1,6 +1,18 @@
 'use client';
 
 import { create } from 'zustand';
+import { usePlayer } from './playerStore';
+import { sendMvbarConnectCommand, useMvbarConnect } from './useWebSocket';
+
+// Podcasts and audiobooks play here, so relinquish remote music before opening them.
+function selectLocalLongFormPlayback() {
+  const connect = useMvbarConnect.getState();
+  const remote = connect.devices.find((device) =>
+    device.id === connect.selectedDeviceId && device.id !== connect.localDeviceId);
+  if (remote?.state.track) sendMvbarConnectCommand(remote.id, 'pause');
+  if (connect.localDeviceId) connect.selectDevice(connect.localDeviceId);
+  usePlayer.getState().close();
+}
 
 /**
  * UI Store - manages UI state that is NOT navigation
@@ -58,9 +70,7 @@ export const useUi = create<UiState>((set) => ({
   setPodcastEpisode: (episode) => {
     // Close music player and audiobook player when starting podcast
     if (episode) {
-      import('./playerStore').then(({ usePlayer }) => {
-        usePlayer.getState().close();
-      });
+      selectLocalLongFormPlayback();
       set({ audiobookChapter: null });
     }
     set({ podcastEpisode: episode });
@@ -70,9 +80,7 @@ export const useUi = create<UiState>((set) => ({
   setAudiobookChapter: (chapter) => {
     // Close music player and podcast player when starting audiobook
     if (chapter) {
-      import('./playerStore').then(({ usePlayer }) => {
-        usePlayer.getState().close();
-      });
+      selectLocalLongFormPlayback();
       set({ podcastEpisode: null });
     }
     set({ audiobookChapter: chapter });

@@ -670,10 +670,6 @@ function AudiobookDetailView({
 
   const playChapter = (chapter: AudiobookChapter, positionMs = 0) => {
     if (!book) return;
-    // Close music player when starting audiobook
-    import('./playerStore').then(({ usePlayer }) => {
-      usePlayer.getState().close();
-    });
     useUi.getState().setAudiobookChapter({
       id: chapter.id,
       audiobook_id: book.id,
