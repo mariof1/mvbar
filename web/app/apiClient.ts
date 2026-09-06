@@ -2,6 +2,16 @@ export const API_BASE = '/api';
 
 export type LoginResponse = { ok: true; token: string; user: { id: string; email: string; role: string } };
 
+export function getWebClientId(): string {
+  if (typeof window === 'undefined') return 'web_server';
+  let clientId = window.localStorage.getItem('mvbar_client_id');
+  if (!clientId) {
+    clientId = globalThis.crypto?.randomUUID?.() ?? `web_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    window.localStorage.setItem('mvbar_client_id', clientId);
+  }
+  return clientId;
+}
+
 export async function apiFetch(path: string, init: RequestInit = {}, token?: string) {
   const headers = new Headers(init.headers);
   if (!headers.has('content-type') && init.body) headers.set('content-type', 'application/json');
@@ -9,12 +19,7 @@ export async function apiFetch(path: string, init: RequestInit = {}, token?: str
   headers.set('x-mvbar-client', 'web');
   headers.set('x-mvbar-version', '0.1.0');
   if (typeof window !== 'undefined') {
-    let clientId = window.localStorage.getItem('mvbar_client_id');
-    if (!clientId) {
-      clientId = globalThis.crypto?.randomUUID?.() ?? `web_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      window.localStorage.setItem('mvbar_client_id', clientId);
-    }
-    headers.set('x-mvbar-client-id', clientId);
+    headers.set('x-mvbar-client-id', getWebClientId());
     headers.set('x-mvbar-platform', window.navigator.platform || 'browser');
   }
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers, cache: 'no-store', credentials: 'same-origin' });

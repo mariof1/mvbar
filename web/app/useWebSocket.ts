@@ -5,7 +5,7 @@ import { create } from 'zustand';
 import { useFavorites } from './favoritesStore';
 import { useToastStore } from './Toast';
 import { useAuth } from './store';
-import { apiFetch, type AdminBackup, type AdminBackupJob } from './apiClient';
+import { apiFetch, getWebClientId, type AdminBackup, type AdminBackupJob } from './apiClient';
 import { useSocialUpdates } from './socialStore';
 import { systemSocialNotificationsEnabled } from './pushNotifications';
 
@@ -103,6 +103,51 @@ type SocialUpdate =
   | { type: 'social:shares_read_all'; data: Record<string, never> }
   | { type: 'social:share_removed'; data: { shareId: number } };
 
+export type MvbarConnectTrack = {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  artPath: string | null;
+  durationMs: number | null;
+};
+
+export type MvbarConnectPlaybackState = {
+  track: MvbarConnectTrack | null;
+  queueIndex: number;
+  queueLength: number;
+  isPlaying: boolean;
+  positionMs: number;
+  durationMs: number;
+  volume: number | null;
+  updatedAt: number;
+};
+
+export type MvbarConnectDevice = {
+  id: string;
+  name: string;
+  type: string;
+  appVersion: string | null;
+  platform: string | null;
+  capabilities: string[];
+  state: MvbarConnectPlaybackState;
+};
+
+export type MvbarConnectCommand = {
+  commandId: string;
+  sourceDeviceId: string;
+  command: string;
+  payload: Record<string, unknown>;
+};
+
+type ConnectUpdate =
+  | { type: 'connect:devices'; data: { devices: MvbarConnectDevice[] } }
+  | { type: 'connect:registered'; data: { deviceId: string } }
+  | { type: 'connect:replaced'; data: { deviceId: string } }
+  | { type: 'connect:error'; data: { error: string } }
+  | { type: 'connect:command'; data: MvbarConnectCommand }
+  | { type: 'connect:command_ack'; data: { commandId: string; accepted: boolean; error?: string } };
+
 export type BackupUpdate =
   | { type: 'backup:started'; data: { job: AdminBackupJob } }
   | { type: 'backup:created'; data: { backup: AdminBackup; source: 'created' | 'uploaded' } }
@@ -127,7 +172,7 @@ export type MissingMusicUpdate = {
   };
 };
 
-type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | BackupUpdate | PluginUpdate | MissingMusicUpdate | SocialUpdate | { type: 'connected' } | { type: 'ping' };
+type WSMessage = LibraryUpdate | FavoriteUpdate | PodcastProgressUpdate | PlaylistUpdate | HistoryUpdate | ScanProgressUpdate | AdminUserPendingUpdate | BackupUpdate | PluginUpdate | MissingMusicUpdate | SocialUpdate | ConnectUpdate | { type: 'connected' } | { type: 'ping' };
 
 // Store for library update notifications
 interface LibraryUpdateStore {
@@ -285,6 +330,140 @@ export const useScanProgress = create<ScanProgressStore>((set) => ({
   }),
 }));
 
+interface MvbarConnectStore {
+  localDeviceId: string | null;
+  selectedDeviceId: string | null;
+  devices: MvbarConnectDevice[];
+  connected: boolean;
+  setLocalDeviceId: (id: string) => void;
+  setDevices: (devices: MvbarConnectDevice[]) => void;
+  selectDevice: (id: string) => void;
+  setConnected: (connected: boolean) => void;
+}
+
+export const useMvbarConnect = create<MvbarConnectStore>((set, get) => ({
+  localDeviceId: null,
+  selectedDeviceId: null,
+  devices: [],
+  connected: false,
+  setLocalDeviceId: (id) => set((state) => ({
+    localDeviceId: id,
+    selectedDeviceId: state.selectedDeviceId ?? id,
+  })),
+  setDevices: (devices) => set((state) => {
+    const available = new Set(devices.map((device) => device.id));
+    const selectedDeviceId = state.selectedDeviceId && available.has(state.selectedDeviceId)
+      ? state.selectedDeviceId
+      : state.localDeviceId && available.has(state.localDeviceId)
+        ? state.localDeviceId
+        : devices.find((device) => device.state.isPlaying)?.id ?? devices[0]?.id ?? null;
+    return { devices, selectedDeviceId, connected: true };
+  }),
+  selectDevice: (id) => {
+    if (get().devices.some((device) => device.id === id)) set({ selectedDeviceId: id });
+  },
+  setConnected: (connected) => set((state) => connected
+    ? { connected: true }
+    : {
+        connected: false,
+        devices: [],
+        selectedDeviceId: state.localDeviceId,
+      }),
+}));
+
+type LocalConnectState = {
+  track: MvbarConnectTrack | null;
+  queue: MvbarConnectTrack[];
+  queueIndex: number;
+  isPlaying: boolean;
+  positionMs: number;
+  durationMs: number;
+  volume: number | null;
+};
+
+let localConnectState: LocalConnectState = {
+  track: null,
+  queue: [],
+  queueIndex: -1,
+  isPlaying: false,
+  positionMs: 0,
+  durationMs: 0,
+  volume: null,
+};
+
+const connectCommandHandlers = new Set<(command: MvbarConnectCommand) => void | Promise<void>>();
+
+function connectSessionId(): string {
+  const key = 'mvbar_connect_session_id';
+  let id = window.sessionStorage.getItem(key);
+  if (!id) {
+    id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    window.sessionStorage.setItem(key, id);
+  }
+  return id;
+}
+
+function localConnectDeviceId(): string {
+  return `${getWebClientId()}:${connectSessionId()}`.slice(0, 128);
+}
+
+function browserDeviceName(): string {
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? 'Edge'
+    : /Firefox\//.test(ua) ? 'Firefox'
+      : /CriOS\//.test(ua) ? 'Chrome'
+        : /Chrome\//.test(ua) ? 'Chrome'
+          : /Safari\//.test(ua) ? 'Safari'
+            : 'Web player';
+  const standalone = window.matchMedia?.('(display-mode: standalone)').matches;
+  return `${browser}${standalone ? ' app' : ''} on ${navigator.platform || 'this device'}`;
+}
+
+function registerMvbarConnect(ws: WebSocket): void {
+  const deviceId = localConnectDeviceId();
+  useMvbarConnect.getState().setLocalDeviceId(deviceId);
+  ws.send(JSON.stringify({
+    type: 'connect:register',
+    data: {
+      deviceId,
+      name: browserDeviceName(),
+      type: window.matchMedia?.('(display-mode: standalone)').matches ? 'pwa' : 'web',
+      appVersion: '0.1.0',
+      platform: navigator.platform || 'browser',
+      capabilities: ['music', 'remote-control', 'transfer'],
+      state: localConnectState,
+    },
+  }));
+}
+
+export function publishMvbarConnectState(state: LocalConnectState): void {
+  localConnectState = state;
+  sendWebSocketMessage('connect:state', state);
+}
+
+export function sendMvbarConnectCommand(
+  targetDeviceId: string,
+  command: string,
+  payload: Record<string, unknown> = {},
+): string {
+  const commandId = globalThis.crypto?.randomUUID?.() ?? `cmd_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  sendWebSocketMessage('connect:command', { targetDeviceId, commandId, command, payload });
+  return commandId;
+}
+
+export function transferMvbarPlayback(sourceDeviceId: string, targetDeviceId: string): string {
+  const commandId = globalThis.crypto?.randomUUID?.() ?? `transfer_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  sendWebSocketMessage('connect:transfer', { sourceDeviceId, targetDeviceId, commandId });
+  return commandId;
+}
+
+export function subscribeMvbarConnectCommands(
+  handler: (command: MvbarConnectCommand) => void | Promise<void>,
+): () => void {
+  connectCommandHandlers.add(handler);
+  return () => connectCommandHandlers.delete(handler);
+}
+
 // Global WebSocket reference for sending messages
 let globalWs: WebSocket | null = null;
 
@@ -316,6 +495,7 @@ export function useWebSocket(isAdmin = false) {
 
       ws.onopen = () => {
         reconnectAttempts.current = 0;
+        registerMvbarConnect(ws);
         useLibraryUpdates.setState({
           lastUpdate: Date.now(),
           lastEvent: { event: 'reconnected', ts: Date.now() },
@@ -438,6 +618,21 @@ export function useWebSocket(isAdmin = false) {
               failed ? 'error' : 'success',
               'top-right',
             );
+          } else if (msg.type === 'connect:devices') {
+            useMvbarConnect.getState().setDevices(Array.isArray(msg.data.devices) ? msg.data.devices : []);
+          } else if (msg.type === 'connect:registered') {
+            useMvbarConnect.getState().setConnected(true);
+          } else if (msg.type === 'connect:replaced') {
+            // A refreshed tab with the same session has taken over this player identity.
+            useMvbarConnect.getState().setConnected(false);
+          } else if (msg.type === 'connect:error') {
+            useToastStore.getState().show(msg.data.error || 'MVBar Connect error', 'error', 'top-right');
+          } else if (msg.type === 'connect:command_ack') {
+            if (!msg.data.accepted) {
+              useToastStore.getState().show(msg.data.error || 'The selected player is unavailable', 'error', 'top-right');
+            }
+          } else if (msg.type === 'connect:command') {
+            for (const handler of connectCommandHandlers) void handler(msg.data);
           }
         } catch {
           // Ignore malformed messages
@@ -447,6 +642,7 @@ export function useWebSocket(isAdmin = false) {
       ws.onclose = () => {
         if (wsRef.current === ws) wsRef.current = null;
         if (globalWs === ws) globalWs = null;
+        useMvbarConnect.getState().setConnected(false);
         if (!activeRef.current) return;
         
         // Exponential backoff for reconnection

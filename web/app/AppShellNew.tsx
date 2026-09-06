@@ -54,12 +54,24 @@ import {
   sendRecommendationFeedback,
   type RecommendationFeedbackAction,
 } from './apiClient';
-import { useWebSocket, useAdminPending, usePluginUpdates } from './useWebSocket';
+import {
+  publishMvbarConnectState,
+  sendMvbarConnectCommand,
+  subscribeMvbarConnectCommands,
+  transferMvbarPlayback,
+  useMvbarConnect,
+  useWebSocket,
+  useAdminPending,
+  usePluginUpdates,
+  type MvbarConnectDevice,
+  type MvbarConnectTrack,
+} from './useWebSocket';
 import { useSocialUpdates } from './socialStore';
 import { preparePushNotifications, unsubscribeCurrentPushDevice } from './pushNotifications';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { mediaSessionArtwork } from './mediaSessionArtwork';
 import { SeekSlider } from './SeekSlider';
+import { MvbarConnectButton, MvbarRemotePlayerBar } from './MvbarConnect';
 
 // Icons as simple SVG components
 const Icons = {
@@ -2158,8 +2170,100 @@ export function AppShellNew() {
   const [searchShortcutLabel, setSearchShortcutLabel] = useState('Ctrl+K');
   const [trackToShare, setTrackToShare] = useState<QueueTrack | null>(null);
   const [missingMusicEnabled, setMissingMusicEnabled] = useState(false);
-  const { queue, index, isOpen, playTrackNow, playIndex, addToQueue, addManyToQueue, removeFromQueue, reorderQueue, clearQueue, next, prev, close, setQueueAndPlay, reset: resetPlayer } = usePlayer();
+  const {
+    queue,
+    index,
+    isOpen,
+    playTrackNow: playTrackLocally,
+    playIndex: playIndexLocally,
+    addToQueue: addToQueueLocally,
+    addManyToQueue: addManyToQueueLocally,
+    removeFromQueue: removeFromQueueLocally,
+    reorderQueue: reorderQueueLocally,
+    clearQueue: clearQueueLocally,
+    next: nextLocally,
+    prev: prevLocally,
+    close: closeLocalPlayer,
+    setQueueAndPlay: setQueueAndPlayLocally,
+    reset: resetPlayer,
+  } = usePlayer();
   const nowPlaying = isOpen ? queue[index] ?? null : null;
+
+  const connectDevices = useMvbarConnect((state) => state.devices);
+  const localConnectDeviceId = useMvbarConnect((state) => state.localDeviceId);
+  const selectedConnectDeviceId = useMvbarConnect((state) => state.selectedDeviceId);
+  const selectConnectDevice = useMvbarConnect((state) => state.selectDevice);
+  const selectedConnectDevice = connectDevices.find((device) => device.id === selectedConnectDeviceId) ?? null;
+  const controllingRemote = Boolean(selectedConnectDevice && selectedConnectDevice.id !== localConnectDeviceId);
+
+  const asConnectTrack = useCallback((track: QueueTrack): MvbarConnectTrack => ({
+    id: Number(track.id),
+    title: track.title ?? null,
+    artist: track.artist ?? null,
+    album: track.album ?? null,
+    artPath: track.art_path ?? null,
+    durationMs: track.duration_ms ?? null,
+  }), []);
+
+  const setQueueAndPlay = useCallback((tracks: QueueTrack[], startIndex: number) => {
+    if (controllingRemote && selectedConnectDevice) {
+      sendMvbarConnectCommand(selectedConnectDevice.id, 'play_tracks', {
+        tracks: tracks.map(asConnectTrack),
+        queueIndex: startIndex,
+        positionMs: 0,
+        isPlaying: true,
+      });
+      return;
+    }
+    setQueueAndPlayLocally(tracks, startIndex);
+  }, [asConnectTrack, controllingRemote, selectedConnectDevice, setQueueAndPlayLocally]);
+
+  const playTrackNow = useCallback((track: QueueTrack) => setQueueAndPlay([track], 0), [setQueueAndPlay]);
+
+  const addManyToQueue = useCallback((tracks: QueueTrack[]) => {
+    if (controllingRemote && selectedConnectDevice) {
+      sendMvbarConnectCommand(selectedConnectDevice.id, 'add_tracks', { tracks: tracks.map(asConnectTrack) });
+      return;
+    }
+    addManyToQueueLocally(tracks);
+  }, [addManyToQueueLocally, asConnectTrack, controllingRemote, selectedConnectDevice]);
+
+  const addToQueue = useCallback((track: QueueTrack) => {
+    if (controllingRemote && selectedConnectDevice) {
+      sendMvbarConnectCommand(selectedConnectDevice.id, 'add_tracks', { tracks: [asConnectTrack(track)] });
+      return;
+    }
+    addToQueueLocally(track);
+  }, [addToQueueLocally, asConnectTrack, controllingRemote, selectedConnectDevice]);
+
+  const next = useCallback(() => {
+    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'next');
+    else nextLocally();
+  }, [controllingRemote, nextLocally, selectedConnectDevice]);
+  const prev = useCallback(() => {
+    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'previous');
+    else prevLocally();
+  }, [controllingRemote, prevLocally, selectedConnectDevice]);
+  const playIndex = useCallback((targetIndex: number) => {
+    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'play_index', { index: targetIndex });
+    else playIndexLocally(targetIndex);
+  }, [controllingRemote, playIndexLocally, selectedConnectDevice]);
+  const removeFromQueue = useCallback((targetIndex: number) => {
+    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'remove_index', { index: targetIndex });
+    else removeFromQueueLocally(targetIndex);
+  }, [controllingRemote, removeFromQueueLocally, selectedConnectDevice]);
+  const reorderQueue = useCallback((from: number, to: number) => {
+    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'reorder', { from, to });
+    else reorderQueueLocally(from, to);
+  }, [controllingRemote, reorderQueueLocally, selectedConnectDevice]);
+  const clearQueue = useCallback(() => {
+    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'clear_queue');
+    else clearQueueLocally();
+  }, [clearQueueLocally, controllingRemote, selectedConnectDevice]);
+  const close = useCallback(() => {
+    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'stop');
+    else closeLocalPlayer();
+  }, [closeLocalPlayer, controllingRemote, selectedConnectDevice]);
 
   const token = useAuth((s) => s.token);
   const user = useAuth((s) => s.user);
@@ -2194,6 +2298,139 @@ export function AppShellNew() {
 
   // Initialize WebSocket connection for live updates
   useWebSocket(isAdmin);
+
+  useEffect(() => subscribeMvbarConnectCommands(async (incoming) => {
+    const payload = incoming.payload || {};
+    const audio = getMusicAudioElement();
+    if (incoming.command === 'play_tracks') {
+      const tracks = Array.isArray(payload.tracks)
+        ? payload.tracks.map((value): QueueTrack | null => {
+            if (!value || typeof value !== 'object') return null;
+            const track = value as Record<string, unknown>;
+            const id = Number(track.id);
+            if (!Number.isFinite(id) || id <= 0) return null;
+            return {
+              id,
+              title: typeof track.title === 'string' ? track.title : null,
+              artist: typeof track.artist === 'string' ? track.artist : null,
+              album: typeof track.album === 'string' ? track.album : null,
+              art_path: typeof track.artPath === 'string' ? track.artPath : null,
+              duration_ms: typeof track.durationMs === 'number' ? track.durationMs : null,
+            };
+          }).filter((track): track is QueueTrack => track != null)
+        : [];
+      if (tracks.length === 0) return;
+      const targetIndex = Math.max(0, Math.min(tracks.length - 1, Number(payload.queueIndex) || 0));
+      setQueueAndPlayLocally(tracks, targetIndex);
+      const applyRemotePosition = () => {
+        const activeAudio = getMusicAudioElement();
+        if (!activeAudio) return;
+        const positionSeconds = Math.max(0, (Number(payload.positionMs) || 0) / 1000);
+        if (Number.isFinite(activeAudio.duration) && activeAudio.duration > 0) {
+          activeAudio.currentTime = Math.min(activeAudio.duration, positionSeconds);
+        } else {
+          activeAudio.currentTime = positionSeconds;
+        }
+        if (payload.isPlaying === false) activeAudio.pause();
+      };
+      if (audio?.readyState) applyRemotePosition();
+      else getMusicAudioElement()?.addEventListener('loadedmetadata', applyRemotePosition, { once: true });
+      return;
+    }
+    if (incoming.command === 'add_tracks') {
+      const tracks = Array.isArray(payload.tracks)
+        ? payload.tracks.map((value): QueueTrack | null => {
+            if (!value || typeof value !== 'object') return null;
+            const track = value as Record<string, unknown>;
+            const id = Number(track.id);
+            return Number.isFinite(id) && id > 0 ? {
+              id,
+              title: typeof track.title === 'string' ? track.title : null,
+              artist: typeof track.artist === 'string' ? track.artist : null,
+              album: typeof track.album === 'string' ? track.album : null,
+              art_path: typeof track.artPath === 'string' ? track.artPath : null,
+              duration_ms: typeof track.durationMs === 'number' ? track.durationMs : null,
+            } : null;
+          }).filter((track): track is QueueTrack => track != null)
+        : [];
+      addManyToQueueLocally(tracks);
+      return;
+    }
+    if (incoming.command === 'play') await audio?.play().catch(reportMusicPlaybackFailure);
+    else if (incoming.command === 'pause') audio?.pause();
+    else if (incoming.command === 'toggle') {
+      if (audio?.paused) await audio.play().catch(reportMusicPlaybackFailure);
+      else audio?.pause();
+    } else if (incoming.command === 'next') nextLocally();
+    else if (incoming.command === 'previous') prevLocally();
+    else if (incoming.command === 'seek' && audio) {
+      audio.currentTime = Math.max(0, Math.min(audio.duration || Number.MAX_SAFE_INTEGER, (Number(payload.positionMs) || 0) / 1000));
+    } else if (incoming.command === 'stop') closeLocalPlayer();
+    else if (incoming.command === 'play_index') playIndexLocally(Number(payload.index) || 0);
+    else if (incoming.command === 'remove_index') removeFromQueueLocally(Number(payload.index) || 0);
+    else if (incoming.command === 'reorder') reorderQueueLocally(Number(payload.from) || 0, Number(payload.to) || 0);
+    else if (incoming.command === 'clear_queue') clearQueueLocally();
+  }), [
+    addManyToQueueLocally,
+    clearQueueLocally,
+    closeLocalPlayer,
+    nextLocally,
+    playIndexLocally,
+    prevLocally,
+    removeFromQueueLocally,
+    reorderQueueLocally,
+    setQueueAndPlayLocally,
+  ]);
+
+  useEffect(() => {
+    const audio = getMusicAudioElement();
+    if (!audio) return;
+    let lastProgressPublish = 0;
+    const publish = (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastProgressPublish < 3000) return;
+      lastProgressPublish = now;
+      publishMvbarConnectState({
+        track: nowPlaying ? asConnectTrack(nowPlaying) : null,
+        queue: isOpen ? queue.map(asConnectTrack) : [],
+        queueIndex: isOpen ? index : -1,
+        isPlaying: isOpen && !audio.paused,
+        positionMs: Math.max(0, Math.round((audio.currentTime || 0) * 1000)),
+        durationMs: Math.max(0, Math.round((Number.isFinite(audio.duration) ? audio.duration : 0) * 1000)),
+        volume: audio.volume,
+      });
+    };
+    const publishProgress = () => publish(false);
+    const publishImmediately = () => publish(true);
+    audio.addEventListener('timeupdate', publishProgress);
+    audio.addEventListener('play', publishImmediately);
+    audio.addEventListener('pause', publishImmediately);
+    audio.addEventListener('loadedmetadata', publishImmediately);
+    audio.addEventListener('volumechange', publishImmediately);
+    publishImmediately();
+    return () => {
+      audio.removeEventListener('timeupdate', publishProgress);
+      audio.removeEventListener('play', publishImmediately);
+      audio.removeEventListener('pause', publishImmediately);
+      audio.removeEventListener('loadedmetadata', publishImmediately);
+      audio.removeEventListener('volumechange', publishImmediately);
+    };
+  }, [asConnectTrack, index, isOpen, nowPlaying, queue]);
+
+  const handleConnectDevice = useCallback((target: MvbarConnectDevice) => {
+    const state = useMvbarConnect.getState();
+    if (target.id === state.selectedDeviceId) return;
+    const selected = state.devices.find((device) => device.id === state.selectedDeviceId);
+    const local = state.devices.find((device) => device.id === state.localDeviceId);
+    const source = selected?.state.track ? selected
+      : local?.state.track ? local
+        : state.devices.find((device) => device.state.isPlaying);
+    if (source?.state.track && source.id !== target.id) {
+      transferMvbarPlayback(source.id, target.id);
+    }
+    selectConnectDevice(target.id);
+    showRecommendationToast(`Controlling ${target.name}`, 'success', 'top-right');
+  }, [selectConnectDevice, showRecommendationToast]);
 
   // Admin: pending users badge
   const pendingCount = useAdminPending((s) => s.count);
@@ -2539,7 +2776,7 @@ export function AppShellNew() {
         onLogout={handleSignOut}
         isOpen={mobileSidebarOpen}
         onClose={() => setMobileSidebarOpen(false)}
-        hasMusicPlayer={!!(isOpen && nowPlaying)}
+        hasMusicPlayer={!!((!controllingRemote && isOpen && nowPlaying) || selectedConnectDevice?.state.track)}
         hasPodcastPlayer={!!podcastEpisode}
         hasAudiobookPlayer={!!audiobookChapter}
         missingMusicEnabled={missingMusicEnabled}
@@ -2575,6 +2812,7 @@ export function AppShellNew() {
             {tab === 'settings' && 'Settings'}
             {tab === 'admin' && 'Admin'}
           </h2>
+          <MvbarConnectButton onSelect={handleConnectDevice} compact />
           <button
             onClick={() => setSearchOpen(true)}
             className="p-2 -mr-2 rounded-lg hover:bg-white/10 transition-colors"
@@ -2605,7 +2843,7 @@ export function AppShellNew() {
       </header>
 
       {/* Main Content */}
-      <main className={`lg:ml-64 pt-16 lg:pt-0 pb-24 lg:pb-28 ${nowPlaying ? 'pb-28' : ''}`}>
+      <main className={`lg:ml-64 pt-16 lg:pt-0 pb-24 lg:pb-28 ${nowPlaying || selectedConnectDevice?.state.track ? 'pb-28' : ''}`}>
         <div className="max-w-6xl mx-auto px-4 py-6">
           {/* Header - Desktop only with navigation controls */}
           <header className="hidden lg:flex items-center justify-between mb-8">
@@ -2627,6 +2865,7 @@ export function AppShellNew() {
               </h2>
             </div>
             <div className="flex items-center gap-3">
+              <MvbarConnectButton onSelect={handleConnectDevice} />
               {isAdmin && (
                 <button
                   onClick={handleBellClick}
@@ -2719,7 +2958,7 @@ export function AppShellNew() {
       </main>
 
       {/* Player Bar */}
-      {isOpen && nowPlaying && (
+      {!controllingRemote && isOpen && nowPlaying && (
         <PlayerBar
           nowPlaying={nowPlaying}
           activeTab={tab}
@@ -2765,6 +3004,13 @@ export function AppShellNew() {
           onClose={close}
           onEnded={handlePlayModeEnded}
           onPlayModeEnded={handlePlayModeEnded}
+        />
+      )}
+
+      {controllingRemote && selectedConnectDevice?.state.track && (
+        <MvbarRemotePlayerBar
+          device={selectedConnectDevice}
+          onChooseDevice={handleConnectDevice}
         />
       )}
 
