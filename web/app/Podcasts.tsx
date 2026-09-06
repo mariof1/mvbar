@@ -10,6 +10,9 @@ import { showConfirm, showAlert } from './ConfirmModal';
 import { sendWebSocketMessage, usePodcastProgress, updateLocalPodcastProgress } from './useWebSocket';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { formatCalendarDate } from './format';
+import { mediaSessionArtwork } from './mediaSessionArtwork';
+import { SeekSlider } from './SeekSlider';
+import { prepareSystemPlaybackSession, publishSystemPlaybackState } from './musicAudio';
 
 // ============================================================================
 // TYPES
@@ -44,6 +47,26 @@ interface Episode {
   podcast_title?: string;
   podcast_image_url?: string | null;
   podcast_image_path?: string | null;
+}
+
+function normalizePodcast(podcast: Podcast): Podcast {
+  return {
+    ...podcast,
+    id: Number(podcast.id),
+    unplayed_count: Number(podcast.unplayed_count ?? 0),
+  };
+}
+
+function normalizeEpisode(episode: Episode): Episode {
+  return {
+    ...episode,
+    id: Number(episode.id),
+    podcast_id: Number(episode.podcast_id),
+    duration_ms: episode.duration_ms == null ? null : Number(episode.duration_ms),
+    position_ms: Number(episode.position_ms ?? 0),
+    played: Boolean(episode.played),
+    downloaded: Boolean(episode.downloaded),
+  };
 }
 
 // ============================================================================
@@ -673,7 +696,7 @@ function EpisodeRow({
   onDeleteDownload,
   featured = false,
   showPodcastTitle = true,
-  showDescription = true,
+  showDescriptionPreview = true,
 }: {
   episode: Episode;
   onPlay: () => void;
@@ -682,14 +705,51 @@ function EpisodeRow({
   onDeleteDownload: () => void;
   featured?: boolean;
   showPodcastTitle?: boolean;
-  showDescription?: boolean;
+  showDescriptionPreview?: boolean;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressTriggeredRef = useRef(false);
   const progress = episodeProgressPercent(episode);
   const imageUrl = episodeArtUrl(episode);
   const cleanDescription = stripHtml(episode.description);
   const hasProgress = episode.position_ms > 0 && !episode.played;
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = null;
+    longPressStartRef.current = null;
+  };
+
+  useEffect(() => () => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+  }, []);
+
+  const handleLongPressStart = (event: React.PointerEvent<HTMLElement>) => {
+    if (!cleanDescription || (event.pointerType === 'mouse' && event.button !== 0)) return;
+    if ((event.target as HTMLElement).closest('[data-long-press-ignore], a, input, select, textarea')) return;
+
+    cancelLongPress();
+    longPressTriggeredRef.current = false;
+    longPressStartRef.current = { x: event.clientX, y: event.clientY };
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      longPressStartRef.current = null;
+      longPressTriggeredRef.current = true;
+      setShowDetails(true);
+      try { navigator.vibrate?.(15); } catch {}
+    }, 550);
+  };
+
+  const handleLongPressMove = (event: React.PointerEvent<HTMLElement>) => {
+    const start = longPressStartRef.current;
+    if (!start) return;
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10) {
+      cancelLongPress();
+    }
+  };
 
   const handleDownload = async () => {
     setDownloading(true);
@@ -704,7 +764,7 @@ function EpisodeRow({
     <>
       {showDetails && (
         <PodcastTextDialog
-          label="Episode details"
+          label="Episode description"
           title={episode.title}
           subtitle={episode.podcast_title}
           meta={episodeMetaText(episode, true)}
@@ -715,112 +775,129 @@ function EpisodeRow({
 
       <article
         className={cx(
-          'group rounded-lg border border-white/10 bg-slate-900/55 transition hover:border-white/20 hover:bg-slate-900',
-          featured && 'bg-slate-900/90 shadow-xl shadow-black/20',
+          'group select-none overflow-hidden rounded-xl border border-white/10 bg-slate-900/55 transition hover:border-white/20 hover:bg-slate-900/90',
+          featured && 'border-orange-400/15 bg-gradient-to-br from-orange-950/25 via-slate-900/90 to-slate-900/90 shadow-xl shadow-black/20',
           episode.played && 'opacity-60'
         )}
+        title={cleanDescription ? 'Press and hold for episode description' : undefined}
+        onPointerDown={handleLongPressStart}
+        onPointerMove={handleLongPressMove}
+        onPointerUp={cancelLongPress}
+        onPointerCancel={cancelLongPress}
+        onPointerLeave={cancelLongPress}
+        onContextMenu={(event) => {
+          if (cleanDescription) event.preventDefault();
+        }}
       >
-        <div className={cx('flex items-start gap-3', featured ? 'p-4 sm:gap-5 sm:p-5' : 'p-3 sm:p-4')}>
-          <button
-            type="button"
-            onClick={onPlay}
-            className={cx(
-              'group/play relative flex-shrink-0 overflow-hidden rounded-lg bg-slate-800',
-              featured ? 'h-24 w-24 sm:h-28 sm:w-28' : 'h-16 w-16'
-            )}
-            title="Play episode"
-          >
-            <PodcastArtwork src={imageUrl} alt="" className="h-full w-full rounded-lg" />
-            <span className="absolute inset-0 flex items-center justify-center bg-black/45 opacity-0 transition group-hover/play:opacity-100">
-              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-950 shadow-lg">
-                <PlayGlyph className="h-5 w-5" />
-              </span>
-            </span>
-          </button>
-
-          <div className="min-w-0 flex-1">
-            {showPodcastTitle && episode.podcast_title && (
-              <p className="truncate text-sm font-bold text-cyan-300">{episode.podcast_title}</p>
-            )}
-            <h3
+        <div className={featured ? 'p-4 sm:p-5' : 'p-3 sm:p-4'}>
+          <div className={cx('flex items-start gap-3', featured && 'sm:gap-5')}>
+            <button
+              type="button"
+              onClick={() => {
+                if (longPressTriggeredRef.current) {
+                  longPressTriggeredRef.current = false;
+                  return;
+                }
+                onPlay();
+              }}
               className={cx(
-                'font-bold leading-snug text-white',
-                featured ? 'line-clamp-2 text-lg sm:text-xl' : 'line-clamp-2 text-sm sm:text-base'
+                'group/play relative flex-shrink-0 overflow-hidden rounded-lg bg-slate-800 shadow-md',
+                featured ? 'h-24 w-24 sm:h-28 sm:w-28' : 'h-16 w-16'
               )}
+              title="Play episode"
+              aria-label={`Play ${episode.title}`}
             >
-              {episode.title}
-            </h3>
-            <p className="mt-1 truncate text-xs font-medium text-slate-500">
-              {episodeMetaText(episode, true)}
-            </p>
+              <PodcastArtwork src={imageUrl} alt="" className="h-full w-full rounded-lg" />
+              <span className="absolute inset-0 flex items-center justify-center bg-black/45 opacity-0 transition group-hover/play:opacity-100 group-focus-visible/play:opacity-100">
+                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-950 shadow-lg">
+                  <PlayGlyph className="h-5 w-5" />
+                </span>
+              </span>
+            </button>
 
-            {showDescription && cleanDescription && (
-              <p className={cx('mt-2 text-sm leading-5 text-slate-400', featured ? 'line-clamp-3' : 'line-clamp-2')}>
-                {cleanDescription}
+            <div className="min-w-0 flex-1">
+              {showPodcastTitle && episode.podcast_title && (
+                <p className="truncate text-sm font-bold text-cyan-300">{episode.podcast_title}</p>
+              )}
+              <h3
+                className={cx(
+                  'font-bold leading-snug text-white',
+                  featured ? 'line-clamp-3 text-lg sm:text-xl' : 'line-clamp-2 text-sm sm:text-base'
+                )}
+              >
+                {episode.title}
+              </h3>
+              <p className="mt-1 line-clamp-2 text-xs font-medium leading-5 text-slate-500">
+                {episodeMetaText(episode, false)}
               </p>
-            )}
+            </div>
 
-            {hasProgress && episode.duration_ms && (
-              <div className="mt-3">
-                <div className="h-1 overflow-hidden rounded-full bg-slate-700">
-                  <div className="h-full rounded-full bg-orange-500" style={{ width: `${progress}%` }} />
-                </div>
+            <div className="flex flex-shrink-0 flex-col items-center gap-1">
+              {episode.downloaded ? (
+                <button
+                  type="button"
+                  data-long-press-ignore
+                  onClick={onDeleteDownload}
+                  className="rounded-full p-2 text-green-300 transition hover:bg-red-500/10 hover:text-red-300"
+                  title="Remove download"
+                  aria-label="Remove downloaded episode"
+                >
+                  <CheckGlyph className="h-5 w-5" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  data-long-press-ignore
+                  onClick={handleDownload}
+                  disabled={downloading}
+                  className="rounded-full p-2 text-slate-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
+                  title="Download for offline"
+                  aria-label="Download episode for offline listening"
+                >
+                  {downloading ? <SpinnerGlyph className="h-5 w-5" /> : <DownloadGlyph className="h-5 w-5" />}
+                </button>
+              )}
+
+              <button
+                type="button"
+                data-long-press-ignore
+                onClick={() => onMarkPlayed(!episode.played)}
+                className={cx(
+                  'rounded-full p-2 transition hover:bg-white/10',
+                  episode.played ? 'text-orange-300' : 'text-slate-400 hover:text-white'
+                )}
+                title={episode.played ? 'Mark as unplayed' : 'Mark as played'}
+                aria-label={episode.played ? 'Mark episode as unplayed' : 'Mark episode as played'}
+              >
+                {episode.played ? <CheckGlyph className="h-5 w-5" /> : <CircleGlyph className="h-5 w-5" />}
+              </button>
+            </div>
+          </div>
+
+          {showDescriptionPreview && cleanDescription && (
+            <p className="mt-4 line-clamp-3 w-full border-t border-white/10 pt-3 text-sm leading-6 text-slate-300">
+              {cleanDescription}
+            </p>
+          )}
+
+          {hasProgress && episode.duration_ms && (
+            <div className="mt-4">
+              <div className="h-1 overflow-hidden rounded-full bg-slate-700">
+                <div className="h-full rounded-full bg-orange-500" style={{ width: `${progress}%` }} />
               </div>
-            )}
+            </div>
+          )}
 
+          {(hasProgress || episode.downloaded) && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {hasProgress && (
                 <span className="text-xs font-bold text-orange-300">
                   {episodeRemainingText(episode) || `${progress}% played`}
                 </span>
               )}
-              {cleanDescription && (
-                <button
-                  type="button"
-                  onClick={() => setShowDetails(true)}
-                  className="rounded-full border border-white/10 px-3 py-1 text-xs font-bold text-slate-300 transition hover:bg-white/10 hover:text-white"
-                >
-                  Details
-                </button>
-              )}
               {episode.downloaded && <CountPill>Downloaded</CountPill>}
             </div>
-          </div>
-
-          <div className="flex flex-shrink-0 flex-col items-center gap-1">
-            {episode.downloaded ? (
-              <button
-                type="button"
-                onClick={onDeleteDownload}
-                className="rounded-full p-2 text-green-300 transition hover:bg-red-500/10 hover:text-red-300"
-                title="Remove download"
-              >
-                <CheckGlyph className="h-5 w-5" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleDownload}
-                disabled={downloading}
-                className="rounded-full p-2 text-slate-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
-                title="Download for offline"
-              >
-                {downloading ? <SpinnerGlyph className="h-5 w-5" /> : <DownloadGlyph className="h-5 w-5" />}
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => onMarkPlayed(!episode.played)}
-              className={cx(
-                'rounded-full p-2 transition hover:bg-white/10',
-                episode.played ? 'text-orange-300' : 'text-slate-400 hover:text-white'
-              )}
-              title={episode.played ? 'Mark as unplayed' : 'Mark as played'}
-            >
-              {episode.played ? <CheckGlyph className="h-5 w-5" /> : <CircleGlyph className="h-5 w-5" />}
-            </button>
-          </div>
+          )}
         </div>
       </article>
     </>
@@ -840,28 +917,60 @@ function PodcastSwitcher({
   onViewChange: (view: PodcastHomeView) => void;
   onSubscribeClick: () => void;
 }) {
+  const tabClass = (selected: boolean) => cx(
+    'flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl px-2 text-xs font-bold transition sm:h-10 sm:px-3 sm:text-sm',
+    selected
+      ? 'bg-white text-slate-950 shadow-sm'
+      : 'text-slate-300 hover:bg-white/10 hover:text-white'
+  );
+
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <ChipButton
-        selected={view === 'new'}
+    <div
+      className="grid w-full grid-cols-3 gap-1 rounded-2xl border border-white/10 bg-slate-950/55 p-1 sm:w-auto sm:min-w-[340px]"
+      role="group"
+      aria-label="Podcast navigation"
+    >
+      <button
+        type="button"
+        aria-pressed={view === 'new'}
         onClick={() => onViewChange('new')}
-        className="min-w-[132px]"
+        className={tabClass(view === 'new')}
       >
-        Continue
-        {continueCount > 0 && <span className="text-xs opacity-75">{Math.min(continueCount, 999)}</span>}
-      </ChipButton>
-      <ChipButton
-        selected={view === 'subscriptions'}
+        <span className="truncate">Continue</span>
+        {continueCount > 0 && (
+          <span className={cx(
+            'rounded-full px-1.5 py-0.5 text-[10px] leading-none',
+            view === 'new' ? 'bg-slate-900/10' : 'bg-white/10 text-slate-400'
+          )}>
+            {Math.min(continueCount, 999)}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        aria-pressed={view === 'subscriptions'}
         onClick={() => onViewChange('subscriptions')}
-        className="min-w-[110px]"
+        className={tabClass(view === 'subscriptions')}
       >
-        Shows
-        {subscriptionCount > 0 && <span className="text-xs opacity-75">{Math.min(subscriptionCount, 999)}</span>}
-      </ChipButton>
-      <ChipButton tone="accent" onClick={onSubscribeClick} title="Add podcast">
-        <PlusGlyph />
-        Add
-      </ChipButton>
+        <span className="truncate">Shows</span>
+        {subscriptionCount > 0 && (
+          <span className={cx(
+            'rounded-full px-1.5 py-0.5 text-[10px] leading-none',
+            view === 'subscriptions' ? 'bg-slate-900/10' : 'bg-white/10 text-slate-400'
+          )}>
+            {Math.min(subscriptionCount, 999)}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={onSubscribeClick}
+        title="Add podcast"
+        className="flex h-9 min-w-0 items-center justify-center gap-1 rounded-xl bg-cyan-600 px-2 text-xs font-bold text-white shadow-sm transition hover:bg-cyan-500 sm:h-10 sm:gap-1.5 sm:px-3 sm:text-sm"
+      >
+        <PlusGlyph className="h-4 w-4" />
+        <span>Add</span>
+      </button>
     </div>
   );
 }
@@ -977,6 +1086,7 @@ function ContinueListeningView({
       <EpisodeRow
         episode={featured}
         featured
+        showDescriptionPreview={false}
         onPlay={() => onEpisodePlay(featured)}
         onMarkPlayed={(played) => onMarkPlayed(featured.id, played)}
         onDownload={() => onDownload(featured.id)}
@@ -991,7 +1101,7 @@ function ContinueListeningView({
               <EpisodeRow
                 key={episode.id}
                 episode={episode}
-                showDescription={false}
+                showDescriptionPreview={false}
                 onPlay={() => onEpisodePlay(episode)}
                 onMarkPlayed={(played) => onMarkPlayed(episode.id, played)}
                 onDownload={() => onDownload(episode.id)}
@@ -1172,10 +1282,23 @@ export function PodcastPlayer({
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [expanded, setExpanded] = useState(false);
+  const [playerDragY, setPlayerDragY] = useState(0);
+  const [isPlayerDragging, setIsPlayerDragging] = useState(false);
   useBodyScrollLock(expanded);
   const lastBroadcastRef = useRef(0);
   const onCloseRef = useRef(onClose);
+  const playerDragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startedAt: number;
+  } | null>(null);
+  const playerDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressPlayerHandleClickRef = useRef(false);
   onCloseRef.current = onClose;
+
+  useEffect(() => () => {
+    if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
+  }, []);
   
   // Listen for podcast progress updates from other devices
   const lastProgress = usePodcastProgress((s) => s.lastProgress);
@@ -1195,7 +1318,9 @@ export function PodcastPlayer({
   useEffect(() => {
     if (!episode) return;
 
+    prepareSystemPlaybackSession();
     const audioEl = new Audio(`/api/podcasts/episodes/${episode.id}/stream`);
+    audioEl.preload = 'auto';
     audioEl.playbackRate = playbackRate;
 
     // Resume from saved position
@@ -1223,8 +1348,14 @@ export function PodcastPlayer({
         played: true,
       });
     };
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
+    const onPlay = () => {
+      setPlaying(true);
+      publishSystemPlaybackState('playing');
+    };
+    const onPause = () => {
+      setPlaying(false);
+      publishSystemPlaybackState('paused');
+    };
 
     audioEl.addEventListener('timeupdate', onTimeUpdate);
     audioEl.addEventListener('loadedmetadata', onLoadedMetadata);
@@ -1293,10 +1424,7 @@ export function PodcastPlayer({
       title: episode.title,
       artist: episode.podcast_title || 'Podcast',
       album: episode.podcast_title || 'Podcast',
-      artwork: [
-        { src: `/api/podcasts/episodes/${episode.id}/art`, type: 'image/jpeg' },
-        { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
-      ],
+      artwork: mediaSessionArtwork(`/api/podcasts/episodes/${episode.id}/art`),
     });
     navigator.mediaSession.metadata = metadata;
 
@@ -1370,9 +1498,11 @@ export function PodcastPlayer({
     audio.currentTime = Math.max(0, Math.min(duration, audio.currentTime + seconds));
   };
 
-  const seekTo = (pct: number) => {
+  const seekTo = (position: number) => {
     if (!audio || !duration) return;
-    audio.currentTime = pct * duration;
+    const nextPosition = Math.max(0, Math.min(position, duration));
+    audio.currentTime = nextPosition;
+    setCurrentTime(nextPosition);
   };
 
   const formatTime = (s: number) => {
@@ -1383,6 +1513,73 @@ export function PodcastPlayer({
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
+  const resetExpandedPlayerDrag = () => {
+    playerDragRef.current = null;
+    setIsPlayerDragging(false);
+    setPlayerDragY(0);
+  };
+
+  const minimizeExpandedPlayer = (animate = false) => {
+    if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
+    playerDragRef.current = null;
+    setIsPlayerDragging(false);
+    if (!animate) {
+      setExpanded(false);
+      setPlayerDragY(0);
+      return;
+    }
+    setPlayerDragY(window.innerHeight);
+    playerDismissTimerRef.current = setTimeout(() => {
+      setExpanded(false);
+      setPlayerDragY(0);
+      playerDismissTimerRef.current = null;
+    }, 180);
+  };
+
+  const handlePlayerDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
+    playerDragRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startedAt: performance.now(),
+    };
+    suppressPlayerHandleClickRef.current = false;
+    setIsPlayerDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePlayerDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = playerDragRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const distance = Math.max(0, event.clientY - gesture.startY);
+    if (distance > 6) suppressPlayerHandleClickRef.current = true;
+    setPlayerDragY(distance);
+  };
+
+  const handlePlayerDragEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = playerDragRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const distance = Math.max(0, event.clientY - gesture.startY);
+    const elapsed = Math.max(1, performance.now() - gesture.startedAt);
+    const velocity = distance / elapsed;
+    const shouldMinimize = distance >= Math.min(160, window.innerHeight * 0.2)
+      || (distance >= 28 && velocity >= 0.65);
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
+    playerDragRef.current = null;
+    setIsPlayerDragging(false);
+    if (shouldMinimize) minimizeExpandedPlayer(true);
+    else setPlayerDragY(0);
+    if (suppressPlayerHandleClickRef.current) {
+      setTimeout(() => { suppressPlayerHandleClickRef.current = false; }, 0);
+    }
+  };
+
+  const handlePlayerDragCancel = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (playerDragRef.current?.pointerId !== event.pointerId) return;
+    resetExpandedPlayerDrag();
+  };
+
   const imageUrl = `/api/podcasts/episodes/${episode.id}/art`;
 
   return (
@@ -1391,35 +1588,58 @@ export function PodcastPlayer({
       {expanded && (
         <div 
           className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl lg:hidden animate-fade-in"
-          onClick={() => setExpanded(false)}
+          onClick={() => minimizeExpandedPlayer()}
         >
           <div 
-            className="h-full flex flex-col overflow-y-auto"
+            className={`h-full flex flex-col overflow-y-auto ${
+              isPlayerDragging ? '' : 'transition-[transform,opacity] duration-200 ease-out'
+            }`}
             onClick={(e) => e.stopPropagation()}
+            style={{
+              transform: `translate3d(0, ${playerDragY}px, 0)`,
+              opacity: 1 - Math.min(playerDragY / 600, 0.35),
+              willChange: playerDragY > 0 ? 'transform, opacity' : undefined,
+            }}
           >
-            {/* Close handle */}
-            <div className="flex justify-center pt-4 pb-2">
-              <button 
-                onClick={() => setExpanded(false)}
-                className="w-12 h-1.5 bg-white/30 rounded-full"
-              />
-            </div>
+            <div
+              className={`shrink-0 touch-none select-none ${isPlayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+              onPointerDown={handlePlayerDragStart}
+              onPointerMove={handlePlayerDragMove}
+              onPointerUp={handlePlayerDragEnd}
+              onPointerCancel={handlePlayerDragCancel}
+            >
+              {/* Close handle */}
+              <div className="flex justify-center pt-4 pb-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (suppressPlayerHandleClickRef.current) return;
+                    minimizeExpandedPlayer();
+                  }}
+                  className="h-6 w-16 rounded-full p-2.5"
+                  aria-label="Minimize podcast player"
+                >
+                  <span className="block h-1.5 w-full rounded-full bg-white/30" />
+                </button>
+              </div>
 
-            {/* Artwork */}
-            <div className="flex-shrink-0 px-8 pt-4 pb-6">
-              {imageUrl ? (
-                <img
-                  src={imageUrl}
-                  alt=""
-                  className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl object-cover shadow-2xl"
-                  loading="lazy"
-                  decoding="async"
-                />
-              ) : (
-                <div className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl bg-white/10 flex items-center justify-center">
-                  <span className="text-6xl">🎙️</span>
-                </div>
-              )}
+              {/* Artwork */}
+              <div className="flex-shrink-0 px-8 pt-4 pb-6">
+                {imageUrl ? (
+                  <img
+                    src={imageUrl}
+                    alt=""
+                    draggable={false}
+                    className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl object-cover shadow-2xl"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                ) : (
+                  <div className="w-full max-w-[280px] mx-auto aspect-square rounded-2xl bg-white/10 flex items-center justify-center">
+                    <span className="text-6xl">🎙️</span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Episode Info */}
@@ -1436,19 +1656,13 @@ export function PodcastPlayer({
 
             {/* Progress bar */}
             <div className="px-8 mb-4">
-              <div 
-                className="h-1.5 bg-white/20 rounded-full cursor-pointer"
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const pct = (e.clientX - rect.left) / rect.width;
-                  seekTo(pct);
-                }}
-              >
-                <div 
-                  className="h-full bg-orange-500 rounded-full transition-all duration-150"
-                  style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-                />
-              </div>
+              <SeekSlider
+                currentTime={currentTime}
+                duration={duration}
+                onSeek={seekTo}
+                accent="#f97316"
+                label="Seek through podcast episode"
+              />
               <div className="flex justify-between text-xs text-white/50 mt-1">
                 <span>{formatTime(currentTime)}</span>
                 <span>{formatTime(duration)}</span>
@@ -1521,19 +1735,17 @@ export function PodcastPlayer({
         onClick={() => setExpanded(true)}
       >
         {/* Progress bar at top of player */}
-        <div 
-          className="h-1 bg-white/10 cursor-pointer"
-          onClick={(e) => {
-            e.stopPropagation();
-            const rect = e.currentTarget.getBoundingClientRect();
-            const pct = (e.clientX - rect.left) / rect.width;
-            seekTo(pct);
-          }}
-        >
-          <div 
-            className="h-full bg-orange-500 transition-all duration-150"
-            style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-          />
+        <div className="relative h-1 z-10">
+          <div className="absolute -top-2 left-0 right-0">
+            <SeekSlider
+              currentTime={currentTime}
+              duration={duration}
+              onSeek={seekTo}
+              accent="#f97316"
+              label="Seek through podcast episode"
+              compact
+            />
+          </div>
         </div>
 
         <div className="px-4 py-3">
@@ -1769,7 +1981,7 @@ export function Podcasts() {
     if (!token) return;
     try {
       const r = await apiFetch('/podcasts', { method: 'GET' }, token);
-      setPodcasts(r.podcasts || []);
+      setPodcasts((r.podcasts || []).map(normalizePodcast));
     } catch (e: any) {
       if (e?.status === 401) clear();
     }
@@ -1780,7 +1992,7 @@ export function Podcasts() {
     if (!token) return;
     try {
       const r = await apiFetch('/podcasts/episodes/new', { method: 'GET' }, token);
-      setNewEpisodes(r.episodes || []);
+      setNewEpisodes((r.episodes || []).map(normalizeEpisode));
     } catch (e: any) {
       if (e?.status === 401) clear();
     }
@@ -1791,7 +2003,7 @@ export function Podcasts() {
     if (!token) return;
     try {
       const r = await apiFetch(`/podcasts/${podcastId}`, { method: 'GET' }, token);
-      setEpisodes(r.episodes || []);
+      setEpisodes((r.episodes || []).map(normalizeEpisode));
     } catch (e: any) {
       if (e?.status === 401) clear();
     }

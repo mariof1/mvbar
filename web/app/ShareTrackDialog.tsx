@@ -123,7 +123,7 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
               <p className="mt-1 text-sm text-slate-400">Friends you add in mvbar will appear here.</p>
               <button
                 type="button"
-                onClick={() => { onClose(); navigate({ type: 'social' }); }}
+                onClick={() => { onClose(); navigate({ type: 'social', sub: 'friends' }); }}
                 className="mt-4 rounded-full bg-cyan-500 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-400"
               >
                 Find friends

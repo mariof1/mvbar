@@ -24,6 +24,7 @@ export async function initDb() {
 
   pool = new Pool({ connectionString: url });
   await pool.query('select 1');
+  await pool.query('create extension if not exists pg_trgm');
 
   await pool.query(`
     create table if not exists users (
@@ -252,6 +253,43 @@ export async function initDb() {
   `);
 
   await pool.query('create index if not exists user_track_stats_user_play_count_idx on user_track_stats(user_id, play_count desc)');
+  await pool.query('alter table user_track_stats add column if not exists total_listened_ms bigint not null default 0');
+  await pool.query('alter table user_track_stats add column if not exists completion_count integer not null default 0');
+  await pool.query('alter table user_track_stats add column if not exists early_skip_count integer not null default 0');
+  await pool.query('alter table user_track_stats add column if not exists last_completion_pct double precision');
+
+  await pool.query(`
+    create table if not exists recommendation_preferences (
+      user_id text not null references users(id) on delete cascade,
+      subject_type text not null check (subject_type in ('track', 'artist', 'bucket')),
+      subject_key text not null,
+      preference smallint not null check (preference between -2 and 2 and preference != 0),
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (user_id, subject_type, subject_key)
+    );
+  `);
+  await pool.query('create index if not exists recommendation_preferences_user_idx on recommendation_preferences(user_id, updated_at desc)');
+
+  await pool.query(`
+    create table if not exists recommendation_impressions (
+      user_id text not null references users(id) on delete cascade,
+      slate_id text not null,
+      bucket_key text not null,
+      track_id bigint not null references tracks(id) on delete cascade,
+      position integer not null,
+      served_at timestamptz not null default now(),
+      played_at timestamptz,
+      completed_at timestamptz,
+      skipped_at timestamptz,
+      listened_ms bigint not null default 0,
+      completion_pct double precision,
+      primary key (user_id, slate_id, bucket_key, track_id)
+    );
+  `);
+  await pool.query('create index if not exists recommendation_impressions_user_served_idx on recommendation_impressions(user_id, served_at desc)');
+  await pool.query('create index if not exists recommendation_impressions_track_idx on recommendation_impressions(user_id, track_id, served_at desc)');
+  await pool.query('create index if not exists recommendation_impressions_served_idx on recommendation_impressions(served_at)');
 
   await pool.query(`
     create table if not exists libraries (
@@ -347,6 +385,22 @@ export async function initDb() {
   await pool.query('alter table artists add column if not exists ascii_name text');
   await pool.query('alter table artists add column if not exists musicbrainz_id text');
   await pool.query('create index if not exists artists_ascii_name_idx on artists(ascii_name)');
+  await pool.query(`
+    create index if not exists artists_search_trgm_idx on artists using gin (
+      (lower(coalesce(nullif(ascii_name, ''), translate(coalesce(name, ''), 'ĄĆĘŁŃÓŚŹŻąćęłńóśźż', 'ACELNOSZZacelnoszz')))) gin_trgm_ops
+    )
+  `);
+
+  await pool.query(`
+    create index if not exists tracks_album_search_trgm_idx on tracks using gin (
+      (lower(translate(coalesce(album, ''), 'ĄĆĘŁŃÓŚŹŻąćęłńóśźż', 'ACELNOSZZacelnoszz'))) gin_trgm_ops
+    )
+  `);
+  await pool.query(`
+    create index if not exists tracks_album_artist_search_trgm_idx on tracks using gin (
+      (lower(translate(coalesce(album_artist, artist, ''), 'ĄĆĘŁŃÓŚŹŻąćęłńóśźż', 'ACELNOSZZacelnoszz'))) gin_trgm_ops
+    )
+  `);
 
   await pool.query(`
     create table if not exists track_artists (
@@ -430,6 +484,7 @@ export async function initDb() {
     );
   `);
   await pool.query('create index if not exists track_genres_genre_idx on track_genres(genre)');
+  await pool.query('create index if not exists track_genres_genre_lower_idx on track_genres(lower(genre))');
 
   // Track countries table (normalized)
   await pool.query(`
@@ -554,6 +609,24 @@ export async function initDb() {
   `);
   await pool.query('create index if not exists search_logs_user_created_idx on search_logs(user_id, created_at desc)');
   await pool.query('create index if not exists search_logs_user_query_idx on search_logs(user_id, query_normalized)');
+
+  // User-facing search history is intentionally separate from search_logs.
+  // search_logs captures autocomplete traffic for recommendation signals,
+  // while this table stores the entities a user actually selected.
+  await pool.query(`
+    create table if not exists user_recent_search_items (
+      user_id text not null references users(id) on delete cascade,
+      item_type text not null check (item_type in ('track', 'artist', 'album', 'playlist', 'podcast', 'podcast_episode')),
+      item_key text not null,
+      title text not null,
+      subtitle text,
+      image_url text,
+      payload jsonb not null default '{}'::jsonb,
+      accessed_at timestamptz not null default now(),
+      primary key (user_id, item_type, item_key)
+    );
+  `);
+  await pool.query('create index if not exists user_recent_search_items_user_date_idx on user_recent_search_items(user_id, accessed_at desc)');
 
   // Track tempo/bpm for tempo-based recommendations
   await pool.query('alter table tracks add column if not exists bpm real');
@@ -1061,6 +1134,8 @@ export async function initDb() {
       updated_at timestamptz not null default now()
     );
   `);
+
+  await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS openrouter_api_key text`);
 
   // ========================================================================
   // POPULATE ASCII NAMES FOR ARTISTS (one-time migration - runs in background)

@@ -1316,6 +1316,7 @@ export async function runFastScan(
   };
   storeProgress(progress);
   publishUpdate('scan:complete', progress);
+  void getPublisher().incr('reco:library_revision').catch(logRedisError);
   
   return {
     totalFiles: allFiles.length,

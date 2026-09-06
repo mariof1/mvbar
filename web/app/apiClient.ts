@@ -29,6 +29,47 @@ export async function apiFetch(path: string, init: RequestInit = {}, token?: str
   return data;
 }
 
+export type RecentSearch = {
+  itemType: 'track' | 'artist' | 'album' | 'playlist' | 'podcast' | 'podcast_episode';
+  itemKey: string;
+  title: string;
+  subtitle: string | null;
+  imageUrl: string | null;
+  payload: Record<string, unknown>;
+  accessedAt: string;
+};
+
+export type RecentSearchInput = Omit<RecentSearch, 'accessedAt'>;
+
+export async function getRecentSearches(token: string, limit = 10) {
+  const boundedLimit = Math.max(1, Math.min(20, Math.trunc(Number.isFinite(limit) ? limit : 10)));
+  return (await apiFetch(`/search/recent?limit=${boundedLimit}`, { method: 'GET' }, token)) as {
+    ok: true;
+    searches: RecentSearch[];
+  };
+}
+
+export async function saveRecentSearch(token: string, item: RecentSearchInput) {
+  return (await apiFetch('/search/recent', {
+    method: 'POST',
+    body: JSON.stringify(item),
+  }, token)) as { ok: true } & RecentSearch;
+}
+
+export async function removeRecentSearch(token: string, itemType: RecentSearch['itemType'], itemKey: string) {
+  return (await apiFetch(`/search/recent?type=${encodeURIComponent(itemType)}&key=${encodeURIComponent(itemKey)}`, { method: 'DELETE' }, token)) as {
+    ok: true;
+    removed: number;
+  };
+}
+
+export async function clearRecentSearches(token: string) {
+  return (await apiFetch('/search/recent', { method: 'DELETE' }, token)) as {
+    ok: true;
+    removed: number;
+  };
+}
+
 function adminTransferHeaders(token: string) {
   const headers = new Headers();
   if (token && token !== 'cookie') headers.set('authorization', `Bearer ${token}`);
@@ -199,13 +240,33 @@ export type AdminPluginRun = {
   created_at: string;
 };
 
+export type BundledAdminPlugin = {
+  key: string;
+  id: string;
+  name: string;
+  version: string;
+  description: string | null;
+  source: 'repository' | 'bundled';
+  repositoryUrl: string | null;
+  installed: boolean;
+  installedVersion: string | null;
+  updateAvailable: boolean;
+};
+
 export async function listAdminPlugins(token: string) {
   return (await apiFetch('/admin/plugins', { method: 'GET' }, token)) as {
     ok: true;
     executionEnabled: boolean;
     uploadLimitBytes: number;
+    bundledPlugins: BundledAdminPlugin[];
     plugins: AdminPlugin[];
   };
+}
+
+export async function installBundledAdminPlugin(token: string, key: string) {
+  return (await apiFetch(`/admin/plugins/bundled/${encodeURIComponent(key)}/install`, {
+    method: 'POST',
+  }, token)) as { ok: true; state: 'installed' | 'updated' | 'unchanged'; plugin: AdminPlugin };
 }
 
 export async function uploadAdminPlugin(token: string, file: File) {
@@ -935,12 +996,34 @@ export async function listHistory(token: string, limit = 100, offset = 0) {
   };
 }
 
-export async function recordPlay(token: string, trackId: number) {
-  return (await apiFetch(`/history/${trackId}`, { method: 'POST' }, token)) as { ok: boolean };
+export type PlaybackSignal = {
+  currentMs?: number;
+  durationMs?: number;
+  listenedMs?: number;
+  completionPct?: number;
+  slateId?: string;
+  bucketKey?: string;
+};
+
+export async function recordPlay(token: string, trackId: number, signal?: PlaybackSignal) {
+  return (await apiFetch(`/history/${trackId}`, {
+    method: 'POST',
+    body: signal ? JSON.stringify(signal) : undefined,
+  }, token)) as { ok: boolean };
 }
 
-export async function recordSkip(token: string, trackId: number, pct: number) {
-  return (await apiFetch(`/stats/skip/${trackId}`, { method: 'POST', body: JSON.stringify({ pct }) }, token)) as { ok: boolean };
+export async function recordSkip(token: string, trackId: number, pct: number, signal?: PlaybackSignal) {
+  return (await apiFetch(`/stats/skip/${trackId}`, {
+    method: 'POST',
+    body: JSON.stringify({ pct, completionPct: pct, ...signal }),
+  }, token)) as { ok: boolean };
+}
+
+export async function recordPartialListen(token: string, trackId: number, signal: PlaybackSignal) {
+  return (await apiFetch(`/stats/listen/${trackId}`, {
+    method: 'POST',
+    body: JSON.stringify(signal),
+  }, token)) as { ok: boolean };
 }
 
 export async function browseAlbum(token: string, artist: string | null | undefined, album: string, artistId?: number) {
@@ -980,6 +1063,13 @@ export async function browseAlbum(token: string, artist: string | null | undefin
 export async function getRecommendations(token: string) {
   return (await apiFetch('/recommendations', { method: 'GET' }, token)) as {
     ok: boolean;
+    generatedAt?: string;
+    slateId?: string;
+    _cached?: boolean;
+    _stale?: boolean;
+    _refreshing?: boolean;
+    hiddenMixCount?: number;
+    recommendationProfile?: 'new' | 'learning' | 'personalized';
     buckets: Array<{
       key: string;
       name: string;
@@ -998,6 +1088,62 @@ export async function getRecommendations(token: string) {
       art_paths: string[];
       art_hashes: string[];
     }>;
+  };
+}
+
+export type RecommendationFeedbackAction =
+  | 'more_like_this'
+  | 'not_for_me'
+  | 'less_like_artist'
+  | 'hide_bucket';
+
+export async function sendRecommendationFeedback(
+  token: string,
+  feedback: {
+    action: RecommendationFeedbackAction;
+    trackId?: number;
+    artist?: string | null;
+    bucketKey?: string;
+  },
+) {
+  return (await apiFetch('/recommendations/feedback', {
+    method: 'POST',
+    body: JSON.stringify(feedback),
+  }, token)) as {
+    ok: boolean;
+    action: RecommendationFeedbackAction;
+    subjectType: 'track' | 'artist' | 'bucket';
+    subjectKey: string;
+    preference: number;
+    hiddenMixCount?: number;
+  };
+}
+
+export type RecommendationPreference = {
+  subject_type: 'track' | 'artist' | 'bucket';
+  subject_key: string;
+  preference: number;
+  updated_at: string;
+};
+
+export async function getRecommendationFeedback(token: string) {
+  return (await apiFetch('/recommendations/feedback', { method: 'GET' }, token)) as {
+    ok: boolean;
+    preferences: RecommendationPreference[];
+  };
+}
+
+export async function clearAllRecommendationFeedback(token: string) {
+  return (await apiFetch('/recommendations/feedback/all', { method: 'DELETE' }, token)) as {
+    ok: boolean;
+    removed: number;
+  };
+}
+
+export async function clearHiddenRecommendationBuckets(token: string) {
+  return (await apiFetch('/recommendations/feedback/hidden-buckets', { method: 'DELETE' }, token)) as {
+    ok: boolean;
+    removed: number;
   };
 }
 
@@ -1273,4 +1419,62 @@ export type ScanProgress = {
 
 export async function getScanProgress(token: string) {
   return (await apiFetch('/scan/progress', { method: 'GET' }, token)) as ScanProgress;
+}
+
+// =========================================================================
+// AI Music
+// =========================================================================
+
+export interface AiIntentTrack {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  albumArtist: string | null;
+  displayArtist: string | null;
+  album: string | null;
+  path: string;
+  ext: string;
+  durationMs: number | null;
+}
+
+export interface AiIntentResponse {
+  ok: boolean;
+  model: string;
+  requestedModel: string;
+  usedFreeFallback: boolean;
+  originalQuery: string;
+  action: 'play' | 'queue' | 'search';
+  requestedTrackCount: number;
+  searchQuery: string;
+  explanation: string;
+  interpretation: {
+    moods: string[];
+    genres: string[];
+    relatedGenres: string[];
+    requireGenreMatch: boolean;
+    countries: string[];
+    countryMode: 'strict' | 'prefer' | 'any';
+    yearStart: number | null;
+    yearEnd: number | null;
+    namedArtists: string[];
+    similarToArtists: string[];
+    referenceArtists: string[];
+    similarArtists: string[];
+    includeSimilar: boolean;
+    avoid: string[];
+    energy: 'low' | 'medium' | 'high' | 'any';
+    bpmMin: number | null;
+    bpmMax: number | null;
+    targetBpm: number | null;
+    minDurationMinutes: number | null;
+    maxDurationMinutes: number | null;
+  };
+  tracks: AiIntentTrack[];
+}
+
+export async function sendAiIntent(token: string, query: string): Promise<AiIntentResponse> {
+  return (await apiFetch('/ai/intent', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  }, token)) as AiIntentResponse;
 }

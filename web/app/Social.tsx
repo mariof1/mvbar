@@ -24,6 +24,7 @@ import { showConfirm } from './ConfirmModal';
 import { useSocialUpdates } from './socialStore';
 import { trackArtistLabel } from './artistDisplay';
 import { formatCalendarDate } from './format';
+import { useRoute, useRouter } from './router';
 
 type SearchResult = SocialUser & {
   relationshipId: number | null;
@@ -111,7 +112,10 @@ export function Social() {
   const showToast = useToastStore((state) => state.show);
   const socialLastUpdate = useSocialUpdates((state) => state.lastUpdate);
   const setSocialCounts = useSocialUpdates((state) => state.setCounts);
-  const [tab, setTab] = useState<'shares' | 'friends'>('shares');
+  const route = useRoute();
+  const navigate = useRouter((state) => state.navigate);
+  const routeTab = route.type === 'social' && route.sub === 'friends' ? 'friends' : 'shares';
+  const [tab, setTab] = useState<'shares' | 'friends'>(routeTab);
   const [summary, setSummary] = useState<SocialSummary | null>(null);
   const [shares, setShares] = useState<TrackShare[]>([]);
   const [loading, setLoading] = useState(true);
@@ -120,6 +124,13 @@ export function Social() {
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchAttempted, setSearchAttempted] = useState(false);
+
+  useEffect(() => { setTab(routeTab); }, [routeTab]);
+
+  const selectTab = (nextTab: 'shares' | 'friends') => {
+    setTab(nextTab);
+    navigate({ type: 'social', sub: nextTab }, true);
+  };
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -250,14 +261,14 @@ export function Social() {
         <div className="flex rounded-xl border border-white/10 bg-white/[0.04] p-1">
           <button
             type="button"
-            onClick={() => setTab('shares')}
+            onClick={() => selectTab('shares')}
             className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${tab === 'shares' ? 'bg-cyan-500 text-white' : 'text-slate-400 hover:text-white'}`}
           >
             Shared with you{summary?.unreadShares ? ` (${summary.unreadShares})` : ''}
           </button>
           <button
             type="button"
-            onClick={() => setTab('friends')}
+            onClick={() => selectTab('friends')}
             className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${tab === 'friends' ? 'bg-cyan-500 text-white' : 'text-slate-400 hover:text-white'}`}
           >
             Friends{summary?.incoming.length ? ` (${summary.incoming.length})` : ''}

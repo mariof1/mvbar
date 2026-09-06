@@ -12,6 +12,10 @@ upload area. Every new or changed package starts disabled. Review its requested
 permissions and select **Review & enable**. Updating the package disables it
 again so new code cannot run without another administrator approval.
 
+First-party packages included with MVBar appear separately with an
+**Install with one click** action. They follow the same permission review and
+disabled-by-default rules; no server file copy is required.
+
 Packages can also be copied directly into `PLUGINS_DIR` and loaded with
 **Rescan folder**. Defaults are:
 
@@ -63,6 +67,7 @@ Runtime settings:
 ```dotenv
 PLUGINS_ENABLED=true
 PLUGINS_DIR=/data/plugins
+PLUGIN_REGISTRY_URL=https://raw.githubusercontent.com/mariof1/mvbar-plugins/main/registry.json
 PLUGIN_MAX_UPLOAD_MB=50
 PLUGIN_TIMEOUT_MS=15000
 PLUGIN_MEMORY_MB=64
@@ -71,6 +76,13 @@ PLUGIN_MAX_CONCURRENCY=4
 
 Set `PLUGINS_ENABLED=false` for a global kill switch. Packages and
 configuration remain installed, but no plugin code executes.
+
+Official plugins and updates are discovered through the public
+[`mvbar-plugins`](https://github.com/mariof1/mvbar-plugins) registry. Set
+`PLUGIN_REGISTRY_URL` to an empty value to disable remote discovery and retain
+only the offline package bundled with MVBar. Registry and package downloads
+must use the same credential-free HTTPS origin; MVBar also verifies the
+declared size, SHA-256 checksum, package id, and manifest version.
 
 ## Develop a plugin
 
@@ -160,26 +172,27 @@ example-tools.ndp
 
 ## First-party Missing Music request plugin
 
-The repository includes `plugins/missing-music`, a removable request-only
-extension. It compares MusicBrainz album and recording identifiers with the
-enabled MVBar libraries, presents missing albums or tracks to users, and stores
-an approval queue in plugin-owned database rows.
+The public [`mvbar-plugins`](https://github.com/mariof1/mvbar-plugins)
+repository contains the Missing Music source and installable package. Install
+it directly from **Admin → Plugins → Official MVBar plugins**.
+It compares MusicBrainz album and recording identifiers with the enabled MVBar
+libraries, presents missing albums or tracks to users, and stores an approval
+queue in plugin-owned database rows. Local artists without MusicBrainz tags are
+included and can be matched once through MusicBrainz; the saved match is reused.
 
-Approved requests can be handed to an administrator-configured external HTTP
-service. MVBar sends metadata and MusicBrainz identifiers only. The extension
-has no download, media storage, import, or streaming path; delivery stays
-outside the plugin. Removing the package cascades its request rows and
-MusicBrainz cache.
+The plugin works without external configuration as a managed wanted list.
+Administrators can approve, reject, and manually mark requests fulfilled.
+Optionally, approved requests can be handed to an administrator-configured
+external HTTP service. MVBar sends metadata and MusicBrainz identifiers only.
+The extension has no download, media storage, import, or streaming path;
+delivery stays outside the plugin. Removing the package cascades its request
+rows, saved artist matches, and MusicBrainz cache.
 
-Build the installable package with:
-
-```bash
-cd api
-npm run build:missing-music-plugin
-```
-
-The output is `plugins/missing-music/dist/mvbar-missing-music.ndp`. See
-`plugins/missing-music/README.md` for the provider API contract.
+Plugin releases can be updated in that repository without rebuilding MVBar.
+MVBar retains an older bundled package as an offline installation fallback.
+See the [Missing Music documentation](https://github.com/mariof1/mvbar-plugins/tree/main/plugins/missing-music)
+for setup, troubleshooting, publishing instructions, and the optional provider
+API contract.
 
 ## Backups
 

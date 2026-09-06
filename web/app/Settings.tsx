@@ -10,6 +10,8 @@ import {
   getSubsonicSettings,
   setSubsonicPassword,
   clearSubsonicPassword,
+  clearAllRecommendationFeedback,
+  getRecommendationFeedback,
 } from './apiClient';
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
@@ -59,6 +61,8 @@ export function Settings() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [recommendationTuningCount, setRecommendationTuningCount] = useState(0);
+  const [resettingRecommendationTuning, setResettingRecommendationTuning] = useState(false);
 
   // Unlink Google state
   const [unlinkAction, setUnlinkAction] = useState<'convert' | 'delete' | null>(null);
@@ -78,6 +82,21 @@ export function Settings() {
   const [subsonicLoading, setSubsonicLoading] = useState(false);
   const [subsonicError, setSubsonicError] = useState<string | null>(null);
   const [subsonicNotice, setSubsonicNotice] = useState<string | null>(null);
+
+  // OpenRouter AI music settings
+  const openrouterConfigured = usePreferences((s) => s.openrouterConfigured);
+  const openrouterSource = usePreferences((s) => s.openrouterSource);
+  const [orApiKey, setOrApiKey] = useState('');
+  const [orLoading, setOrLoading] = useState(false);
+  const [orError, setOrError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const requestedTab = window.sessionStorage.getItem('mvbar_settings_tab');
+    if (requestedTab === 'account' || requestedTab === 'playback' || requestedTab === 'notifications' || requestedTab === 'integrations' || requestedTab === 'about') {
+      setActiveTab(requestedTab);
+    }
+    window.sessionStorage.removeItem('mvbar_settings_tab');
+  }, []);
 
   // Load profile
   const loadProfile = async () => {
@@ -114,10 +133,37 @@ export function Settings() {
           setSubsonicConfigured(r.configured);
         })
         .catch(() => {});
+      getRecommendationFeedback(token)
+        .then((result) => setRecommendationTuningCount(result.preferences.length))
+        .catch(() => {});
     }
     loadVersion();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, loadPreferences]);
+
+  const resetRecommendationTuning = async () => {
+    if (!token || recommendationTuningCount === 0) return;
+    const confirmed = await showConfirm({
+      title: 'Reset recommendation tuning?',
+      message: 'This restores hidden mixes and clears your “more like this”, “less from this artist”, and “not for me” choices. Your listening history and favourites are not changed.',
+      confirmLabel: 'Reset tuning',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    setResettingRecommendationTuning(true);
+    setError(null);
+    try {
+      await clearAllRecommendationFeedback(token);
+      setRecommendationTuningCount(0);
+      setNotice('Recommendation tuning reset');
+    } catch (resetError: any) {
+      if (resetError?.status === 401) clear();
+      setError(resetError?.message || 'Failed to reset recommendation tuning');
+    } finally {
+      setResettingRecommendationTuning(false);
+    }
+  };
 
   // Avatar upload
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -598,6 +644,30 @@ export function Settings() {
                 disabled={!lastfmEnabled}
               />
             </section>
+
+            <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Recommendation tuning</h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  Your feedback helps mvbar adjust future mixes. Listening history and favourites remain the main signals.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void resetRecommendationTuning()}
+                  disabled={resettingRecommendationTuning || recommendationTuningCount === 0}
+                  className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:text-slate-500"
+                >
+                  {resettingRecommendationTuning ? 'Resetting…' : 'Reset recommendation tuning'}
+                </button>
+                <span className="text-xs text-slate-500">
+                  {recommendationTuningCount === 0
+                    ? 'No manual tuning saved'
+                    : `${recommendationTuningCount} saved ${recommendationTuningCount === 1 ? 'choice' : 'choices'}`}
+                </span>
+              </div>
+            </section>
           </>
         )}
 
@@ -660,6 +730,103 @@ export function Settings() {
                 {subsonicNotice && <div className="text-green-400 text-sm">{subsonicNotice}</div>}
                 {subsonicError && <div className="text-red-400 text-sm">{subsonicError}</div>}
               </div>
+            </section>
+
+            {/* OpenRouter AI */}
+            <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                {openrouterConfigured ? (
+                  <svg className="w-5 h-5 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                  </svg>
+                ) : (
+                  <span className="text-lg">✨</span>
+                )}
+                AI Mix
+              </h2>
+
+              <p className="text-sm text-slate-400">
+                Describe the music you want in plain language, then preview, play or queue a mix from your own library. Only your prompt is sent to <a href="https://openrouter.ai" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">OpenRouter</a>; MVBar chooses tracks locally from your permitted libraries. “Similar” requests can also use the server&apos;s Last.fm artist-similarity service.
+              </p>
+
+              {openrouterConfigured ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
+                    <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <div>
+                      <div className="text-green-400 font-medium">
+                        {openrouterSource === 'server' ? 'Available from this server' : 'Personal API key connected'}
+                      </div>
+                      <div className="text-sm text-slate-400">Choose AI Mix from Search, then describe a mood, genre, era or activity.</div>
+                    </div>
+                  </div>
+                  {openrouterSource === 'personal' ? (
+                    <button
+                      onClick={async () => {
+                        setOrLoading(true);
+                        setOrError(null);
+                        try {
+                          const saved = await updatePreferences(token!, { openrouter_api_key: '' });
+                          if (!saved) setOrError('Failed to remove API key');
+                        } catch {
+                          setOrError('Failed to remove API key');
+                        }
+                        setOrLoading(false);
+                      }}
+                      disabled={orLoading}
+                      className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
+                    >
+                      {orLoading ? 'Disconnecting...' : 'Remove personal API key'}
+                    </button>
+                  ) : (
+                    <p className="text-xs text-slate-500">
+                      Your administrator supplies the OpenRouter access. The default model uses OpenRouter&apos;s free router.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-3 max-w-md">
+                  <div className="text-sm text-slate-400">
+                    Get an API key from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">OpenRouter Keys</a>. MVBar uses the free model router by default, subject to OpenRouter&apos;s availability and limits.
+                  </div>
+                  <input
+                    aria-label="OpenRouter API key"
+                    name="openrouter-api-key"
+                    type="password"
+                    autoComplete="off"
+                    placeholder="Paste your OpenRouter API key"
+                    value={orApiKey}
+                    onChange={(e) => setOrApiKey(e.target.value)}
+                    maxLength={500}
+                    className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!orApiKey.trim()) return;
+                      setOrLoading(true);
+                      setOrError(null);
+                      try {
+                        const saved = await updatePreferences(token!, { openrouter_api_key: orApiKey.trim() });
+                        if (saved) {
+                          setOrApiKey('');
+                        } else {
+                          setOrError('Failed to save API key');
+                        }
+                      } catch {
+                        setOrError('Failed to save API key');
+                      }
+                      setOrLoading(false);
+                    }}
+                    disabled={orLoading || !orApiKey.trim()}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors"
+                  >
+                    {orLoading ? 'Saving...' : 'Connect OpenRouter'}
+                  </button>
+                </div>
+              )}
+              {orError && <div className="text-red-400 text-sm">{orError}</div>}
             </section>
 
             {/* ListenBrainz */}

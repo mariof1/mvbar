@@ -1,11 +1,11 @@
 {
   "name": "mvbar-api",
-  "version": "2.5.8",
+  "version": "2.5.9",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "build:missing-music-plugin": "node scripts/build-missing-music-plugin.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/copy-bundled-plugins.mjs",
+    "audit:recommendations": "node scripts/audit-recommendations.mjs",
     "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs",
     "start": "node dist/index.js",
     "dev": "node --watch --loader ts-node/esm src/index.ts",

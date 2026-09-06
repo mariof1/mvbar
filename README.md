@@ -73,6 +73,7 @@ services:
       # Sandboxed plugins
       PLUGINS_ENABLED: ${PLUGINS_ENABLED:-true}
       PLUGINS_DIR: /data/plugins
+      PLUGIN_REGISTRY_URL: ${PLUGIN_REGISTRY_URL:-https://raw.githubusercontent.com/mariof1/mvbar-plugins/main/registry.json}
 
       # Worker
       # Mount your music below and list the container paths here.
