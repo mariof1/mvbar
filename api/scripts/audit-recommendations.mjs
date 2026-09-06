@@ -60,9 +60,9 @@ function inspectSlate(result) {
   const allTracks = result.buckets.flatMap((bucket) => bucket.tracks);
   const ids = allTracks.map((track) => String(track.id));
   const maxBuckets = result.recommendationProfile === 'personalized'
-    ? 6
+    ? 8
     : result.recommendationProfile === 'learning'
-      ? 5
+      ? 6
       : 4;
   if (result.buckets.length > maxBuckets) failures.push(`bucket limit exceeded (${result.buckets.length}/${maxBuckets})`);
   if (new Set(ids).size !== ids.length) failures.push('duplicate tracks across slate');
@@ -95,7 +95,7 @@ function inspectSlate(result) {
   }
   const maxArtist = Math.max(0, ...slateArtists.values());
   const maxAlbum = Math.max(0, ...slateAlbums.values());
-  if (maxArtist > 6) failures.push(`slate artist cap exceeded (${maxArtist}/6)`);
+  if (maxArtist > 8) failures.push(`slate artist cap exceeded (${maxArtist}/8)`);
   if (maxAlbum > 6) failures.push(`slate album cap exceeded (${maxAlbum}/6)`);
 
   return {

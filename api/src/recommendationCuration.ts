@@ -58,9 +58,9 @@ const PREFIX_POLICIES: Array<[string, BucketPolicy]> = [
 
 const ROLE_CAPS: Record<BucketRole, number> = {
   personal: 1,
-  discovery: 2,
+  discovery: 3,
   familiar: 2,
-  context: 2,
+  context: 4,
   library: 1,
 };
 
@@ -73,15 +73,18 @@ const GROUP_CAPS: Record<string, number> = {
   'similar-artist': 1,
   'recent-intent': 1,
   'because-album': 1,
-  'daily-mix': 1,
-  'taste-slice': 1,
+  'daily-mix': 2,
+  'taste-slice': 2,
   'listening-context': 1,
   utility: 1,
   'cold-start': 1,
 };
 
 const MAX_TRACKS_PER_BUCKET = 30;
-const MAX_TRACKS_PER_ARTIST_ACROSS_SLATE = 6;
+// Eight buckets need a little more headroom for an artist to appear in a
+// purpose-built lane such as Deep Cuts after also surfacing in the anchor mix.
+// Per-bucket caps still prevent any one artist from dominating a mix.
+const MAX_TRACKS_PER_ARTIST_ACROSS_SLATE = 8;
 const MAX_TRACKS_PER_ALBUM_ACROSS_SLATE = 6;
 export const MIN_PERSONALIZATION_SAMPLES = 5;
 const NEW_LISTENER_BUCKETS = new Set([
@@ -203,8 +206,8 @@ export function recommendationBucketLimit(
 ): number {
   const maturity = recommendationMaturity(confidence, positiveSamples);
   if (maturity === 'new') return 4;
-  if (maturity === 'learning') return 5;
-  return 6;
+  if (maturity === 'learning') return 6;
+  return 8;
 }
 
 /** Blend a trusted pool with an exploration pool in a predictable 2:1 ratio. */

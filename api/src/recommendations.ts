@@ -64,8 +64,8 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     const RECO_LAST_GOOD_TTL = 7 * 24 * 60 * 60;
     const allowedKey = allowed === null ? 'all' : (allowed.length > 0 ? [...allowed].sort((a, b) => a - b).join(',') : 'none');
     const revision = await recommendationRevision(userId);
-    const cacheKey = `reco:v10:${userId}:${allowedKey}:${revision}`;
-    const lastGoodKey = `reco:v10:last:${userId}:${allowedKey}`;
+    const cacheKey = `reco:v11:${userId}:${allowedKey}:${revision}`;
+    const lastGoodKey = `reco:v11:last:${userId}:${allowedKey}`;
     const isBackgroundRevalidation = req.headers['x-mvbar-revalidate'] === revalidationToken;
     const query = req.query as { refresh?: string };
     const forceRefresh = req.user.role === 'admin' && query.refresh === '1';
@@ -1014,7 +1014,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     // ========================================================================
-    // BUCKET: DAILY MIXES (up to 4)
+    // BUCKET: DAILY MIXES
     // ========================================================================
 
     // Group genres into families
@@ -1042,12 +1042,14 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       dailySeed(userId, 'daily_mix_bucket'),
       ([, family]) => family.score,
     );
-    for (const [familyKey, familyData] of rotatingFamilies) {
+    // Build several viable genre-family candidates in parallel, then keep up
+    // to three. Curation displays at most two, so broad listeners get genuine
+    // choice while a weak or highly overlapping family can still be dropped.
+    const dailyMixOptions = await Promise.all(rotatingFamilies.map(async ([familyKey, familyData]) => {
       const family = GENRE_FAMILIES.find((candidate) => candidate.key === familyKey);
       const genreList = family ? family.tokens : [...familyData.genres];
-      
       const mixR = await db().query<TrackData>(
-        `select distinct on (t.id) 
+        `select distinct on (t.id)
                 t.id, t.title, t.artist, t.album, t.art_path, t.art_hash, t.updated_at,
                 coalesce(s.play_count, 0)::int as play_count,
                 coalesce(s.skip_count, 0)::int as skip_count,
@@ -1061,21 +1063,26 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
          limit 150`,
         allowed ? [userId, genreList, allowed] : [userId, genreList]
       );
+      if (mixR.rows.length < 15) return null;
 
-      if (mixR.rows.length < 15) continue;
-
-      const scored = mixR.rows.map(t => ({ ...t, score: scoreTrack(t, scoringOpts) }));
       const seed = dailySeed(userId, 'daily_mix', familyKey);
-      const diverse = diversify(scored, { maxPerArtist: 3, maxPerAlbum: 3, limit: 50, seed });
+      const scored = mixR.rows.map(t => ({ ...t, score: scoreTrack(t, scoringOpts) }));
+      const tracks = diversify(scored, { maxPerArtist: 3, maxPerAlbum: 3, limit: 50, seed });
+      if (tracks.length < 10) return null;
+      return { familyKey, familyData, tracks };
+    }));
 
-      if (diverse.length >= 10) {
-        const added = await addBucket(
-          `daily_mix_${familyKey.replace(/\W/g, '_')}`,
-          `${familyData.label} Mix`,
-          diverse,
-          'Familiar favourites and new finds • Refreshed daily'
-        );
-        if (added) break;
+    let dailyMixCount = 0;
+    for (const option of dailyMixOptions) {
+      if (!option) continue;
+      if (addBucket(
+        `daily_mix_${option.familyKey.replace(/\W/g, '_')}`,
+        `${option.familyData.label} Mix`,
+        option.tracks,
+        'Familiar favourites and new finds • Refreshed daily'
+      )) {
+        dailyMixCount++;
+        if (dailyMixCount >= 3) break;
       }
     }
 
@@ -1523,6 +1530,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
       forced: forceRefresh,
       profile: recommendationProfile,
       bucketCount: hydratedBuckets.length,
+      candidateBucketCount: buckets.length,
       trackCount: hydratedBuckets.reduce((count, bucket) => count + bucket.tracks.length, 0),
       hiddenMixCount: tasteProfile.hiddenBucketCount,
       durationMs: Date.now() - requestStartedAt,

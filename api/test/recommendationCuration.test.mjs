@@ -21,8 +21,8 @@ test('adapts the amount of choice to taste-profile maturity', () => {
   assert.equal(recommendationMaturity(0.2), 'learning');
   assert.equal(recommendationMaturity(0.8), 'personalized');
   assert.equal(recommendationBucketLimit(0), 4);
-  assert.equal(recommendationBucketLimit(0.2), 5);
-  assert.equal(recommendationBucketLimit(0.8), 6);
+  assert.equal(recommendationBucketLimit(0.2), 6);
+  assert.equal(recommendationBucketLimit(0.8), 8);
 });
 
 test('keeps sparse taste signals in onboarding', () => {
@@ -62,13 +62,13 @@ test('builds a compact slate with personal, discovery, familiar and context role
   const result = curateRecommendationBuckets(candidates, { confidence: 0.8, seed: 123 });
   const keys = result.map((item) => item.key);
 
-  assert.equal(result.length, 6);
+  assert.equal(result.length, 8);
   assert.equal(keys[0], 'made_for_you');
   assert.ok(keys.includes('discover_weekly'));
   assert.ok(keys.some((key) => key === 'on_repeat' || key === 'rediscover'));
   assert.ok(keys.some((key) => key.startsWith('daily_mix_') || key.startsWith('decade_') || key.startsWith('language_')));
-  assert.equal(keys.filter((key) => key.startsWith('daily_mix_')).length <= 1, true);
-  assert.equal(keys.filter((key) => key.startsWith('decade_') || key.startsWith('language_')).length <= 1, true);
+  assert.equal(keys.filter((key) => key.startsWith('daily_mix_')).length, 2);
+  assert.equal(keys.filter((key) => key.startsWith('decade_') || key.startsWith('language_')).length <= 2, true);
   assert.equal(keys.includes('top_picks'), false);
   assert.equal(keys.includes('recently_added'), false);
   assert.equal(keys.includes('favorites'), false);
@@ -147,7 +147,7 @@ test('enforces artist exposure across a bucket', () => {
   assert.ok([...counts.values()].every((count) => count <= 2));
 });
 
-test('does not overshoot slate exposure caps while preparing a later bucket', () => {
+test('does not overshoot the expanded slate exposure cap while preparing a later bucket', () => {
   const sharedArtistTracks = (start, count, artist, albumPrefix) => Array.from(
     { length: count },
     (_, index) => ({
@@ -194,7 +194,7 @@ test('does not overshoot slate exposure caps while preparing a later bucket', ()
     .flatMap((item) => item.tracks)
     .filter((track) => track.artist === 'Shared Artist')
     .length;
-  assert.equal(sharedArtistCount, 6);
+  assert.equal(sharedArtistCount, 8);
 });
 
 test('uses popular and recently added instead of two freshness buckets for onboarding', () => {

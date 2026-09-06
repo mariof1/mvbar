@@ -29,6 +29,7 @@ import { telegramPlugin } from './telegram.js';
 import { userAuditPlugin } from './userAudit.js';
 import { socialPlugin } from './social.js';
 import { initializeWebPush, pushNotificationsPlugin } from './pushNotifications.js';
+import { aiPlugin } from './ai.js';
 import googleAuthPlugin, { startAvatarSyncScheduler } from './googleAuth.js';
 import { backupPlugin } from './backup.js';
 import { initDb } from './db.js';
@@ -154,6 +155,7 @@ await app.register(audiobooksPlugin);
 await app.register(preferencesPlugin);
 await app.register(deviceLogsPlugin);
 await app.register(telegramPlugin);
+await app.register(aiPlugin);
 
 const host = process.env.HOST ?? '0.0.0.0';
 await app.listen({ port: config.port, host });

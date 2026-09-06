@@ -10,10 +10,14 @@ import {
   getRecentSearches,
   removeRecentSearch,
   saveRecentSearch,
+  sendAiIntent,
+  type AiIntentResponse,
+  type AiIntentTrack,
   type RecentSearch,
   type RecentSearchInput,
 } from './apiClient';
 import { useFavorites } from './favoritesStore';
+import { usePreferences } from './preferencesStore';
 import { useRouter } from './router';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
@@ -21,6 +25,7 @@ import { useUi, type PodcastEpisode } from './uiStore';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
+import { useToastStore } from './Toast';
 
 type Hit = {
   id: number;
@@ -74,6 +79,16 @@ type PodcastEpisodeHit = PodcastEpisode & {
   image_path?: string | null;
   podcast_image_path?: string | null;
 };
+
+type SearchMode = 'library' | 'ai';
+
+const AI_SEARCH_SUGGESTIONS = [
+  'Soft music for a late-night flight',
+  'Play British grunge and similar',
+  'Play 10 songs, each 10 minutes or longer',
+  'Queue upbeat electronic music',
+  'Jazz for a rainy afternoon',
+];
 
 function getInitials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -224,19 +239,27 @@ interface SearchModalProps {
   onClose: () => void;
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
   onAddToQueue?: (t: { id: number; title: string | null; artist: string | null }) => void;
+  onPlayAll?: (tracks: AiIntentTrack[]) => void;
+  onQueueAll?: (tracks: AiIntentTrack[]) => void;
 }
 
-export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchModalProps) {
+export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, onQueueAll }: SearchModalProps) {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
   const navigate = useRouter((s) => s.navigate);
   const setPodcastEpisode = useUi((s) => s.setPodcastEpisode);
   const favIds = useFavorites((s) => s.ids);
   const toggleFav = useFavorites((s) => s.toggle);
+  const openrouterConfigured = usePreferences((s) => s.openrouterConfigured);
   const lastUpdate = useLibraryUpdates((s) => s.lastUpdate);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const [mode, setMode] = useState<SearchMode>('library');
   const [q, setQ] = useState('');
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState<AiIntentResponse | null>(null);
   const [hits, setHits] = useState<Hit[]>([]);
   const [artistHits, setArtistHits] = useState<ArtistHit[]>([]);
   const [albumHits, setAlbumHits] = useState<AlbumHit[]>([]);
@@ -298,6 +321,11 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
       setPodcastEpisodeHits([]);
       setLoading(false);
       setError(null);
+      setMode('library');
+      setAiPrompt('');
+      setAiLoading(false);
+      setAiError(null);
+      setAiResult(null);
     }
   }, [isOpen]);
 
@@ -313,7 +341,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
 
   // Search API call (debounced)
   useEffect(() => {
-    if (!isOpen || !token || q.trim().length === 0) {
+    if (!isOpen || mode !== 'library' || !token || q.trim().length === 0) {
       if (q.trim().length === 0) {
         setLoading(false);
         setHits([]);
@@ -374,7 +402,55 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
       clearTimeout(id);
       controller?.abort();
     };
-  }, [q, isOpen, token, clear, lastUpdate]);
+  }, [q, mode, isOpen, token, clear, lastUpdate]);
+
+  const handleAiSearch = useCallback(async () => {
+    const prompt = aiPrompt.trim();
+    if (!token || !prompt || aiLoading) return;
+
+    setAiLoading(true);
+    setAiError(null);
+    setAiResult(null);
+    try {
+      const result = await sendAiIntent(token, prompt);
+
+      if (result.tracks.length === 0) {
+        setAiError(`No matching tracks were found in your permitted libraries. ${result.explanation}`);
+        return;
+      }
+
+      if (result.action === 'play' || result.action === 'queue') {
+        if (result.action === 'play') {
+          if (onPlayAll) onPlayAll(result.tracks);
+          else {
+            const first = result.tracks[0];
+            onPlay?.({ id: first.id, title: first.title, artist: first.displayArtist || first.artist });
+          }
+          useToastStore.getState().show(
+            result.tracks.length < result.requestedTrackCount
+              ? `Playing ${result.tracks.length} of ${result.requestedTrackCount} matching tracks`
+              : `Playing ${result.tracks.length} matching tracks`,
+            'success'
+          );
+        } else if (onQueueAll) {
+          onQueueAll(result.tracks);
+        } else {
+          result.tracks.forEach((track) => {
+            onAddToQueue?.({ id: track.id, title: track.title, artist: track.displayArtist || track.artist });
+          });
+        }
+        onClose();
+        return;
+      }
+
+      setAiResult(result);
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      setAiError(e?.data?.error || e?.message || 'AI music request failed');
+    } finally {
+      setAiLoading(false);
+    }
+  }, [aiPrompt, aiLoading, token, clear, onPlayAll, onQueueAll, onPlay, onAddToQueue, onClose]);
 
   const dismissRecentSearch = useCallback(async (item: RecentSearch) => {
     if (!token) return;
@@ -505,27 +581,56 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
       >
         <div className="glass rounded-2xl border border-white/10 shadow-2xl shadow-black/50 overflow-hidden">
           {/* Search Input */}
-          <div className="flex items-center gap-3 px-5 py-4 border-b border-white/10">
-            <svg className="w-5 h-5 text-cyan-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
+          <div className="flex items-center gap-2 sm:gap-3 px-4 sm:px-5 py-4 border-b border-white/10">
+            {mode === 'ai' ? (
+              <span className="w-5 text-lg leading-none text-center flex-shrink-0" aria-hidden="true">✨</span>
+            ) : (
+              <svg className="w-5 h-5 text-cyan-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            )}
             <input
               ref={inputRef}
-              aria-label="Search library"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search songs, artists, albums, podcasts..."
-              className="flex-1 bg-transparent text-white text-lg placeholder-slate-500 focus:outline-none"
+              aria-label={mode === 'ai' ? 'Ask AI for music' : 'Search library'}
+              value={mode === 'ai' ? aiPrompt : q}
+              onChange={(e) => {
+                if (mode === 'ai') {
+                  setAiPrompt(e.target.value);
+                  setAiError(null);
+                } else {
+                  setQ(e.target.value);
+                  setAiResult(null);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (mode === 'ai' && e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAiSearch();
+                }
+              }}
+              placeholder={mode === 'ai'
+                ? 'Try “play soft music” or describe a mood...'
+                : 'Search songs, artists, albums, podcasts...'}
+              maxLength={mode === 'ai' ? 500 : 200}
+              className="min-w-0 flex-1 bg-transparent text-white text-base sm:text-lg placeholder-slate-500 focus:outline-none"
               autoComplete="off"
-              maxLength={200}
               spellCheck={false}
             />
-            {loading && (
+            {(loading || aiLoading) && (
               <div className="w-5 h-5 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
             )}
-            {q && !loading && (
+            {(mode === 'ai' ? aiPrompt : q) && !loading && !aiLoading && (
               <button
-                onClick={() => { setQ(''); inputRef.current?.focus(); }}
+                onClick={() => {
+                  if (mode === 'ai') {
+                    setAiPrompt('');
+                    setAiError(null);
+                    setAiResult(null);
+                  } else {
+                    setQ('');
+                  }
+                  inputRef.current?.focus();
+                }}
                 className="p-1 hover:bg-white/10 rounded-md transition-colors flex-shrink-0"
                 aria-label="Clear search"
                 title="Clear search"
@@ -535,13 +640,198 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                 </svg>
               </button>
             )}
-            <kbd className="hidden sm:inline-flex items-center px-2 py-1 text-[11px] text-slate-500 bg-white/5 rounded border border-white/10 font-mono">
-              ESC
-            </kbd>
+            {mode === 'library' ? (
+              <button
+                onClick={() => {
+                  setAiPrompt(q);
+                  setAiError(null);
+                  setAiResult(null);
+                  setMode('ai');
+                  setTimeout(() => inputRef.current?.focus(), 0);
+                }}
+                className="flex-shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 transition-colors text-xs font-medium"
+                title="Play or search with natural language"
+              >
+                <span aria-hidden="true">✨</span>
+                <span className="hidden sm:inline">Ask AI</span>
+                <span className="sm:hidden">AI</span>
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => {
+                    setMode('library');
+                    setAiError(null);
+                    setAiResult(null);
+                    setTimeout(() => inputRef.current?.focus(), 0);
+                  }}
+                  className="flex-shrink-0 px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors text-xs"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={handleAiSearch}
+                  disabled={aiLoading || !aiPrompt.trim() || !openrouterConfigured}
+                  className="flex-shrink-0 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 text-white transition-colors text-xs font-medium"
+                >
+                  Go
+                </button>
+              </>
+            )}
           </div>
 
           {/* Results */}
           <div className="max-h-[60vh] overflow-y-auto overscroll-contain">
+            {mode === 'ai' ? (
+              <div className={`min-h-[280px] px-4 py-6 sm:px-6 sm:py-8 flex flex-col ${aiResult ? 'items-stretch text-left' : 'items-center justify-center text-center'}`}>
+                {!openrouterConfigured ? (
+                  <>
+                    <div className="w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-400/20 flex items-center justify-center text-2xl mb-4">
+                      🔑
+                    </div>
+                    <h3 className="text-white font-semibold">Connect OpenRouter to use AI music</h3>
+                    <p className="text-sm text-slate-400 max-w-md mt-2">
+                      Add your own API key in Settings, or ask the server administrator to configure one. MVBar sends only the words you type here—not your library or listening data.
+                    </p>
+                    <button
+                      onClick={() => {
+                        window.sessionStorage.setItem('mvbar_settings_tab', 'integrations');
+                        navigate({ type: 'settings' });
+                        onClose();
+                      }}
+                      className="mt-5 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm transition-colors"
+                    >
+                      Open integration settings
+                    </button>
+                  </>
+                ) : aiResult ? (
+                  <>
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 flex-none items-center justify-center rounded-xl border border-violet-400/20 bg-violet-500/10 text-xl" aria-hidden="true">✨</div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="font-semibold text-white">Your AI mix</h3>
+                        <p className="mt-1 text-sm text-slate-300">{aiResult.explanation}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {aiResult.tracks.length < aiResult.requestedTrackCount
+                            ? `${aiResult.tracks.length} of ${aiResult.requestedTrackCount} matching tracks`
+                            : `${aiResult.tracks.length} matching tracks`}
+                          {' · '}{aiResult.model}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onPlayAll) onPlayAll(aiResult.tracks);
+                          else {
+                            const first = aiResult.tracks[0];
+                            onPlay?.({ id: first.id, title: first.title, artist: first.displayArtist || first.artist });
+                          }
+                          useToastStore.getState().show(`Playing ${aiResult.tracks.length}-track AI mix`, 'success');
+                          onClose();
+                        }}
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                      >
+                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+                        Play mix
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onQueueAll) onQueueAll(aiResult.tracks);
+                          else aiResult.tracks.forEach((track) => onAddToQueue?.({ id: track.id, title: track.title, artist: track.displayArtist || track.artist }));
+                          useToastStore.getState().show(`${aiResult.tracks.length} AI mix tracks added to the queue`, 'success');
+                          onClose();
+                        }}
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                      >
+                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><path strokeLinecap="round" d="M4 6h10M4 12h10M4 18h7" /><path strokeLinecap="round" strokeLinejoin="round" d="M18 11v6m-3-3h6" /></svg>
+                        Add to queue
+                      </button>
+                    </div>
+
+                    <div className="mt-4 space-y-1" aria-label="AI mix preview">
+                      {aiResult.tracks.slice(0, 10).map((track, index) => (
+                        <button
+                          key={track.id}
+                          type="button"
+                          onClick={() => {
+                            onPlay?.({ id: track.id, title: track.title, artist: track.displayArtist || track.artist });
+                            onClose();
+                          }}
+                          className="group flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition hover:bg-white/[0.07] focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                        >
+                          <span className="w-5 flex-none text-center text-xs tabular-nums text-slate-600">{index + 1}</span>
+                          <span className="relative h-10 w-10 flex-none overflow-hidden rounded-lg bg-white/[0.06]">
+                            <img
+                              src={`/api/library/tracks/${track.id}/art`}
+                              alt=""
+                              className="h-full w-full object-cover"
+                              onError={(event) => { event.currentTarget.style.display = 'none'; }}
+                            />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium text-white">{track.title || track.path}</span>
+                            <span className="block truncate text-xs text-slate-500">{[track.displayArtist || track.artist, track.album].filter(Boolean).join(' · ') || 'Unknown artist'}</span>
+                          </span>
+                          <svg className="h-4 w-4 flex-none text-slate-600 transition group-hover:text-white" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+                        </button>
+                      ))}
+                    </div>
+                    {aiResult.tracks.length > 10 && (
+                      <p className="mt-2 text-center text-xs text-slate-500">and {aiResult.tracks.length - 10} more in the mix</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAiResult(null);
+                        setTimeout(() => inputRef.current?.focus(), 0);
+                      }}
+                      className="mx-auto mt-5 rounded-lg px-3 py-2 text-xs font-medium text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
+                    >
+                      Refine prompt
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-400/20 flex items-center justify-center text-2xl mb-4">
+                      ✨
+                    </div>
+                    <h3 className="text-white font-semibold">Describe your mix</h3>
+                    <p className="text-sm text-slate-400 max-w-md mt-2">
+                      MVBar understands mood, tempo, style, era, origin and length. A description creates a preview; say “play” or “queue” to act immediately.
+                    </p>
+                    <div className="flex flex-wrap justify-center gap-2 mt-5">
+                      {AI_SEARCH_SUGGESTIONS.map((suggestion) => (
+                        <button
+                          key={suggestion}
+                          onClick={() => {
+                            setAiPrompt(suggestion);
+                            setAiError(null);
+                            setAiResult(null);
+                            setTimeout(() => inputRef.current?.focus(), 0);
+                          }}
+                          className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-violet-500/15 border border-white/10 hover:border-violet-400/30 text-xs text-slate-300 hover:text-violet-100 transition-colors"
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-6">
+                      Your request is sent to OpenRouter. The default free model provider may log the prompt. For “similar” requests, seed artist names may also use the server&apos;s Last.fm integration. Library contents stay inside MVBar.
+                    </p>
+                  </>
+                )}
+                {aiError && (
+                  <div className="mt-5 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 text-sm">
+                    {aiError}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
             {error && (
               <div className="px-5 py-3 text-red-400 text-sm border-b border-white/5">{error}</div>
             )}
@@ -890,6 +1180,8 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue }: SearchMod
                   <p className="mt-1 text-xs text-slate-600">Artists, albums, songs, and more that you open will appear here.</p>
                 </div>
               )
+            )}
+              </>
             )}
           </div>
         </div>

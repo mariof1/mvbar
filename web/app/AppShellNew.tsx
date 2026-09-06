@@ -2807,6 +2807,20 @@ export function AppShellNew() {
         onClose={() => setSearchOpen(false)}
         onPlay={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
         onAddToQueue={(t) => addToQueue({ id: t.id, title: t.title, artist: t.artist })}
+        onPlayAll={(tracks) => setQueueAndPlay(tracks.map((t) => ({
+          id: t.id,
+          title: t.title,
+          artist: t.displayArtist || t.artist,
+          album: t.album,
+          duration_ms: t.durationMs,
+        })), 0)}
+        onQueueAll={(tracks) => addManyToQueue(tracks.map((t) => ({
+          id: t.id,
+          title: t.title,
+          artist: t.displayArtist || t.artist,
+          album: t.album,
+          duration_ms: t.durationMs,
+        })))}
       />
 
       <ToastContainer />

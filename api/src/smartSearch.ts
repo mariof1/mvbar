@@ -55,7 +55,7 @@ const COUNTRY_CODE_ALIASES: Record<string, string> = {
 
 // Country name normalization for unambiguous natural-language terms.
 const COUNTRY_ALIASES: Record<string, string> = {
-  'usa': 'USA', 'united states': 'USA', 'america': 'USA',
+  'usa': 'USA', 'united states': 'USA', 'united states of america': 'USA', 'america': 'USA', 'american': 'USA',
   'united kingdom': 'United Kingdom', 'england': 'United Kingdom', 'britain': 'United Kingdom', 'british': 'United Kingdom', 'great britain': 'United Kingdom',
   'poland': 'Poland', 'polska': 'Poland',
   'germany': 'Germany', 'deutschland': 'Germany',

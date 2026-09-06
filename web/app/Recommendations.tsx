@@ -357,7 +357,7 @@ export function Recommendations() {
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-lg font-semibold text-white">Made for you</h3>
-              <p className="text-xs text-slate-500">A focused mix of favourites, rediscovery, and new finds</p>
+              <p className="text-xs text-slate-500">Personal picks, familiar favourites, and more ways to explore</p>
             </div>
             {(backgroundRefreshing || serverRefreshing) && <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" title="Refreshing recommendations" />}
           </div>

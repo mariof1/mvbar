@@ -1420,3 +1420,61 @@ export type ScanProgress = {
 export async function getScanProgress(token: string) {
   return (await apiFetch('/scan/progress', { method: 'GET' }, token)) as ScanProgress;
 }
+
+// =========================================================================
+// AI Music
+// =========================================================================
+
+export interface AiIntentTrack {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  albumArtist: string | null;
+  displayArtist: string | null;
+  album: string | null;
+  path: string;
+  ext: string;
+  durationMs: number | null;
+}
+
+export interface AiIntentResponse {
+  ok: boolean;
+  model: string;
+  requestedModel: string;
+  usedFreeFallback: boolean;
+  originalQuery: string;
+  action: 'play' | 'queue' | 'search';
+  requestedTrackCount: number;
+  searchQuery: string;
+  explanation: string;
+  interpretation: {
+    moods: string[];
+    genres: string[];
+    relatedGenres: string[];
+    requireGenreMatch: boolean;
+    countries: string[];
+    countryMode: 'strict' | 'prefer' | 'any';
+    yearStart: number | null;
+    yearEnd: number | null;
+    namedArtists: string[];
+    similarToArtists: string[];
+    referenceArtists: string[];
+    similarArtists: string[];
+    includeSimilar: boolean;
+    avoid: string[];
+    energy: 'low' | 'medium' | 'high' | 'any';
+    bpmMin: number | null;
+    bpmMax: number | null;
+    targetBpm: number | null;
+    minDurationMinutes: number | null;
+    maxDurationMinutes: number | null;
+  };
+  tracks: AiIntentTrack[];
+}
+
+export async function sendAiIntent(token: string, query: string): Promise<AiIntentResponse> {
+  return (await apiFetch('/ai/intent', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  }, token)) as AiIntentResponse;
+}
