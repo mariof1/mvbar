@@ -30,7 +30,6 @@ function send(socket: WebSocket, type: string, data?: unknown): void {
 }
 
 function publicConnectDevice(device: ConnectDeviceRegistration) {
-  const { queue: _queue, ...state } = device.state;
   return {
     id: device.deviceId,
     name: device.name,
@@ -38,7 +37,16 @@ function publicConnectDevice(device: ConnectDeviceRegistration) {
     appVersion: device.appVersion,
     platform: device.platform,
     capabilities: device.capabilities,
-    state: { ...state, queueLength: device.state.queue.length },
+    state: {
+      track: device.state.track,
+      queueIndex: device.state.queueIndex,
+      queueLength: device.state.queue.length,
+      isPlaying: device.state.isPlaying,
+      positionMs: device.state.positionMs,
+      durationMs: device.state.durationMs,
+      volume: device.state.volume,
+      updatedAt: device.state.updatedAt,
+    },
   };
 }
 
