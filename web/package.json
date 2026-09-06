@@ -6,7 +6,8 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:picker": "playwright test tests/smart-picker.spec.ts --workers=1"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",

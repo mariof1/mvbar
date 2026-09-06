@@ -92,6 +92,8 @@ function SmartPicker({
 }) {
   const inputId = useId();
   const pickerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const pendingArrow = useRef<'ArrowDown' | 'ArrowUp' | null>(null);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [query, setQuery] = useState('');
   const [suggestionResults, setSuggestions] = useState<any[]>([]);
@@ -108,7 +110,11 @@ function SmartPicker({
     const t = setTimeout(async () => {
       try {
         const r = await suggestSmartPlaylist(token, kind, query);
-        if (active) { setSuggestions(r.items ?? []); setActiveIndex(-1); }
+        if (active) {
+          setSuggestions(r.items ?? []);
+          // Preserve an arrow press made during the debounced request.
+          setActiveIndex(-1);
+        }
       } catch {}
     }, 300);
     return () => { active = false; clearTimeout(t); };
@@ -123,15 +129,34 @@ function SmartPicker({
     return () => document.removeEventListener('pointerdown', dismiss);
   }, [showSuggestions]);
 
+  useEffect(() => {
+    if (!showSuggestions || suggestions.length === 0) return;
+    if (pendingArrow.current) {
+      setActiveIndex(pendingArrow.current === 'ArrowUp' ? suggestions.length - 1 : 0);
+      pendingArrow.current = null;
+    } else if (activeIndex >= suggestions.length) {
+      setActiveIndex(suggestions.length - 1);
+    }
+  }, [suggestionResults, selected, showSuggestions, activeIndex, suggestions.length]);
+
+  useEffect(() => {
+    if (showSuggestions && activeIndex >= 0) {
+      document.getElementById(`${inputId}-option-${activeIndex}`)?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [activeIndex, showSuggestions, inputId]);
+
   const addItem = (item: any) => {
     const val = valueKey === 'value' ? item : item[valueKey];
     const exists = selected.some((s) => (valueKey === 'value' ? s === val : s[valueKey] === val));
     if (!exists) {
       onChange([...selected, valueKey === 'value' ? item : item]);
     }
+    pendingArrow.current = null;
+    setActiveIndex(-1);
     setQuery('');
     setSuggestions([]);
     setShowSuggestions(false);
+    inputRef.current?.focus();
   };
 
   const removeItem = (item: any) => {
@@ -145,6 +170,7 @@ function SmartPicker({
     }} onKeyDown={(event) => {
       if (event.key === 'Escape') {
         event.stopPropagation();
+        pendingArrow.current = null;
         setShowSuggestions(false);
         setActiveIndex(-1);
       }
@@ -163,6 +189,7 @@ function SmartPicker({
       </div>
       <div className="relative">
         <input
+          ref={inputRef}
           id={inputId}
           role="combobox"
           aria-autocomplete="list"
@@ -170,18 +197,30 @@ function SmartPicker({
           aria-controls={showSuggestions && suggestions.length > 0 ? `${inputId}-list` : undefined}
           aria-activedescendant={showSuggestions && activeIndex >= 0 ? `${inputId}-option-${activeIndex}` : undefined}
           onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return;
             if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
               event.preventDefault();
+              event.stopPropagation();
               setShowSuggestions(true);
-              setActiveIndex((index) => event.key === 'ArrowDown' ? Math.min(index + 1, suggestions.length - 1) : Math.max(index - 1, 0));
-            } else if (event.key === 'Enter' && showSuggestions && suggestions[activeIndex]) {
+              if (suggestions.length === 0) {
+                pendingArrow.current = event.key;
+                return;
+              }
+              pendingArrow.current = null;
+              const direction = event.key === 'ArrowDown' ? 1 : -1;
+              setActiveIndex(index => index < 0
+                ? (direction === 1 ? 0 : suggestions.length - 1)
+                : (index + direction + suggestions.length) % suggestions.length);
+            } else if (event.key === 'Enter' && showSuggestions) {
               event.preventDefault();
-              addItem(suggestions[activeIndex]);
-              setActiveIndex(-1);
+              event.stopPropagation();
+              const item = suggestions[activeIndex >= 0 ? activeIndex : 0];
+              if (item !== undefined) addItem(item);
             }
           }}
           value={query}
           onChange={(e) => {
+            pendingArrow.current = null;
             setQuery(e.target.value);
             setActiveIndex(-1);
             setSuggestions([]);
@@ -197,6 +236,8 @@ function SmartPicker({
               <button
                 key={idx}
                 id={`${inputId}-option-${idx}`}
+                type="button"
+                tabIndex={-1}
                 role="option"
                 aria-selected={idx === activeIndex}
                 onMouseDown={(event) => event.preventDefault()}

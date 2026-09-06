@@ -34,3 +34,7 @@ infra/caddy/Caddyfile.lan
 
 # Editor swap files
 *.swp
+
+# Browser test artifacts
+test-results/
+playwright-report/
