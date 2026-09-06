@@ -24,6 +24,7 @@ import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
+import { ArtworkImage } from './ArtworkImage';
 
 type Tab = 'artists' | 'albums' | 'genres' | 'countries' | 'languages';
 
@@ -153,14 +154,6 @@ function getGenreColor(genre: string): string {
     hash = genre.charCodeAt(i) + ((hash << 5) - hash);
   }
   return GENRE_COLORS[Math.abs(hash) % GENRE_COLORS.length];
-}
-
-function getInitials(name: string): string {
-  return name
-    .split(/[\s&,]+/)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join('');
 }
 
 function formatDuration(ms: number | null): string {
@@ -817,19 +810,7 @@ export function BrowseNew(props: {
         </button>
 
         <div className="flex items-end gap-4 sm:gap-6">
-          {albumDetail.art_path ? (
-            <img
-              src={`/api/art/${albumDetail.art_path}`}
-              alt={albumDetail.name}
-              className="w-24 h-24 sm:w-48 sm:h-48 rounded-xl shadow-2xl object-cover"
-            />
-          ) : (
-            <div className="w-24 h-24 sm:w-48 sm:h-48 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
-              <svg className="w-8 h-8 sm:w-16 sm:h-16 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-              </svg>
-            </div>
-          )}
+          <ArtworkImage src={albumDetail.art_path ? `/api/art/${albumDetail.art_path}` : null} alt={albumDetail.name} kind="album" className="w-24 h-24 sm:w-48 sm:h-48 rounded-xl shadow-2xl flex-shrink-0" />
           <div className="min-w-0">
             <h1 className="text-lg sm:text-3xl font-bold text-white truncate leading-tight">{albumDetail.name}</h1>
             <p className="text-sm sm:text-xl text-slate-400 mt-1 truncate">{albumDetail.artist}</p>
@@ -1251,11 +1232,7 @@ export function BrowseNew(props: {
 
         <div className="flex items-center gap-6">
           <div className="w-32 h-32 rounded-full overflow-hidden bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-4xl font-bold text-white shadow-xl">
-            {artistArt?.art_path ? (
-              <img src={`/api/art/${artistArt.art_path}`} alt={selectedArtist.name} className="w-full h-full object-cover" />
-            ) : (
-              getInitials(selectedArtist.name)
-            )}
+            <ArtworkImage src={artistArt?.art_path ? `/api/art/${artistArt.art_path}` : null} alt={selectedArtist.name} kind="artist" className="w-full h-full" />
           </div>
           <div>
             <h1 className="text-3xl font-bold text-white">{selectedArtist.name}</h1>
@@ -1285,15 +1262,7 @@ export function BrowseNew(props: {
                     className="w-full text-left"
                   >
                     <div className="aspect-square rounded-lg overflow-hidden bg-slate-800 mb-2 shadow-lg group-hover:shadow-xl transition-shadow">
-                      {a.art_path ? (
-                        <img src={`/api/art/${a.art_path}`} alt={a.album} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                      ) : (
-                        <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
-                          <svg className="w-12 h-12 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                          </svg>
-                        </div>
-                      )}
+                      <ArtworkImage src={a.art_path ? `/api/art/${a.art_path}` : null} alt={a.album} kind="album" className="w-full h-full group-hover:scale-105 transition-transform" />
                     </div>
                     <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
                     <div className="text-sm text-slate-500">{formatCount(a.track_count, 'track')}</div>
@@ -1327,15 +1296,7 @@ export function BrowseNew(props: {
                     className="w-full text-left"
                   >
                     <div className="aspect-square rounded-lg overflow-hidden bg-slate-800 mb-2 shadow-lg group-hover:shadow-xl transition-shadow">
-                      {a.art_path ? (
-                        <img src={`/api/art/${a.art_path}`} alt={a.album} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                      ) : (
-                        <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
-                          <svg className="w-12 h-12 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                          </svg>
-                        </div>
-                      )}
+                      <ArtworkImage src={a.art_path ? `/api/art/${a.art_path}` : null} alt={a.album} kind="album" className="w-full h-full group-hover:scale-105 transition-transform" />
                     </div>
                     <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
                     <div className="text-sm text-slate-500 truncate">{a.album_artist}</div>
@@ -1690,11 +1651,7 @@ export function BrowseNew(props: {
                   className="w-full text-center p-4 rounded-xl hover:bg-slate-800/50 transition-colors"
                 >
                   <div className="w-24 h-24 mx-auto rounded-full overflow-hidden bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center text-2xl font-bold text-white group-hover:from-cyan-500 group-hover:to-blue-600 transition-all shadow-lg">
-                    {a.art_path ? (
-                      <img src={`/api/art/${a.art_path}`} alt={a.name} className="w-full h-full object-cover" />
-                    ) : (
-                      getInitials(a.name)
-                    )}
+                    <ArtworkImage src={a.art_path ? `/api/art/${a.art_path}` : null} alt={a.name} kind="artist" className="w-full h-full" />
                   </div>
                   <div className="mt-3 font-medium text-white truncate group-hover:text-cyan-400">{a.name}</div>
                   <div className="text-sm text-slate-500">{formatCount(a.album_count, 'album')}</div>
@@ -1732,15 +1689,7 @@ export function BrowseNew(props: {
                   className="w-full text-left"
                 >
                   <div className="aspect-square rounded-lg overflow-hidden bg-slate-800 mb-2 shadow-lg group-hover:shadow-xl transition-shadow">
-                    {a.art_path ? (
-                      <img src={`/api/art/${a.art_path}`} alt={a.album} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                    ) : (
-                      <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
-                        <svg className="w-12 h-12 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                        </svg>
-                      </div>
-                    )}
+                    <ArtworkImage src={a.art_path ? `/api/art/${a.art_path}` : null} alt={a.album} kind="album" className="w-full h-full group-hover:scale-105 transition-transform" />
                   </div>
                   <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
                   <div className="text-sm text-slate-500 truncate">{formatArtistValue(a.display_artist) ?? 'Unknown Artist'}</div>

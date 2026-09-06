@@ -9,6 +9,7 @@ import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { useUi, type PodcastEpisode } from './uiStore';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
+import { ArtworkImage } from './ArtworkImage';
 import { formatCount } from './format';
 
 type Hit = {
@@ -87,25 +88,8 @@ function episodeArtUrl(episode: PodcastEpisodeHit) {
 }
 
 function ArtistArt({ name, art_path, art_hash }: { name: string; art_path: string | null; art_hash: string | null }) {
-  const [error, setError] = useState(false);
-
-  if (!art_path || error) {
-    return (
-      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-slate-600 to-slate-700 flex-shrink-0 flex items-center justify-center text-sm font-bold text-white">
-        {getInitials(name)}
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={`/api/art/${encodeURIComponent(art_path)}${art_hash ? `?h=${art_hash}` : ''}`}
-      alt=""
-      className="w-10 h-10 rounded-lg object-cover bg-slate-700 flex-shrink-0"
-      loading="lazy"
-      onError={() => setError(true)}
-    />
-  );
+  return <ArtworkImage src={art_path ? `/api/art/${encodeURIComponent(art_path)}${art_hash ? `?h=${art_hash}` : ''}` : null}
+    alt={name} kind="artist" className="w-10 h-10 rounded-lg flex-shrink-0" />;
 }
 
 export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hit) => void }) {
@@ -282,16 +266,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
                       }}
                       className="group p-3 bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 rounded-xl transition-all duration-200 text-left flex items-center gap-3 cursor-pointer"
                     >
-                      <img
-                        src={a.art_track_id ? `/api/library/tracks/${a.art_track_id}/art` : ''}
-                        alt=""
-                        className="w-10 h-10 rounded-lg object-cover bg-slate-700 flex-shrink-0"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          e.currentTarget.nextElementSibling?.classList.remove('hidden');
-                        }}
-                      />
-                      <div className="hidden w-10 h-10 rounded-lg bg-slate-700 flex-shrink-0" />
+                      <ArtworkImage src={a.art_track_id ? `/api/library/tracks/${a.art_track_id}/art` : null} alt={a.album} kind="album" className="w-10 h-10 rounded-lg flex-shrink-0" />
                       <div className="min-w-0 flex-1">
                         <div className="font-semibold text-white truncate">{a.album}</div>
                         <div className="text-xs text-slate-400 truncate">
