@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   normalizeConnectCommand,
+  normalizeConnectCommandResult,
   normalizeConnectRegistration,
   normalizeConnectState,
   normalizeConnectTransfer,
@@ -60,6 +61,16 @@ test('connect commands and transfers require valid targets and allowlisted actio
     payload: { positionMs: 5000 },
   });
   assert.equal(normalizeConnectCommand({ targetDeviceId: 'tv-1', commandId: 'cmd-2', command: 'format_disk' }), null);
+  assert.deepEqual(normalizeConnectCommandResult({
+    commandId: 'cmd-1',
+    success: false,
+    error: ' Playback failed\u0000 ',
+  }), {
+    commandId: 'cmd-1',
+    success: false,
+    error: 'Playback failed',
+  });
+  assert.equal(normalizeConnectCommandResult({ commandId: 'cmd-1', success: 'yes' }), null);
   assert.deepEqual(normalizeConnectTransfer({
     sourceDeviceId: 'phone-1',
     targetDeviceId: 'tv-1',

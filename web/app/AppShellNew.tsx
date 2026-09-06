@@ -28,6 +28,7 @@ import { formatCount } from './format';
 import { useAuth } from './store';
 import { useFavorites } from './favoritesStore';
 import { usePlayer, type QueueTrack } from './playerStore';
+import { useConnectPlayer } from './connectPlayer';
 import {
   MUSIC_AUDIO_ELEMENT_ID,
   directMusicStreamUrl,
@@ -56,7 +57,6 @@ import {
 } from './apiClient';
 import {
   publishMvbarConnectState,
-  sendMvbarConnectCommand,
   subscribeMvbarConnectCommands,
   transferMvbarPlayback,
   useMvbarConnect,
@@ -2174,10 +2174,9 @@ export function AppShellNew() {
     queue,
     index,
     isOpen,
-    playTrackNow: playTrackLocally,
     playIndex: playIndexLocally,
-    addToQueue: addToQueueLocally,
     addManyToQueue: addManyToQueueLocally,
+    playNextMany: playNextManyLocally,
     removeFromQueue: removeFromQueueLocally,
     reorderQueue: reorderQueueLocally,
     clearQueue: clearQueueLocally,
@@ -2195,6 +2194,19 @@ export function AppShellNew() {
   const selectConnectDevice = useMvbarConnect((state) => state.selectDevice);
   const selectedConnectDevice = connectDevices.find((device) => device.id === selectedConnectDeviceId) ?? null;
   const controllingRemote = Boolean(selectedConnectDevice && selectedConnectDevice.id !== localConnectDeviceId);
+  const {
+    setQueueAndPlay,
+    playTrackNow,
+    addToQueue,
+    addManyToQueue,
+    next,
+    prev,
+    playIndex,
+    removeFromQueue,
+    reorderQueue,
+    clearQueue,
+    close,
+  } = useConnectPlayer();
 
   const asConnectTrack = useCallback((track: QueueTrack): MvbarConnectTrack => ({
     id: Number(track.id),
@@ -2204,66 +2216,6 @@ export function AppShellNew() {
     artPath: track.art_path ?? null,
     durationMs: track.duration_ms ?? null,
   }), []);
-
-  const setQueueAndPlay = useCallback((tracks: QueueTrack[], startIndex: number) => {
-    if (controllingRemote && selectedConnectDevice) {
-      sendMvbarConnectCommand(selectedConnectDevice.id, 'play_tracks', {
-        tracks: tracks.map(asConnectTrack),
-        queueIndex: startIndex,
-        positionMs: 0,
-        isPlaying: true,
-      });
-      return;
-    }
-    setQueueAndPlayLocally(tracks, startIndex);
-  }, [asConnectTrack, controllingRemote, selectedConnectDevice, setQueueAndPlayLocally]);
-
-  const playTrackNow = useCallback((track: QueueTrack) => setQueueAndPlay([track], 0), [setQueueAndPlay]);
-
-  const addManyToQueue = useCallback((tracks: QueueTrack[]) => {
-    if (controllingRemote && selectedConnectDevice) {
-      sendMvbarConnectCommand(selectedConnectDevice.id, 'add_tracks', { tracks: tracks.map(asConnectTrack) });
-      return;
-    }
-    addManyToQueueLocally(tracks);
-  }, [addManyToQueueLocally, asConnectTrack, controllingRemote, selectedConnectDevice]);
-
-  const addToQueue = useCallback((track: QueueTrack) => {
-    if (controllingRemote && selectedConnectDevice) {
-      sendMvbarConnectCommand(selectedConnectDevice.id, 'add_tracks', { tracks: [asConnectTrack(track)] });
-      return;
-    }
-    addToQueueLocally(track);
-  }, [addToQueueLocally, asConnectTrack, controllingRemote, selectedConnectDevice]);
-
-  const next = useCallback(() => {
-    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'next');
-    else nextLocally();
-  }, [controllingRemote, nextLocally, selectedConnectDevice]);
-  const prev = useCallback(() => {
-    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'previous');
-    else prevLocally();
-  }, [controllingRemote, prevLocally, selectedConnectDevice]);
-  const playIndex = useCallback((targetIndex: number) => {
-    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'play_index', { index: targetIndex });
-    else playIndexLocally(targetIndex);
-  }, [controllingRemote, playIndexLocally, selectedConnectDevice]);
-  const removeFromQueue = useCallback((targetIndex: number) => {
-    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'remove_index', { index: targetIndex });
-    else removeFromQueueLocally(targetIndex);
-  }, [controllingRemote, removeFromQueueLocally, selectedConnectDevice]);
-  const reorderQueue = useCallback((from: number, to: number) => {
-    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'reorder', { from, to });
-    else reorderQueueLocally(from, to);
-  }, [controllingRemote, reorderQueueLocally, selectedConnectDevice]);
-  const clearQueue = useCallback(() => {
-    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'clear_queue');
-    else clearQueueLocally();
-  }, [clearQueueLocally, controllingRemote, selectedConnectDevice]);
-  const close = useCallback(() => {
-    if (controllingRemote && selectedConnectDevice) sendMvbarConnectCommand(selectedConnectDevice.id, 'stop');
-    else closeLocalPlayer();
-  }, [closeLocalPlayer, controllingRemote, selectedConnectDevice]);
 
   const token = useAuth((s) => s.token);
   const user = useAuth((s) => s.user);
@@ -2297,7 +2249,7 @@ export function AppShellNew() {
   const loadPreferences = usePreferences((s) => s.load);
 
   // Initialize WebSocket connection for live updates
-  useWebSocket(isAdmin);
+  useWebSocket(user?.id ?? null);
 
   useEffect(() => subscribeMvbarConnectCommands(async (incoming) => {
     const payload = incoming.payload || {};
@@ -2319,23 +2271,28 @@ export function AppShellNew() {
             };
           }).filter((track): track is QueueTrack => track != null)
         : [];
-      if (tracks.length === 0) return;
+      if (tracks.length === 0) throw new Error('The transferred queue has no playable tracks.');
       const targetIndex = Math.max(0, Math.min(tracks.length - 1, Number(payload.queueIndex) || 0));
       setQueueAndPlayLocally(tracks, targetIndex);
-      const applyRemotePosition = () => {
-        const activeAudio = getMusicAudioElement();
-        if (!activeAudio) return;
-        const positionSeconds = Math.max(0, (Number(payload.positionMs) || 0) / 1000);
-        if (Number.isFinite(activeAudio.duration) && activeAudio.duration > 0) {
-          activeAudio.currentTime = Math.min(activeAudio.duration, positionSeconds);
-        } else {
-          activeAudio.currentTime = positionSeconds;
+      const activeAudio = getMusicAudioElement();
+      if (!activeAudio) throw new Error('The music player is not available.');
+      const positionSeconds = Math.max(0, (Number(payload.positionMs) || 0) / 1000);
+      if (Number.isFinite(activeAudio.duration) && activeAudio.duration > 0) {
+        activeAudio.currentTime = Math.min(activeAudio.duration, positionSeconds);
+      } else {
+        activeAudio.currentTime = positionSeconds;
+      }
+      if (payload.isPlaying === false) {
+        activeAudio.pause();
+      } else {
+        try {
+          await activeAudio.play();
+        } catch (error) {
+          reportMusicPlaybackFailure(error);
+          throw new Error('Playback was blocked on this player. Open it once and try again.');
         }
-        if (payload.isPlaying === false) activeAudio.pause();
-      };
-      if (audio?.readyState) applyRemotePosition();
-      else getMusicAudioElement()?.addEventListener('loadedmetadata', applyRemotePosition, { once: true });
-      return;
+      }
+      return true;
     }
     if (incoming.command === 'add_tracks') {
       const tracks = Array.isArray(payload.tracks)
@@ -2354,28 +2311,90 @@ export function AppShellNew() {
           }).filter((track): track is QueueTrack => track != null)
         : [];
       addManyToQueueLocally(tracks);
-      return;
+      return tracks.length > 0;
     }
-    if (incoming.command === 'play') await audio?.play().catch(reportMusicPlaybackFailure);
-    else if (incoming.command === 'pause') audio?.pause();
+    if (incoming.command === 'play_next') {
+      const tracks = Array.isArray(payload.tracks)
+        ? payload.tracks.map((value): QueueTrack | null => {
+            if (!value || typeof value !== 'object') return null;
+            const track = value as Record<string, unknown>;
+            const id = Number(track.id);
+            return Number.isFinite(id) && id > 0 ? {
+              id,
+              title: typeof track.title === 'string' ? track.title : null,
+              artist: typeof track.artist === 'string' ? track.artist : null,
+              album: typeof track.album === 'string' ? track.album : null,
+              art_path: typeof track.artPath === 'string' ? track.artPath : null,
+              duration_ms: typeof track.durationMs === 'number' ? track.durationMs : null,
+            } : null;
+          }).filter((track): track is QueueTrack => track != null)
+        : [];
+      playNextManyLocally(tracks);
+      return tracks.length > 0;
+    }
+    if (incoming.command === 'play') {
+      if (!audio) return false;
+      try {
+        await audio.play();
+      } catch (error) {
+        reportMusicPlaybackFailure(error);
+        throw new Error('Playback was blocked on this player.');
+      }
+    }
+    else if (incoming.command === 'pause') {
+      if (!audio) return false;
+      audio.pause();
+    }
     else if (incoming.command === 'toggle') {
-      if (audio?.paused) await audio.play().catch(reportMusicPlaybackFailure);
-      else audio?.pause();
-    } else if (incoming.command === 'next') nextLocally();
-    else if (incoming.command === 'previous') prevLocally();
+      if (!audio) return false;
+      if (audio.paused) {
+        try {
+          await audio.play();
+        } catch (error) {
+          reportMusicPlaybackFailure(error);
+          throw new Error('Playback was blocked on this player.');
+        }
+      } else audio.pause();
+    } else if (incoming.command === 'next') {
+      const state = usePlayer.getState();
+      if (state.index >= state.queue.length - 1) return false;
+      nextLocally();
+    }
+    else if (incoming.command === 'previous') {
+      if (usePlayer.getState().index <= 0) return false;
+      prevLocally();
+    }
     else if (incoming.command === 'seek' && audio) {
       audio.currentTime = Math.max(0, Math.min(audio.duration || Number.MAX_SAFE_INTEGER, (Number(payload.positionMs) || 0) / 1000));
     } else if (incoming.command === 'stop') closeLocalPlayer();
-    else if (incoming.command === 'play_index') playIndexLocally(Number(payload.index) || 0);
-    else if (incoming.command === 'remove_index') removeFromQueueLocally(Number(payload.index) || 0);
-    else if (incoming.command === 'reorder') reorderQueueLocally(Number(payload.from) || 0, Number(payload.to) || 0);
+    else if (incoming.command === 'play_index') {
+      const targetIndex = Number(payload.index) || 0;
+      if (targetIndex < 0 || targetIndex >= usePlayer.getState().queue.length) return false;
+      playIndexLocally(targetIndex);
+    }
+    else if (incoming.command === 'remove_index') {
+      const targetIndex = Number(payload.index) || 0;
+      if (targetIndex < 0 || targetIndex >= usePlayer.getState().queue.length) return false;
+      removeFromQueueLocally(targetIndex);
+    }
+    else if (incoming.command === 'reorder') {
+      const from = Number(payload.from) || 0;
+      const to = Number(payload.to) || 0;
+      const queueLength = usePlayer.getState().queue.length;
+      if (from < 0 || to < 0 || from >= queueLength || to >= queueLength) return false;
+      reorderQueueLocally(from, to);
+    }
     else if (incoming.command === 'clear_queue') clearQueueLocally();
+    else if (incoming.command === 'seek') return false;
+    else return false;
+    return true;
   }), [
     addManyToQueueLocally,
     clearQueueLocally,
     closeLocalPlayer,
     nextLocally,
     playIndexLocally,
+    playNextManyLocally,
     prevLocally,
     removeFromQueueLocally,
     reorderQueueLocally,

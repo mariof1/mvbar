@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from './store';
-import { usePlayer } from './playerStore';
+import { useConnectPlayer } from './connectPlayer';
 import { apiFetch, browseAlbum } from './apiClient';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
@@ -72,7 +72,7 @@ export function RecentlyAdded({
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [tracksLoading, setTracksLoading] = useState(false);
-  const { setQueueAndPlay, addToQueue: addToPlayerQueue } = usePlayer();
+  const { setQueueAndPlay, addToQueue: addToPlayerQueue } = useConnectPlayer();
 
   // Live updates
   const libraryLastUpdate = useLibraryUpdates((s) => s.lastUpdate);

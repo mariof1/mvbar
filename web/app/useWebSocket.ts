@@ -8,6 +8,7 @@ import { useAuth } from './store';
 import { apiFetch, getWebClientId, type AdminBackup, type AdminBackupJob } from './apiClient';
 import { useSocialUpdates } from './socialStore';
 import { systemSocialNotificationsEnabled } from './pushNotifications';
+import { usePlayer } from './playerStore';
 
 type LibraryUpdate = {
   type: 'library:update';
@@ -114,6 +115,7 @@ export type MvbarConnectTrack = {
 
 export type MvbarConnectPlaybackState = {
   track: MvbarConnectTrack | null;
+  queue: MvbarConnectTrack[];
   queueIndex: number;
   queueLength: number;
   isPlaying: boolean;
@@ -146,7 +148,8 @@ type ConnectUpdate =
   | { type: 'connect:replaced'; data: { deviceId: string } }
   | { type: 'connect:error'; data: { error: string } }
   | { type: 'connect:command'; data: MvbarConnectCommand }
-  | { type: 'connect:command_ack'; data: { commandId: string; accepted: boolean; error?: string } };
+  | { type: 'connect:command_ack'; data: { commandId: string; accepted: boolean; executed?: boolean; error?: string } }
+  | { type: 'auth:session_invalid'; data: { error?: string } };
 
 export type BackupUpdate =
   | { type: 'backup:started'; data: { job: AdminBackupJob } }
@@ -391,7 +394,8 @@ let localConnectState: LocalConnectState = {
   volume: null,
 };
 
-const connectCommandHandlers = new Set<(command: MvbarConnectCommand) => void | Promise<void>>();
+const connectCommandHandlers = new Set<(command: MvbarConnectCommand) => boolean | void | Promise<boolean | void>>();
+const CONNECT_DEVICE_NAME_KEY = 'mvbar_connect_device_name';
 
 function connectSessionId(): string {
   const key = 'mvbar_connect_session_id';
@@ -407,33 +411,53 @@ function localConnectDeviceId(): string {
   return `${getWebClientId()}:${connectSessionId()}`.slice(0, 128);
 }
 
-function browserDeviceName(): string {
-  const ua = navigator.userAgent;
-  const browser = /Edg\//.test(ua) ? 'Edge'
-    : /Firefox\//.test(ua) ? 'Firefox'
-      : /CriOS\//.test(ua) ? 'Chrome'
-        : /Chrome\//.test(ua) ? 'Chrome'
-          : /Safari\//.test(ua) ? 'Safari'
-            : 'Web player';
-  const standalone = window.matchMedia?.('(display-mode: standalone)').matches;
-  return `${browser}${standalone ? ' app' : ''} on ${navigator.platform || 'this device'}`;
+export function describeMvbarConnectBrowser(userAgent: string, navigatorPlatform: string, standalone: boolean) {
+  // Chromium-based Edge uses Edg/, EdgA/, and EdgiOS/ on desktop, Android, and iOS.
+  const browser = /Edg(?:A|iOS)?\//.test(userAgent) ? 'Edge'
+    : /FxiOS\/|Firefox\//.test(userAgent) ? 'Firefox'
+      : /CriOS\/|Chrome\//.test(userAgent) ? 'Chrome'
+        : /Safari\//.test(userAgent) ? 'Safari'
+          : 'Web player';
+  const platform = /Android/i.test(userAgent) ? 'Android'
+    : /iPhone|iPad|iPod/i.test(userAgent) ? 'iOS'
+      : /Windows NT/i.test(userAgent) ? 'Windows'
+        : /CrOS/i.test(userAgent) ? 'ChromeOS'
+          : /Mac OS X/i.test(userAgent) ? 'macOS'
+            : navigatorPlatform || 'this device';
+  return {
+    name: `${browser}${standalone ? ' PWA' : ''} on ${platform}`,
+    platform,
+    type: standalone ? 'pwa' : 'web',
+  };
 }
 
 function registerMvbarConnect(ws: WebSocket): void {
   const deviceId = localConnectDeviceId();
+  const identity = describeMvbarConnectBrowser(
+    navigator.userAgent,
+    navigator.platform,
+    Boolean(window.matchMedia?.('(display-mode: standalone)').matches),
+  );
   useMvbarConnect.getState().setLocalDeviceId(deviceId);
   ws.send(JSON.stringify({
     type: 'connect:register',
     data: {
       deviceId,
-      name: browserDeviceName(),
-      type: window.matchMedia?.('(display-mode: standalone)').matches ? 'pwa' : 'web',
+      name: window.localStorage.getItem(CONNECT_DEVICE_NAME_KEY)?.trim().slice(0, 120) || identity.name,
+      type: identity.type,
       appVersion: '0.1.0',
-      platform: navigator.platform || 'browser',
-      capabilities: ['music', 'remote-control', 'transfer'],
+      platform: identity.platform,
+      capabilities: ['music', 'remote-control', 'transfer', 'command-results-v1', 'play-next'],
       state: localConnectState,
     },
   }));
+}
+
+export function renameLocalMvbarConnectDevice(name: string): void {
+  const normalized = name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 120);
+  if (normalized) window.localStorage.setItem(CONNECT_DEVICE_NAME_KEY, normalized);
+  else window.localStorage.removeItem(CONNECT_DEVICE_NAME_KEY);
+  if (globalWs?.readyState === WebSocket.OPEN) registerMvbarConnect(globalWs);
 }
 
 export function publishMvbarConnectState(state: LocalConnectState): void {
@@ -458,7 +482,7 @@ export function transferMvbarPlayback(sourceDeviceId: string, targetDeviceId: st
 }
 
 export function subscribeMvbarConnectCommands(
-  handler: (command: MvbarConnectCommand) => void | Promise<void>,
+  handler: (command: MvbarConnectCommand) => boolean | void | Promise<boolean | void>,
 ): () => void {
   connectCommandHandlers.add(handler);
   return () => connectCommandHandlers.delete(handler);
@@ -474,14 +498,14 @@ export function sendWebSocketMessage(type: string, data: any): void {
 }
 
 // WebSocket connection hook
-export function useWebSocket(isAdmin = false) {
+export function useWebSocket(authIdentity: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const reconnectAttempts = useRef(0);
   const activeRef = useRef(false);
 
   const connect = useCallback(() => {
-    if (!activeRef.current) return;
+    if (!activeRef.current || !authIdentity) return;
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) return;
 
     // Determine WebSocket URL based on current location
@@ -632,7 +656,43 @@ export function useWebSocket(isAdmin = false) {
               useToastStore.getState().show(msg.data.error || 'The selected player is unavailable', 'error', 'top-right');
             }
           } else if (msg.type === 'connect:command') {
-            for (const handler of connectCommandHandlers) void handler(msg.data);
+            const handlers = [...connectCommandHandlers];
+            if (handlers.length === 0) {
+              ws.send(JSON.stringify({
+                type: 'connect:command_result',
+                data: { commandId: msg.data.commandId, success: false, error: 'This player is not ready.' },
+              }));
+            } else {
+              void Promise.all(handlers.map((handler) => handler(msg.data))).then((results) => {
+                const success = results.every((result) => result !== false);
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({
+                    type: 'connect:command_result',
+                    data: {
+                      commandId: msg.data.commandId,
+                      success,
+                      ...(success ? {} : { error: 'This player could not apply that command.' }),
+                    },
+                  }));
+                }
+              }).catch((error: unknown) => {
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({
+                    type: 'connect:command_result',
+                    data: {
+                      commandId: msg.data.commandId,
+                      success: false,
+                      error: error instanceof Error ? error.message.slice(0, 300) : 'Playback failed.',
+                    },
+                  }));
+                }
+              });
+            }
+          } else if (msg.type === 'auth:session_invalid') {
+            useMvbarConnect.getState().setConnected(false);
+            usePlayer.getState().reset();
+            useAuth.getState().clear();
+            ws.close(4001, 'Session invalidated');
           }
         } catch {
           // Ignore malformed messages
@@ -640,10 +700,11 @@ export function useWebSocket(isAdmin = false) {
       };
 
       ws.onclose = () => {
-        if (wsRef.current === ws) wsRef.current = null;
+        if (wsRef.current !== ws) return;
+        wsRef.current = null;
         if (globalWs === ws) globalWs = null;
         useMvbarConnect.getState().setConnected(false);
-        if (!activeRef.current) return;
+        if (!activeRef.current || !authIdentity) return;
         
         // Exponential backoff for reconnection
         const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
@@ -658,9 +719,23 @@ export function useWebSocket(isAdmin = false) {
     } catch {
       // Connection failed, will retry via onclose
     }
-  }, []);
+  }, [authIdentity]);
 
   useEffect(() => {
+    if (!authIdentity) {
+      useMvbarConnect.getState().setConnected(false);
+      localConnectState = {
+        track: null,
+        queue: [],
+        queueIndex: -1,
+        isPlaying: false,
+        positionMs: 0,
+        durationMs: 0,
+        volume: null,
+      };
+      usePlayer.getState().reset();
+      return;
+    }
     activeRef.current = true;
     connect();
 
@@ -690,7 +765,7 @@ export function useWebSocket(isAdmin = false) {
         wsRef.current = null;
       }
     };
-  }, [connect]);
+  }, [authIdentity, connect]);
 
   return wsRef;
 }

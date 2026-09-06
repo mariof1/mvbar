@@ -8,6 +8,7 @@ export const CONNECT_COMMANDS = [
   'stop',
   'play_tracks',
   'add_tracks',
+  'play_next',
   'play_index',
   'remove_index',
   'reorder',
@@ -51,6 +52,12 @@ export type ConnectCommand = {
   commandId: string;
   command: ConnectCommandName;
   payload: Record<string, unknown>;
+};
+
+export type ConnectCommandResult = {
+  commandId: string;
+  success: boolean;
+  error: string | null;
 };
 
 const commandSet = new Set<string>(CONNECT_COMMANDS);
@@ -141,6 +148,18 @@ export function normalizeConnectCommand(value: unknown): ConnectCommand | null {
     commandId,
     command: command as ConnectCommandName,
     payload: object(input.payload) ?? {},
+  };
+}
+
+export function normalizeConnectCommandResult(value: unknown): ConnectCommandResult | null {
+  const input = object(value);
+  if (!input) return null;
+  const commandId = text(input.commandId, 128);
+  if (!commandId || typeof input.success !== 'boolean') return null;
+  return {
+    commandId,
+    success: input.success,
+    error: text(input.error, 300),
   };
 }
 

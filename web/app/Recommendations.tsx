@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from './store';
-import { usePlayer } from './playerStore';
+import { useConnectPlayer } from './connectPlayer';
 import {
   clearHiddenRecommendationBuckets,
   getRecommendations,
@@ -216,7 +216,7 @@ function BucketCard({
 export function Recommendations() {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
-  const { setQueueAndPlay } = usePlayer();
+  const { setQueueAndPlay } = useConnectPlayer();
 
   const [loading, setLoading] = useState(false);
   const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);

@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from './store';
-import { usePlayer, type QueueTrack } from './playerStore';
+import { type QueueTrack } from './playerStore';
+import { useConnectPlayer } from './connectPlayer';
 import { listPlaylists, createPlaylist, addTracksToPlaylist } from './apiClient';
 import { useToastStore } from './Toast';
 import { ShareTrackDialog } from './ShareTrackDialog';
@@ -38,7 +39,7 @@ export function AddMenu({
 }: AddMenuProps) {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
-  const player = usePlayer();
+  const player = useConnectPlayer();
   const showToast = useToastStore((s) => s.show);
 
   const [open, setOpen] = useState(false);

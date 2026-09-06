@@ -18,7 +18,7 @@ import {
   type TrackShare,
 } from './apiClient';
 import { useAuth } from './store';
-import { usePlayer } from './playerStore';
+import { useConnectPlayer } from './connectPlayer';
 import { useToastStore } from './Toast';
 import { showConfirm } from './ConfirmModal';
 import { useSocialUpdates } from './socialStore';
@@ -108,7 +108,7 @@ function SmallButton({
 export function Social() {
   const token = useAuth((state) => state.token);
   const clear = useAuth((state) => state.clear);
-  const player = usePlayer();
+  const player = useConnectPlayer();
   const showToast = useToastStore((state) => state.show);
   const socialLastUpdate = useSocialUpdates((state) => state.lastUpdate);
   const setSocialCounts = useSocialUpdates((state) => state.setCounts);

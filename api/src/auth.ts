@@ -17,6 +17,7 @@ import { db } from './db.js';
 import cookie from '@fastify/cookie';
 import { notifyAdmins } from './telegram.js';
 import { clientInfoFromRequest, type ClientInfo } from './clientInfo.js';
+import { disconnectClientSockets, disconnectUserSockets } from './websocket.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -290,6 +291,9 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
   });
 
   app.post('/api/auth/logout', async (req, reply) => {
+    if (req.user) {
+      disconnectClientSockets(req.user.userId, clientInfoFromRequest(req).id);
+    }
     const secure = isSecureCookie(req);
     clearAuthCookie(reply, secure);
     return { ok: true };
@@ -320,6 +324,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const secure = isSecureCookie(req);
     setAuthCookie(reply, token, secure);
+    disconnectUserSockets(user.id, 'Session credentials changed');
 
     return { ok: true, token };
   });
@@ -367,6 +372,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     // Save for Subsonic token auth
     await db().query('UPDATE users SET subsonic_password = $1 WHERE id = $2', [password, id]);
     await users.bumpSessionVersion(id);
+    disconnectUserSockets(id, 'Session credentials changed');
     await audit('admin_reset_password', { userId: id, by: req.user.userId });
     return { ok: true };
   });
@@ -379,6 +385,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!user) return reply.code(404).send({ ok: false });
 
     const sv = await users.bumpSessionVersion(id);
+    disconnectUserSockets(id, 'Signed out by an administrator');
     await audit('admin_force_logout', { userId: id, by: req.user.userId, sessionVersion: sv });
 
     if (id === req.user.userId) {
@@ -443,6 +450,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     const sv = await users.bumpSessionVersion(id);
+    disconnectUserSockets(id, 'Library access changed');
     await audit('admin_set_user_libraries', { by: req.user.userId, userId: id, libraryIds, sessionVersion: sv });
     return { ok: true };
   });
@@ -461,6 +469,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
 
     await users.setRole(id, role);
     await users.bumpSessionVersion(id);
+    disconnectUserSockets(id, 'Account role changed');
     await audit('admin_set_role', { by: req.user.userId, userId: id, role });
     return { ok: true };
   });
@@ -474,6 +483,7 @@ export const authPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!u) return reply.code(404).send({ ok: false });
 
     await users.deleteUser(id);
+    disconnectUserSockets(id, 'Account deleted');
     await audit('admin_delete_user', { by: req.user.userId, userId: id, email: u.email });
     return { ok: true };
   });

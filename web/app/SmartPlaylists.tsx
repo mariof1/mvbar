@@ -13,7 +13,7 @@ import {
   type SmartFilters,
 } from './apiClient';
 import { useAuth } from './store';
-import { usePlayer } from './playerStore';
+import { useConnectPlayer } from './connectPlayer';
 import { useLibraryUpdates } from './useWebSocket';
 import { showConfirm } from './ConfirmModal';
 import { trackArtistLabel } from './artistDisplay';
@@ -169,7 +169,7 @@ function SmartPicker({
 export function SmartPlaylists() {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
-  const { setQueueAndPlay } = usePlayer();
+  const { setQueueAndPlay } = useConnectPlayer();
   const lastLibraryUpdate = useLibraryUpdates((s) => s.lastUpdate);
   const lastRefreshRef = useRef<number>(0);
 
