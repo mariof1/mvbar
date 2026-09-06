@@ -610,7 +610,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
               }}
               placeholder={mode === 'ai'
                 ? 'Try “play soft music” or describe a mood...'
-                : 'Search songs, artists, albums, podcasts...'}
+                : undefined}
               maxLength={mode === 'ai' ? 500 : 200}
               className="min-w-0 flex-1 bg-transparent text-white text-base sm:text-lg placeholder-slate-500 focus:outline-none"
               autoComplete="off"

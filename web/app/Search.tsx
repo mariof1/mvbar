@@ -204,9 +204,9 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
           </svg>
         </div>
         <input
+          aria-label="Search library"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search songs, artists, albums, podcasts..."
           className="w-full pl-12 pr-4 py-4 bg-slate-800/50 border border-slate-700/50 rounded-2xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-transparent text-lg transition-all"
         />
         {loading && (
