@@ -19,6 +19,7 @@ import { useLibraryUpdates } from './useWebSocket';
 import { showConfirm } from './ConfirmModal';
 import { trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
+import { useLatestRequest } from './useLatestRequest';
 
 const SORT_OPTIONS = [
   { value: 'random', label: 'Random' },
@@ -275,6 +276,10 @@ export function SmartPlaylists() {
   // Editor state
   const [editing, setEditing] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const beginSave = useLatestRequest(`${editing}:${editId}`, token);
+  const pendingSave = useRef<(() => boolean) | null>(null);
+  useEffect(() => { setSaving(false); }, [editing, editId, token]);
   const [editName, setEditName] = useState('');
   const editorRef = useRef<HTMLDivElement>(null);
   const detailRequest = useRef(0);
@@ -420,7 +425,7 @@ export function SmartPlaylists() {
   }
 
   async function handleSave() {
-    if (!token) return;
+    if (!token || !editing || pendingSave.current?.()) return;
     if (!editName.trim()) {
       setError('Enter a playlist name.');
       nameInputRef.current?.focus();
@@ -460,6 +465,9 @@ export function SmartPlaylists() {
       invalid('smart-date-added-from', 'Date Added From must not be after Date Added To.');
       return;
     }
+    const isCurrent = beginSave();
+    pendingSave.current = isCurrent;
+    setSaving(true);
     setError(null);
     try {
       const filters = buildFilters();
@@ -468,13 +476,21 @@ export function SmartPlaylists() {
       } else {
         await createSmartPlaylist(token, editName.trim(), editSort, filters);
       }
+      if (!isCurrent()) return;
       if (editId != null && selectedId === editId) await loadPlaylist(editId);
+      if (!isCurrent()) return;
       setEditing(false);
       setEditId(null);
       await loadPlaylists();
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
       setError(e?.data?.error ?? e?.message ?? 'error');
+    } finally {
+      if (isCurrent()) {
+        pendingSave.current = null;
+        setSaving(false);
+      }
     }
   }
 
@@ -626,6 +642,7 @@ export function SmartPlaylists() {
         {error && <div id="smart-playlist-error" role="alert" className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">{error}</div>}
 
         {/* General Settings */}
+        <fieldset disabled={saving} className="min-w-0 space-y-6">
         <div className="bg-slate-800/30 p-4 rounded-xl border border-slate-700/30 space-y-4">
           <h3 className="text-lg font-bold text-white">General</h3>
           
@@ -917,12 +934,14 @@ export function SmartPlaylists() {
         </div>
 
         {/* Actions */}
+        </fieldset>
         <div className="flex gap-3">
           <button
             onClick={handleSave}
-            className="flex-1 px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-white rounded-xl font-medium transition-colors"
+            disabled={saving}
+            className="flex-1 px-6 py-3 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white rounded-xl font-medium transition-colors"
           >
-            {editId ? 'Save Changes' : 'Create Playlist'}
+            {saving ? 'Saving…' : editId ? 'Save Changes' : 'Create Playlist'}
           </button>
           <button
             onClick={() => setEditing(false)}
