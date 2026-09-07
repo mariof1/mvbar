@@ -87,7 +87,14 @@ function routeToHash(route: Route): string {
 function hashToRoute(hash: string): Route {
   // Separate the URL query before decoding literal question marks in names.
   const [path, queryString = ''] = hash.replace(/^#\/?/, '').split('?');
-  const parts = path.split('/').map(p => decodeURIComponent(p));
+  const parts = path.split('/').map(part => {
+    try {
+      return decodeURIComponent(part);
+    } catch {
+      // Pasted names may contain literal percent signs or incomplete escapes.
+      return part;
+    }
+  });
   const query = new URLSearchParams(queryString);
   
   if (!path) return { type: 'for-you' };

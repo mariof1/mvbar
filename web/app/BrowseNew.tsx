@@ -19,6 +19,7 @@ import {
 import { useFavorites } from './favoritesStore';
 import { useAuth } from './store';
 import { useLatestRequest } from './useLatestRequest';
+import { useToastStore } from './Toast';
 import { useLibraryUpdates } from './useWebSocket';
 import { useRouter, useRoute } from './router';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
@@ -174,6 +175,7 @@ export function BrowseNew(props: {
   const token = useAuth((s) => s.token);
   const user = useAuth((s) => s.user);
   const clear = useAuth((s) => s.clear);
+  const showToast = useToastStore((s) => s.show);
   const favIds = useFavorites((s) => s.ids);
   const toggleFav = useFavorites((s) => s.toggle);
   const lastUpdate = useLibraryUpdates((s) => s.lastUpdate);
@@ -857,9 +859,16 @@ export function BrowseNew(props: {
                   {/* Actions - always visible on mobile, hover on desktop */}
                   <div className="flex items-center gap-0 sm:gap-1 sm:opacity-0 sm:group-hover:opacity-100">
                     <button
-                      onClick={(e) => {
+                      aria-label={favIds.has(track.id) ? `Remove ${track.title || 'track'} from favorites` : `Add ${track.title || 'track'} to favorites`}
+                      onClick={async (e) => {
                         e.stopPropagation();
-                        if (token) toggleFav(token, track.id);
+                        if (!token) return;
+                        try {
+                          await toggleFav(token, track.id);
+                        } catch (error: any) {
+                          if (error?.status === 401) clear();
+                          showToast('Could not update favorites. Please try again.', 'error');
+                        }
                       }}
                       className={`p-1.5 sm:p-2 rounded-full hover:bg-slate-700 ${favIds.has(track.id) ? 'text-pink-500' : 'text-slate-400'}`}
                     >
