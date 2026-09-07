@@ -189,15 +189,15 @@ export function RecentlyAdded({
           Back
         </button>
 
-        <div className="flex items-start gap-6">
+        <div className="flex items-start gap-4 sm:gap-6">
           <ArtImage 
             path={selectedAlbum.art_path} 
             hash={selectedAlbum.art_hash} 
-            className="w-40 h-40 rounded-xl" 
+            className="w-24 h-24 sm:w-40 sm:h-40 shrink-0 rounded-xl"
           />
-          <div className="flex-1">
-            <h2 className="text-2xl font-bold text-white">{selectedAlbum.album}</h2>
-            <p className="text-slate-400 mt-1">{formatArtistValue(selectedAlbum.display_artist) ?? 'Unknown Artist'}</p>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-2xl font-bold text-white [overflow-wrap:anywhere]">{selectedAlbum.album}</h2>
+            <p className="text-slate-400 mt-1 [overflow-wrap:anywhere]">{formatArtistValue(selectedAlbum.display_artist) ?? 'Unknown Artist'}</p>
             <p className="text-slate-500 text-sm mt-1">{formatCount(selectedAlbum.track_count, 'track')}</p>
             <div className="flex gap-3 mt-4">
               <button

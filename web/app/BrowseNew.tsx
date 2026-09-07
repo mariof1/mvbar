@@ -1209,12 +1209,12 @@ export function BrowseNew(props: {
           Back
         </button>
 
-        <div className="flex items-center gap-6">
-          <div className="w-32 h-32 rounded-full overflow-hidden bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-4xl font-bold text-white shadow-xl">
+        <div className="flex items-center gap-4 sm:gap-6">
+          <div className="w-24 h-24 sm:w-32 sm:h-32 shrink-0 rounded-full overflow-hidden bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-4xl font-bold text-white shadow-xl">
             <ArtworkImage src={artistArt?.art_path ? `/api/art/${artistArt.art_path}` : null} alt={selectedArtist.name} kind="artist" className="w-full h-full" />
           </div>
-          <div>
-            <h1 className="text-3xl font-bold text-white">{selectedArtist.name}</h1>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl sm:text-3xl font-bold text-white [overflow-wrap:anywhere]">{selectedArtist.name}</h1>
             <p className="text-slate-400 mt-1">{formatCount(artistAlbums.length, 'album')}</p>
             <div className="mt-3">
               <AddMenu
