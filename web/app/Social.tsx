@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   acceptFriendRequest,
   deleteTrackShare,
@@ -119,6 +119,9 @@ export function Social() {
   const [tab, setTab] = useState<'shares' | 'friends'>(routeTab);
   const [summary, setSummary] = useState<SocialSummary | null>(null);
   const [shares, setShares] = useState<TrackShare[]>([]);
+  const [shareTotal, setShareTotal] = useState(0);
+  const shareWindow = useRef(50);
+  const pendingLoad = useRef<(() => boolean) | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -136,19 +139,31 @@ export function Social() {
     navigate({ type: 'social', sub: nextTab }, true);
   };
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (requestedCount = shareWindow.current) => {
     if (!token) return;
     const isCurrent = beginLoad();
     if (!isCurrent()) return;
+    pendingLoad.current = isCurrent;
+    shareWindow.current = requestedCount;
     setRefreshing(true);
     try {
       const [nextSummary, shareResult] = await Promise.all([
         getSocialSummary(token),
-        listTrackShares(token),
+        listTrackShares(token, Math.min(100, requestedCount)),
       ]);
       if (!isCurrent()) return;
+      const nextShares = [...shareResult.shares];
+      let total = shareResult.total;
+      while (nextShares.length < requestedCount && nextShares.length < total) {
+        const page = await listTrackShares(token, Math.min(100, requestedCount - nextShares.length), nextShares.length);
+        if (!isCurrent()) return;
+        if (!page.shares.length) break;
+        nextShares.push(...page.shares);
+        total = page.total;
+      }
       setSummary(nextSummary);
-      setShares(shareResult.shares);
+      setShares(nextShares);
+      setShareTotal(total);
       setSocialCounts(nextSummary.unreadShares, nextSummary.incoming.length);
       setLoadError(false);
     } catch (error: any) {
@@ -157,11 +172,17 @@ export function Social() {
       else setLoadError(true);
     } finally {
       if (isCurrent()) {
+        pendingLoad.current = null;
         setLoading(false);
         setRefreshing(false);
       }
     }
   }, [token, clear, setSocialCounts, beginLoad]);
+
+  const loadOlderShares = () => {
+    if (pendingLoad.current?.()) return;
+    void load(shareWindow.current + 50);
+  };
 
   useEffect(() => { void load(); }, [load, socialLastUpdate]);
 
@@ -341,6 +362,11 @@ export function Social() {
               </div>
             </article>
           ))}
+          {shares.length < shareTotal && !loadError && (
+            <div className="flex justify-center py-3">
+              <SmallButton disabled={refreshing} onClick={loadOlderShares}>{refreshing ? 'Loading…' : 'Load older songs'}</SmallButton>
+            </div>
+          )}
           {shares.length === 0 && (
             <div className="rounded-2xl border border-dashed border-white/10 py-16 text-center">
               <svg className="mx-auto h-12 w-12 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
