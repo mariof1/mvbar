@@ -7,6 +7,7 @@ import { useHistoryUpdates } from './useWebSocket';
 import { AddMenu } from './AddMenu';
 import { trackArtistLabel } from './artistDisplay';
 import { formatCalendarDate } from './format';
+import { useLatestRequest } from './useLatestRequest';
 
 export function History(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
@@ -16,19 +17,27 @@ export function History(props: {
   const clear = useAuth((s) => s.clear);
   const [tracks, setTracks] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const beginRequest = useLatestRequest('history', token);
 
   // Live updates
   const historyLastUpdate = useHistoryUpdates((s) => s.lastUpdate);
 
   async function refresh() {
     if (!token) return;
+    const isCurrent = beginRequest();
+    if (!isCurrent()) return;
     setError(null);
+    setLoading(true);
     try {
       const r = await listHistory(token, 100, 0);
-      setTracks(r.tracks ?? []);
+      if (isCurrent()) setTracks(r.tracks ?? []);
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
       setError('Could not load recently played songs. Please try again.');
+    } finally {
+      if (isCurrent()) setLoading(false);
     }
   }
 
@@ -94,6 +103,7 @@ export function History(props: {
       )}
 
       {/* Track List */}
+      {loading && <p role="status" className="text-sm text-slate-400">Loading recently played songs...</p>}
       <div className="space-y-1">
         {tracks.map((t, idx) => (
           <div
@@ -127,7 +137,7 @@ export function History(props: {
           </div>
         ))}
 
-        {tracks.length === 0 && (
+        {!loading && !error && tracks.length === 0 && (
           <div className="text-center py-16 text-slate-400">
             <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />

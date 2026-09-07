@@ -553,17 +553,22 @@ export function BrowseNew(props: {
   }, [token, selectedAlbum, clear]);
 
   // Helper to refresh artist detail
+  const beginArtistRequest = useLatestRequest(selectedArtist, token);
   const refreshArtistDetail = useCallback(async () => {
     if (!token || !selectedArtist) return;
+    const isCurrent = beginArtistRequest();
+    if (!isCurrent()) return;
     try {
       const r = await browseArtistById(token, selectedArtist.id);
+      if (!isCurrent()) return;
       setArtistAlbums(r.albums);
       setArtistAppearsOn(r.appearsOn);
       setArtistArt({ art_path: r.artist.art_path, art_hash: r.artist.art_hash });
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
     }
-  }, [token, selectedArtist, clear]);
+  }, [token, selectedArtist, clear, beginArtistRequest]);
 
   const beginGenreRequest = useLatestRequest(selectedGenre, token);
 
@@ -650,12 +655,10 @@ export function BrowseNew(props: {
 
   // Load artist detail
   useEffect(() => {
-    if (!selectedArtist) {
-      setArtistAlbums([]);
-      setArtistAppearsOn([]);
-      setArtistArt(null);
-      return;
-    }
+    setArtistAlbums([]);
+    setArtistAppearsOn([]);
+    setArtistArt(null);
+    if (!selectedArtist) return;
     refreshArtistDetail();
   }, [selectedArtist, refreshArtistDetail]);
 
