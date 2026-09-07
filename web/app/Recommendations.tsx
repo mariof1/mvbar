@@ -425,7 +425,7 @@ export function Recommendations() {
               : 'mvbar could not build a varied recommendation mix from the currently available music.'}
           </p>
           <p className="text-slate-500 text-xs">
-            Tip: Connect to <a href="/settings" className="text-cyan-400 hover:underline">ListenBrainz</a> for even better recommendations!
+            Tip: Connect to <a href="#/settings" className="text-cyan-400 hover:underline">ListenBrainz</a> for even better recommendations!
           </p>
         </div>
       )}

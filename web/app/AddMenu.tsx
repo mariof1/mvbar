@@ -152,6 +152,9 @@ export function AddMenu({
       } else {
         player.playNextMany(tracks);
       }
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      showToast('Could not add tracks to play next. Please try again.', 'error');
     } finally {
       setBusy(false);
       setOpen(false);
@@ -170,6 +173,9 @@ export function AddMenu({
       } else {
         player.addManyToQueue(tracks);
       }
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      showToast('Could not add tracks to queue. Please try again.', 'error');
     } finally {
       setBusy(false);
       setOpen(false);

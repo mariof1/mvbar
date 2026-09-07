@@ -18,6 +18,7 @@ import {
 } from './apiClient';
 import { useFavorites } from './favoritesStore';
 import { useAuth } from './store';
+import { useLatestRequest } from './useLatestRequest';
 import { useLibraryUpdates } from './useWebSocket';
 import { useRouter, useRoute } from './router';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
@@ -564,38 +565,53 @@ export function BrowseNew(props: {
     }
   }, [token, selectedArtist, clear]);
 
+  const beginGenreRequest = useLatestRequest(selectedGenre, token);
+
   // Helper to refresh genre tracks
   const refreshGenreTracks = useCallback(async () => {
     if (!token || !selectedGenre) return;
+    const isCurrent = beginGenreRequest();
+    if (!isCurrent()) return;
     try {
       const r = await browseGenreTracks(token, selectedGenre, 100);
-      setGenreTracks(r.tracks);
+      if (isCurrent()) setGenreTracks(r.tracks);
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
     }
-  }, [token, selectedGenre, clear]);
+  }, [token, selectedGenre, clear, beginGenreRequest]);
+
+  const beginCountryRequest = useLatestRequest(selectedCountry, token);
 
   // Helper to refresh country tracks
   const refreshCountryTracks = useCallback(async () => {
     if (!token || !selectedCountry) return;
+    const isCurrent = beginCountryRequest();
+    if (!isCurrent()) return;
     try {
       const r = await browseCountryTracks(token, selectedCountry, 100);
-      setCountryTracks(r.tracks);
+      if (isCurrent()) setCountryTracks(r.tracks);
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
     }
-  }, [token, selectedCountry, clear]);
+  }, [token, selectedCountry, clear, beginCountryRequest]);
+
+  const beginLanguageRequest = useLatestRequest(selectedLanguage, token);
 
   // Helper to refresh language tracks
   const refreshLanguageTracks = useCallback(async () => {
     if (!token || !selectedLanguage) return;
+    const isCurrent = beginLanguageRequest();
+    if (!isCurrent()) return;
     try {
       const r = await browseLanguageTracks(token, selectedLanguage, 100);
-      setLanguageTracks(r.tracks);
+      if (isCurrent()) setLanguageTracks(r.tracks);
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
     }
-  }, [token, selectedLanguage, clear]);
+  }, [token, selectedLanguage, clear, beginLanguageRequest]);
 
   // Refresh data when library updates arrive via WebSocket.
   // We do this as a quiet, debounced background refresh to avoid visible spinners/flicker during scans.
@@ -653,28 +669,22 @@ export function BrowseNew(props: {
 
   // Load genre tracks
   useEffect(() => {
-    if (!selectedGenre) {
-      setGenreTracks([]);
-      return;
-    }
+    setGenreTracks([]);
+    if (!selectedGenre) return;
     refreshGenreTracks();
   }, [selectedGenre, refreshGenreTracks]);
 
   // Load country tracks
   useEffect(() => {
-    if (!selectedCountry) {
-      setCountryTracks([]);
-      return;
-    }
+    setCountryTracks([]);
+    if (!selectedCountry) return;
     refreshCountryTracks();
   }, [selectedCountry, refreshCountryTracks]);
 
   // Load language tracks
   useEffect(() => {
-    if (!selectedLanguage) {
-      setLanguageTracks([]);
-      return;
-    }
+    setLanguageTracks([]);
+    if (!selectedLanguage) return;
     refreshLanguageTracks();
   }, [selectedLanguage, refreshLanguageTracks]);
 
