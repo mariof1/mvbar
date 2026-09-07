@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useDialogFocus } from './useDialogFocus';
 import Hls from 'hls.js';
 import { AutoLogin } from './AutoLogin';
 import { LoginForm } from './LoginForm';
@@ -1931,24 +1932,25 @@ function MobileSidebar(props: {
   socialBadge: number;
 }) {
   const sidebarRef = useRef<HTMLElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const { isOpen, onClose } = props;
   const touchStartedInsideRef = useRef(false);
   useBodyScrollLock(props.isOpen);
+  useDialogFocus(sidebarRef, props.onClose, props.isOpen);
 
   useEffect(() => {
-    if (props.isOpen) closeButtonRef.current?.focus();
-  }, [props.isOpen]);
+    if (!isOpen) return;
+    const desktop = window.matchMedia('(min-width: 1024px)');
+    const closeOnDesktop = () => { if (desktop.matches) onClose(); };
+    closeOnDesktop();
+    desktop.addEventListener('change', closeOnDesktop);
+    return () => desktop.removeEventListener('change', closeOnDesktop);
+  }, [isOpen, onClose]);
 
-  // Close on click/scroll outside or Escape key
+  // Close on click or scroll outside; the shared dialog hook handles Escape.
   useEffect(() => {
     if (!props.isOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (sidebarRef.current && !sidebarRef.current.contains(e.target as Node)) {
-        props.onClose();
-      }
-    };
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
         props.onClose();
       }
     };
@@ -1974,11 +1976,9 @@ function MobileSidebar(props: {
       document.addEventListener('touchmove', handleTouchMove, { passive: true });
       document.addEventListener('wheel', handleWheel, { passive: true });
     }, 100);
-    document.addEventListener('keydown', handleEscape);
     return () => {
       clearTimeout(timer);
       document.removeEventListener('click', handleClickOutside);
-      document.removeEventListener('keydown', handleEscape);
       document.removeEventListener('touchstart', handleTouchStart);
       document.removeEventListener('touchmove', handleTouchMove);
       document.removeEventListener('wheel', handleWheel);
@@ -2029,7 +2029,6 @@ function MobileSidebar(props: {
           <div className="flex items-center justify-between gap-3 px-3 py-2 mb-2">
             <img src="/logo.png" alt="mvbar" className="h-8 w-auto" />
             <button
-              ref={closeButtonRef}
               type="button"
               onClick={props.onClose}
               className="rounded-lg p-2 text-white/60 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"

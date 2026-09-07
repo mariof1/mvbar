@@ -5,7 +5,7 @@ import { useEffect, useRef, type RefObject } from 'react';
 const dialogs: HTMLElement[] = [];
 
 /** Keep keyboard and programmatic focus in the topmost dialog. */
-export function useDialogFocus(ref: RefObject<HTMLDivElement | null>, onClose: () => void, enabled = true) {
+export function useDialogFocus(ref: RefObject<HTMLElement | null>, onClose: () => void, enabled = true) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const opener = useRef<HTMLElement | null>(typeof document === 'undefined' ? null : document.activeElement as HTMLElement);
