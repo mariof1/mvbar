@@ -49,6 +49,8 @@ export function Settings() {
   const lastfmEnabled = usePreferences((s) => s.lastfmEnabled);
   const loadPreferences = usePreferences((s) => s.load);
   const updatePreferences = usePreferences((s) => s.update);
+  const preferencesBusy = usePreferences((s) => s.loading || s.saving);
+  const preferencesError = usePreferences((s) => s.error);
 
   const [activeTab, setActiveTab] = useState<Tab>('account');
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -618,6 +620,7 @@ export function Settings() {
 
         {activeTab === 'playback' && (
           <>
+            {preferencesError && <p role="alert" className="text-sm text-red-400">{preferencesError}</p>}
             {/* Adaptive Streaming */}
             <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
               <h2 className="text-lg font-semibold text-white">Streaming</h2>
@@ -627,6 +630,7 @@ export function Settings() {
                 description="When enabled, audio is transcoded on the server and streamed in small chunks. This uses more server resources but provides better compatibility with slow connections. When disabled, audio files are streamed directly in their original format."
                 enabled={preferences.prefer_hls}
                 onChange={(v) => updatePreferences(token, { prefer_hls: v })}
+                disabled={preferencesBusy}
               />
             </section>
 
@@ -641,7 +645,7 @@ export function Settings() {
                   : "Requires Last.fm integration. Ask your server administrator to configure the LASTFM_API_KEY environment variable."}
                 enabled={preferences.auto_continue}
                 onChange={(v) => updatePreferences(token, { auto_continue: v })}
-                disabled={!lastfmEnabled}
+                disabled={!lastfmEnabled || preferencesBusy}
               />
             </section>
 
@@ -775,7 +779,7 @@ export function Settings() {
                         }
                         setOrLoading(false);
                       }}
-                      disabled={orLoading}
+                      disabled={orLoading || preferencesBusy}
                       className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
                     >
                       {orLoading ? 'Disconnecting...' : 'Remove personal API key'}
@@ -819,7 +823,7 @@ export function Settings() {
                       }
                       setOrLoading(false);
                     }}
-                    disabled={orLoading || !orApiKey.trim()}
+                    disabled={orLoading || preferencesBusy || !orApiKey.trim()}
                     className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors"
                   >
                     {orLoading ? 'Saving...' : 'Connect OpenRouter'}
@@ -997,12 +1001,12 @@ function ToggleSetting({
         className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
           disabled ? 'cursor-not-allowed' : ''
         } ${
-          enabled && !disabled ? 'bg-cyan-600' : 'bg-slate-600'
+          enabled ? 'bg-cyan-600' : 'bg-slate-600'
         }`}
       >
         <span
           className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-            enabled && !disabled ? 'translate-x-5' : 'translate-x-0'
+            enabled ? 'translate-x-5' : 'translate-x-0'
           }`}
         />
       </button>

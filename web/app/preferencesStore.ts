@@ -15,6 +15,8 @@ interface PreferencesState {
   openrouterSource: 'personal' | 'server' | null;
   loaded: boolean;
   loading: boolean;
+  saving: boolean;
+  error: string | null;
   load: (token: string) => Promise<void>;
   update: (token: string, updates: Partial<UserPreferences> & { openrouter_api_key?: string }) => Promise<boolean>;
   reset: () => void;
@@ -34,9 +36,11 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
   openrouterSource: null,
   loaded: false,
   loading: false,
+  saving: false,
+  error: null,
 
   load: async (token: string) => {
-    if (get().loaded || get().loading) return;
+    if (get().loaded || get().loading || get().saving) return;
     const session = sessionGeneration;
     set({ loading: true });
     try {
@@ -65,11 +69,12 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
   },
 
   update: async (token: string, updates: Partial<UserPreferences> & { openrouter_api_key?: string }) => {
+    if (get().saving || get().loading) return false;
     const session = sessionGeneration;
     const current = get().preferences;
     const { openrouter_api_key, ...prefUpdates } = updates;
     const optimistic = { ...current, ...prefUpdates };
-    set({ preferences: optimistic });
+    set({ preferences: optimistic, saving: true, error: null });
     
     try {
       const r = await apiFetch('/preferences', { 
@@ -91,10 +96,12 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
         });
         return true;
       }
-      return false;
+      throw new Error('Preference save was not accepted');
     } catch {
-      if (session === sessionGeneration) set({ preferences: current });
+      if (session === sessionGeneration) set({ preferences: current, error: 'Could not save preferences. Please try again.' });
       return false;
+    } finally {
+      if (session === sessionGeneration) set({ saving: false });
     }
   },
 
@@ -107,6 +114,8 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
       openrouterSource: null,
       loaded: false,
       loading: false,
+      saving: false,
+      error: null,
     });
   },
 }));
