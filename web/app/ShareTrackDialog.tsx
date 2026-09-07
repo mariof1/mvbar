@@ -11,6 +11,7 @@ import type { QueueTrack } from './playerStore';
 import { useDialogFocus } from './useDialogFocus';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { trackArtistLabel } from './artistDisplay';
+import { useLatestRequest } from './useLatestRequest';
 
 function Avatar({ user }: { user: SocialUser }) {
   if (user.avatarPath) {
@@ -37,6 +38,7 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [retry, setRetry] = useState(0);
+  const beginShareRequest = useLatestRequest(track, token);
   useBodyScrollLock(Boolean(track));
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef, onClose, !!track);
@@ -45,6 +47,7 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
     if (!track || !token) return;
     let active = true;
     setLoading(true);
+    setSharing(false);
     setFriends([]);
     setLoadError(false);
     setError(null);
@@ -83,20 +86,23 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
 
   const submit = async () => {
     if (!token || selected.size === 0 || sharing || loading || loadError) return;
+    const isCurrent = beginShareRequest();
+    if (!isCurrent()) return;
     setSharing(true);
     setError(null);
     try {
       const result = await shareTrack(token, track.id, Array.from(selected), message);
       showToast(`Shared with ${result.shared} ${result.shared === 1 ? 'friend' : 'friends'}`, 'success');
       await refreshSocial(token);
-      onClose();
+      if (isCurrent()) onClose();
     } catch (reason: any) {
+      if (!isCurrent()) return;
       if (reason?.status === 401) clear();
       setError(reason?.data?.error === 'recipient_unavailable'
         ? 'One of those friends can no longer access this song.'
         : 'Could not share this song. Please try again.');
     } finally {
-      setSharing(false);
+      if (isCurrent()) setSharing(false);
     }
   };
 
