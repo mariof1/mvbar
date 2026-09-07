@@ -1,6 +1,7 @@
 'use client';
 
 import { useDialogFocus } from './useDialogFocus';
+import { useLatestRequest } from './useLatestRequest';
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from './store';
@@ -262,6 +263,11 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiResult, setAiResult] = useState<AiIntentResponse | null>(null);
+  const beginAiRequest = useLatestRequest(`${isOpen}:${mode}`, token);
+  const pendingAiRequest = useRef<(() => boolean) | null>(null);
+  useEffect(() => {
+    setAiLoading(false);
+  }, [isOpen, mode, token]);
   const [hits, setHits] = useState<Hit[]>([]);
   const [artistHits, setArtistHits] = useState<ArtistHit[]>([]);
   const [albumHits, setAlbumHits] = useState<AlbumHit[]>([]);
@@ -424,13 +430,16 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
 
   const handleAiSearch = useCallback(async () => {
     const prompt = aiPrompt.trim();
-    if (!token || !prompt || aiLoading) return;
+    if (!token || !isOpen || mode !== 'ai' || !openrouterConfigured || !prompt || pendingAiRequest.current?.()) return;
+    const isCurrent = beginAiRequest();
+    pendingAiRequest.current = isCurrent;
 
     setAiLoading(true);
     setAiError(null);
     setAiResult(null);
     try {
       const result = await sendAiIntent(token, prompt);
+      if (!isCurrent()) return;
 
       if (result.tracks.length === 0) {
         setAiError(`No matching tracks were found in your permitted libraries. ${result.explanation}`);
@@ -463,12 +472,16 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
 
       setAiResult(result);
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
       setAiError(e?.data?.error || e?.message || 'AI music request failed');
     } finally {
-      setAiLoading(false);
+      if (isCurrent()) {
+        pendingAiRequest.current = null;
+        setAiLoading(false);
+      }
     }
-  }, [aiPrompt, aiLoading, token, clear, onPlayAll, onQueueAll, onPlay, onAddToQueue, onClose]);
+  }, [aiPrompt, token, isOpen, mode, openrouterConfigured, beginAiRequest, clear, onPlayAll, onQueueAll, onPlay, onAddToQueue, onClose]);
 
   const dismissRecentSearch = useCallback(async (item: RecentSearch) => {
     if (!token) return;
