@@ -826,12 +826,17 @@ export function BrowseNew(props: {
                   onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: albumDetail.name })}
                 >
                   {/* Track number - always show play icon on mobile, hover on desktop */}
-                  <div className="w-6 sm:w-8 text-center flex-shrink-0">
-                    <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden">{displayTrackNum}</span>
-                    <svg className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 mx-auto sm:hidden sm:group-hover:block" fill="currentColor" viewBox="0 0 24 24">
+                  <button type="button" aria-label={`Play ${track.title || 'Untitled'}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: albumDetail.name });
+                    }}
+                    className="w-6 sm:w-8 text-center flex-shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
+                    <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden sm:group-focus-within:hidden">{displayTrackNum}</span>
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 mx-auto sm:hidden sm:group-hover:block sm:group-focus-within:block" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M8 5v14l11-7z" />
                     </svg>
-                  </div>
+                  </button>
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
                     <div className="text-xs sm:text-sm text-slate-400 truncate">
@@ -1241,7 +1246,7 @@ export function BrowseNew(props: {
                     <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
                     <div className="text-sm text-slate-500">{formatCount(a.track_count, 'track')}</div>
                   </button>
-                  <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                  <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
                     <AddMenu
                       variant="subtle"
                       label="album"
@@ -1275,7 +1280,7 @@ export function BrowseNew(props: {
                     <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
                     <div className="text-sm text-slate-500 truncate">{a.album_artist}</div>
                   </button>
-                  <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                  <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
                     <AddMenu
                       variant="subtle"
                       label="album"
@@ -1340,12 +1345,17 @@ export function BrowseNew(props: {
               className="group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
               onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: track.album })}
             >
-              <div className="w-6 sm:w-8 text-center flex-shrink-0">
-                <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden">{idx + 1}</span>
-                <svg className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 mx-auto sm:hidden sm:group-hover:block" fill="currentColor" viewBox="0 0 24 24">
+              <button type="button" aria-label={`Play ${track.title || 'Untitled'}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: track.album });
+                    }}
+                    className="w-6 sm:w-8 text-center flex-shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
+                <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden sm:group-focus-within:hidden">{idx + 1}</span>
+                <svg className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 mx-auto sm:hidden sm:group-hover:block sm:group-focus-within:block" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 5v14l11-7z" />
                 </svg>
-              </div>
+              </button>
               {track.art_path && (
                 <img src={`/api/art/${track.art_path}`} alt="" className="w-8 h-8 sm:w-10 sm:h-10 rounded flex-shrink-0" />
               )}
@@ -1422,12 +1432,17 @@ export function BrowseNew(props: {
               className="group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
               onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: track.album })}
             >
-              <div className="w-6 sm:w-8 text-center flex-shrink-0">
-                <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden">{idx + 1}</span>
-                <svg className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 mx-auto sm:hidden sm:group-hover:block" fill="currentColor" viewBox="0 0 24 24">
+              <button type="button" aria-label={`Play ${track.title || 'Untitled'}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: track.album });
+                    }}
+                    className="w-6 sm:w-8 text-center flex-shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
+                <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden sm:group-focus-within:hidden">{idx + 1}</span>
+                <svg className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 mx-auto sm:hidden sm:group-hover:block sm:group-focus-within:block" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 5v14l11-7z" />
                 </svg>
-              </div>
+              </button>
               {track.art_path && (
                 <img src={`/api/art/${track.art_path}`} alt="" className="w-8 h-8 sm:w-10 sm:h-10 rounded flex-shrink-0" />
               )}
@@ -1506,12 +1521,17 @@ export function BrowseNew(props: {
               className="group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer"
               onClick={() => props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: track.album })}
             >
-              <div className="w-6 sm:w-8 text-center flex-shrink-0">
-                <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden">{idx + 1}</span>
-                <svg className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 mx-auto sm:hidden sm:group-hover:block" fill="currentColor" viewBox="0 0 24 24">
+              <button type="button" aria-label={`Play ${track.title || 'Untitled'}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      props.onPlayTrack?.({ id: track.id, title: track.title, artist: trackArtistLabel(track), album: track.album });
+                    }}
+                    className="w-6 sm:w-8 text-center flex-shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
+                <span className="text-xs sm:text-sm text-slate-500 hidden sm:inline sm:group-hover:hidden sm:group-focus-within:hidden">{idx + 1}</span>
+                <svg className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 mx-auto sm:hidden sm:group-hover:block sm:group-focus-within:block" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 5v14l11-7z" />
                 </svg>
-              </div>
+              </button>
               {track.art_path && (
                 <img src={`/api/art/${track.art_path}`} alt="" className="w-8 h-8 sm:w-10 sm:h-10 rounded flex-shrink-0" />
               )}
@@ -1630,7 +1650,7 @@ export function BrowseNew(props: {
                   <div className="mt-3 font-medium text-white truncate group-hover:text-cyan-400">{a.name}</div>
                   <div className="text-sm text-slate-500">{formatCount(a.album_count, 'album')}</div>
                 </button>
-                <div className="absolute top-3 right-3 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-3 right-3 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
                   <AddMenu
                     variant="subtle"
                     label="artist"
@@ -1668,7 +1688,7 @@ export function BrowseNew(props: {
                   <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
                   <div className="text-sm text-slate-500 truncate">{formatArtistValue(a.display_artist) ?? 'Unknown Artist'}</div>
                 </button>
-                <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
                   <AddMenu
                     variant="subtle"
                     label="album"
