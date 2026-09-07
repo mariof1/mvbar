@@ -94,6 +94,8 @@ export function Playlists(props: {
   const [error, setError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const renamePending = useRef(false);
+  const [renameSaving, setRenameSaving] = useState(false);
   const [playlistsLoaded, setPlaylistsLoaded] = useState(false);
   const [collaboration, setCollaboration] = useState<PlaylistCollaboration | null>(null);
   const [showCollaborators, setShowCollaborators] = useState(false);
@@ -257,6 +259,7 @@ export function Playlists(props: {
   }
 
   function startRename(p: Playlist) {
+    if (renamePending.current) return;
     setRenamingId(p.id);
     setRenameValue(p.name);
   }
@@ -267,9 +270,12 @@ export function Playlists(props: {
   }
 
   async function commitRename(id: string) {
-    if (!token) return;
+    if (!token || renamePending.current) return;
     const n = renameValue.trim();
     if (!n) { cancelRename(); return; }
+    renamePending.current = true;
+    setRenameSaving(true);
+    setError(null);
     try {
       await renamePlaylist(token, Number(id), n);
       setRenamingId(null);
@@ -278,6 +284,9 @@ export function Playlists(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
       setError(e?.data?.error ?? e?.message ?? 'error');
+    } finally {
+      renamePending.current = false;
+      setRenameSaving(false);
     }
   }
 
@@ -722,6 +731,8 @@ export function Playlists(props: {
                         <input
                           autoFocus
                           value={renameValue}
+                          aria-label={`Rename ${p.name}`}
+                          disabled={renameSaving}
                           onChange={(e) => setRenameValue(e.target.value)}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') { e.preventDefault(); commitRename(p.id); }
@@ -766,6 +777,7 @@ export function Playlists(props: {
                         onClick={(e) => { e.stopPropagation(); startRename(p); }}
                         className="p-2 text-slate-400 hover:text-cyan-400 hover:bg-cyan-500/10 rounded-lg transition-colors flex-shrink-0"
                         title="Rename playlist"
+                        disabled={renameSaving}
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
