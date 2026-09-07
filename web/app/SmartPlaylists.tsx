@@ -539,10 +539,10 @@ export function SmartPlaylists() {
       const f = pl.filters || emptyFilters;
       setEditMaxResults(f.maxResults ? String(f.maxResults) : '');
       setEditFavoriteOnly(f.favoriteOnly);
-      setEditDurationMin(f.duration?.min ? String(f.duration.min) : '');
-      setEditDurationMax(f.duration?.max ? String(f.duration.max) : '');
-      setEditBpmMin(f.bpm?.min ? String(f.bpm.min) : '');
-      setEditBpmMax(f.bpm?.max ? String(f.bpm.max) : '');
+      setEditDurationMin(f.duration?.min != null ? String(f.duration.min) : '');
+      setEditDurationMax(f.duration?.max != null ? String(f.duration.max) : '');
+      setEditBpmMin(f.bpm?.min != null ? String(f.bpm.min) : '');
+      setEditBpmMax(f.bpm?.max != null ? String(f.bpm.max) : '');
       setEditDateAddedFrom(f.dateAdded?.from ?? '');
       setEditDateAddedTo(f.dateAdded?.to ?? '');
       
