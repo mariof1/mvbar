@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   adminLibraryWritable,
   adminUpdateTrackMetadata,
@@ -165,71 +165,6 @@ function formatDuration(ms: number | null): string {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
-function useFlipAnimation(ref: React.RefObject<HTMLElement>, idsKey: string) {
-  const prevRectsRef = useRef<Map<string, DOMRect> | null>(null);
-  const hasMeasuredRef = useRef(false);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    if (typeof window !== 'undefined') {
-      try {
-        if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
-          // Still keep rect tracking for correctness.
-          const m = new Map<string, DOMRect>();
-          el.querySelectorAll<HTMLElement>('[data-flip-id]').forEach((n) => {
-            const id = n.dataset.flipId;
-            if (id) m.set(id, n.getBoundingClientRect());
-          });
-          prevRectsRef.current = m;
-          hasMeasuredRef.current = true;
-          return;
-        }
-      } catch {}
-    }
-
-    const nextRects = new Map<string, DOMRect>();
-    const nodes = Array.from(el.querySelectorAll<HTMLElement>('[data-flip-id]'));
-    for (const n of nodes) {
-      const id = n.dataset.flipId;
-      if (!id) continue;
-      nextRects.set(id, n.getBoundingClientRect());
-    }
-
-    const prevRects = prevRectsRef.current;
-    if (prevRects && hasMeasuredRef.current) {
-      for (const n of nodes) {
-        const id = n.dataset.flipId;
-        if (!id) continue;
-        const prev = prevRects.get(id);
-        const next = nextRects.get(id);
-        if (!next) continue;
-
-        if (!prev) {
-          // New item: fade in subtly.
-          n.animate(
-            [{ opacity: 0, transform: 'scale(0.98)' }, { opacity: 1, transform: 'scale(1)' }],
-            { duration: 180, easing: 'ease-out' }
-          );
-          continue;
-        }
-
-        const dx = prev.left - next.left;
-        const dy = prev.top - next.top;
-        if (dx === 0 && dy === 0) continue;
-
-        n.animate(
-          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0px, 0px)' }],
-          { duration: 260, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }
-        );
-      }
-    }
-
-    prevRectsRef.current = nextRects;
-    hasMeasuredRef.current = true;
-  }, [idsKey, ref]);
-}
-
 export function BrowseNew(props: {
   onPlayTrack?: (t: { id: number; title: string | null; artist: string | null; album?: string | null }) => void;
   onPlayAll?: (tracks: Array<{ id: number; title: string | null; artist: string | null; album?: string | null }>) => void;
@@ -357,77 +292,116 @@ export function BrowseNew(props: {
 
   const PAGE_SIZE = 48;
 
+  const beginListRequest = useLatestRequest(`${tab}:${debouncedFilter}`, token);
+  const pendingListRequest = useRef<(() => boolean) | null>(null);
+
   // Load artists
   const loadArtists = useCallback(async (reset = false, opts?: { silent?: boolean }) => {
-    if (!token) return;
+    if (!token || pendingListRequest.current?.()) return;
+    const isCurrent = beginListRequest();
+    if (!isCurrent()) return;
+    pendingListRequest.current = isCurrent;
     const silent = Boolean(opts?.silent);
     if (silent) setWsRefreshing(true);
     else setLoading(true);
     try {
       const offset = reset ? 0 : artistsOffset;
-      const r = await browseArtists(token, PAGE_SIZE, offset, 'az', debouncedFilter || undefined);
-      if (reset) {
-        setArtists(r.artists);
-      } else {
-        setArtists((prev) => [...prev, ...r.artists]);
-      }
-      setArtistsTotal(r.total);
-      setArtistsOffset(offset + r.artists.length);
+      // A background refresh retains every page the listener has loaded.
+      const limit = reset && silent ? Math.max(PAGE_SIZE, artistsOffset) : PAGE_SIZE;
+      const rows: Artist[] = [];
+      let total = 0;
+      do {
+        const r = await browseArtists(token, Math.min(200, limit - rows.length), offset + rows.length, 'az', debouncedFilter || undefined);
+        if (!isCurrent()) return;
+        rows.push(...r.artists);
+        total = r.total;
+        if (r.artists.length === 0) break;
+      } while (rows.length < limit && offset + rows.length < total);
+      setArtists(previous => reset ? rows : [...previous, ...rows]);
+      setArtistsTotal(total);
+      setArtistsOffset(offset + rows.length);
     } catch (e: any) {
-      if (e?.status === 401) clear();
+      if (isCurrent() && e?.status === 401) clear();
     } finally {
-      if (silent) setWsRefreshing(false);
-      else setLoading(false);
+      if (isCurrent()) {
+        pendingListRequest.current = null;
+        setWsRefreshing(false);
+        setLoading(false);
+      }
     }
-  }, [token, artistsOffset, clear, debouncedFilter]);
+  }, [token, artistsOffset, clear, debouncedFilter, beginListRequest]);
 
   // Load albums
   const loadAlbums = useCallback(async (reset = false, opts?: { silent?: boolean }) => {
-    if (!token) return;
+    if (!token || pendingListRequest.current?.()) return;
+    const isCurrent = beginListRequest();
+    if (!isCurrent()) return;
+    pendingListRequest.current = isCurrent;
     const silent = Boolean(opts?.silent);
     if (silent) setWsRefreshing(true);
     else setLoading(true);
     try {
       const offset = reset ? 0 : albumsOffset;
-      const r = await browseAlbums(token, PAGE_SIZE, offset, 'az', undefined, debouncedFilter || undefined);
-      if (reset) {
-        setAlbums(r.albums);
-      } else {
-        setAlbums((prev) => [...prev, ...r.albums]);
-      }
-      setAlbumsTotal(r.total);
-      setAlbumsOffset(offset + r.albums.length);
+      // A background refresh retains every page the listener has loaded.
+      const limit = reset && silent ? Math.max(PAGE_SIZE, albumsOffset) : PAGE_SIZE;
+      const rows: Album[] = [];
+      let total = 0;
+      do {
+        const r = await browseAlbums(token, Math.min(200, limit - rows.length), offset + rows.length, 'az', undefined, debouncedFilter || undefined);
+        if (!isCurrent()) return;
+        rows.push(...r.albums);
+        total = r.total;
+        if (r.albums.length === 0) break;
+      } while (rows.length < limit && offset + rows.length < total);
+      setAlbums(previous => reset ? rows : [...previous, ...rows]);
+      setAlbumsTotal(total);
+      setAlbumsOffset(offset + rows.length);
     } catch (e: any) {
-      if (e?.status === 401) clear();
+      if (isCurrent() && e?.status === 401) clear();
     } finally {
-      if (silent) setWsRefreshing(false);
-      else setLoading(false);
+      if (isCurrent()) {
+        pendingListRequest.current = null;
+        setWsRefreshing(false);
+        setLoading(false);
+      }
     }
-  }, [token, albumsOffset, clear, debouncedFilter]);
+  }, [token, albumsOffset, clear, debouncedFilter, beginListRequest]);
 
   // Load genres
   const loadGenres = useCallback(async (reset = false, opts?: { silent?: boolean }) => {
-    if (!token) return;
+    if (!token || pendingListRequest.current?.()) return;
+    const isCurrent = beginListRequest();
+    if (!isCurrent()) return;
+    pendingListRequest.current = isCurrent;
     const silent = Boolean(opts?.silent);
     if (silent) setWsRefreshing(true);
     else setLoading(true);
     try {
       const offset = reset ? 0 : genresOffset;
-      const r = await browseGenres(token, PAGE_SIZE, offset, 'tracks_desc', debouncedFilter || undefined);
-      if (reset) {
-        setGenres(r.genres);
-      } else {
-        setGenres((prev) => [...prev, ...r.genres]);
-      }
-      setGenresTotal(r.total);
-      setGenresOffset(offset + r.genres.length);
+      // A background refresh retains every page the listener has loaded.
+      const limit = reset && silent ? Math.max(PAGE_SIZE, genresOffset) : PAGE_SIZE;
+      const rows: Genre[] = [];
+      let total = 0;
+      do {
+        const r = await browseGenres(token, Math.min(200, limit - rows.length), offset + rows.length, 'tracks_desc', debouncedFilter || undefined);
+        if (!isCurrent()) return;
+        rows.push(...r.genres);
+        total = r.total;
+        if (r.genres.length === 0) break;
+      } while (rows.length < limit && offset + rows.length < total);
+      setGenres(previous => reset ? rows : [...previous, ...rows]);
+      setGenresTotal(total);
+      setGenresOffset(offset + rows.length);
     } catch (e: any) {
-      if (e?.status === 401) clear();
+      if (isCurrent() && e?.status === 401) clear();
     } finally {
-      if (silent) setWsRefreshing(false);
-      else setLoading(false);
+      if (isCurrent()) {
+        pendingListRequest.current = null;
+        setWsRefreshing(false);
+        setLoading(false);
+      }
     }
-  }, [token, genresOffset, clear, debouncedFilter]);
+  }, [token, genresOffset, clear, debouncedFilter, beginListRequest]);
 
   // Load countries
   const loadCountries = useCallback(async (opts?: { silent?: boolean }) => {
@@ -471,7 +445,7 @@ export function BrowseNew(props: {
     }
   }, [token, clear, debouncedFilter]);
 
-  // Reset and reload when filter changes
+  // One initial/reset request per tab and filter; pagination never resets the list.
   useEffect(() => {
     if (tab === 'artists') {
       setArtists([]);
@@ -491,7 +465,7 @@ export function BrowseNew(props: {
       loadLanguages();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedFilter]);
+  }, [tab, debouncedFilter, token]);
 
 
   useEffect(() => {
@@ -512,21 +486,6 @@ export function BrowseNew(props: {
       }
     })();
   }, [token, user?.role, clear]);
-
-  // Initial load when tab changes
-  useEffect(() => {
-    if (tab === 'artists' && artists.length === 0) {
-      loadArtists(true);
-    } else if (tab === 'albums' && albums.length === 0) {
-      loadAlbums(true);
-    } else if (tab === 'genres' && genres.length === 0) {
-      loadGenres(true);
-    } else if (tab === 'countries' && countries.length === 0) {
-      loadCountries();
-    } else if (tab === 'languages' && languages.length === 0) {
-      loadLanguages();
-    }
-  }, [tab, artists.length, albums.length, genres.length, countries.length, languages.length, loadArtists, loadAlbums, loadGenres, loadCountries, loadLanguages]);
 
   // Helper to refresh album detail
   const currentAlbum = useRef({ album: selectedAlbum, token });
@@ -691,21 +650,8 @@ export function BrowseNew(props: {
     refreshLanguageTracks();
   }, [selectedLanguage, refreshLanguageTracks]);
 
-  const listIdsKey = useMemo(() => {
-    if (tab === 'artists') return `artists:${artists.map((a) => a.id).join(',')}`;
-    if (tab === 'albums') return `albums:${albums.map((a) => `${a.display_artist}||${a.album}`).join(',')}`;
-    if (tab === 'genres') return `genres:${genres.map((g) => g.genre).join(',')}`;
-    if (tab === 'countries') return `countries:${countries.map((c) => c.country).join(',')}`;
-    if (tab === 'languages') return `languages:${languages.map((l) => l.language).join(',')}`;
-    return '';
-  }, [tab, artists, albums, genres, countries, languages]);
-
-  // Infinite scroll handler
+  // Keep existing cards stationary while pages are appended or refreshed.
   const scrollRef = useRef<HTMLDivElement>(null);
-  const gridRef = useRef<HTMLDivElement>(null);
-
-  // Smooth reordering animations for live updates.
-  useFlipAnimation(gridRef, listIdsKey);
   const wsRefreshingRef = useRef(false);
   useEffect(() => {
     wsRefreshingRef.current = wsRefreshing;
@@ -1661,7 +1607,7 @@ export function BrowseNew(props: {
       <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto no-scrollbar" style={{ maxHeight: 'calc(100vh - 280px)' }}>
         {/* Artists Grid */}
         {tab === 'artists' && (
-          <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
             {artists.map((a) => (
               <div key={a.id} className="relative group">
                 <button
@@ -1699,7 +1645,7 @@ export function BrowseNew(props: {
 
         {/* Albums Grid */}
         {tab === 'albums' && (
-          <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
             {albums.map((a) => (
               <div key={`${a.display_artist}||${a.album}`} className="relative group">
                 <button
@@ -1737,7 +1683,7 @@ export function BrowseNew(props: {
 
         {/* Genres Grid */}
         {tab === 'genres' && (
-          <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {genres.map((g) => (
               <button
                 key={g.genre}
@@ -1762,7 +1708,7 @@ export function BrowseNew(props: {
 
         {/* Countries Grid */}
         {tab === 'countries' && (
-          <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {countries.map((c) => (
               <button
                 key={c.country}
@@ -1790,7 +1736,7 @@ export function BrowseNew(props: {
 
         {/* Languages Grid */}
         {tab === 'languages' && (
-          <div ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             {languages.map((l) => (
               <button
                 key={l.language}
