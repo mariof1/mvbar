@@ -351,7 +351,7 @@ export const useMvbarConnect = create<MvbarConnectStore>((set, get) => ({
   connected: false,
   setLocalDeviceId: (id) => set((state) => ({
     localDeviceId: id,
-    selectedDeviceId: state.selectedDeviceId ?? id,
+    selectedDeviceId: !state.selectedDeviceId || state.selectedDeviceId === state.localDeviceId ? id : state.selectedDeviceId,
   })),
   setDevices: (devices) => set((state) => {
     const available = new Set(devices.map((device) => device.id));
@@ -397,10 +397,10 @@ let localConnectState: LocalConnectState = {
 const connectCommandHandlers = new Set<(command: MvbarConnectCommand) => boolean | void | Promise<boolean | void>>();
 const CONNECT_DEVICE_NAME_KEY = 'mvbar_connect_device_name';
 
-function connectSessionId(): string {
+function connectSessionId(renew = false): string {
   const key = 'mvbar_connect_session_id';
   let id = window.sessionStorage.getItem(key);
-  if (!id) {
+  if (!id || renew) {
     id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(36).slice(2)}`;
     window.sessionStorage.setItem(key, id);
   }
@@ -471,12 +471,20 @@ export function sendMvbarConnectCommand(
   payload: Record<string, unknown> = {},
 ): string {
   const commandId = globalThis.crypto?.randomUUID?.() ?? `cmd_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  if (globalWs?.readyState !== WebSocket.OPEN) {
+    useToastStore.getState().show('MVBar Connect is disconnected. Wait for it to reconnect and try again.', 'error', 'top-right');
+    return '';
+  }
   sendWebSocketMessage('connect:command', { targetDeviceId, commandId, command, payload });
   return commandId;
 }
 
 export function transferMvbarPlayback(sourceDeviceId: string, targetDeviceId: string): string {
   const commandId = globalThis.crypto?.randomUUID?.() ?? `transfer_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  if (globalWs?.readyState !== WebSocket.OPEN) {
+    useToastStore.getState().show('MVBar Connect is disconnected. Wait for it to reconnect and try again.', 'error', 'top-right');
+    return '';
+  }
   sendWebSocketMessage('connect:transfer', { sourceDeviceId, targetDeviceId, commandId });
   return commandId;
 }
@@ -647,8 +655,10 @@ export function useWebSocket(authIdentity: string | null) {
           } else if (msg.type === 'connect:registered') {
             useMvbarConnect.getState().setConnected(true);
           } else if (msg.type === 'connect:replaced') {
-            // A refreshed tab with the same session has taken over this player identity.
-            useMvbarConnect.getState().setConnected(false);
+            // Duplicated tabs inherit sessionStorage. Give this still-live tab
+            // its own identity instead of leaving it unable to receive commands.
+            connectSessionId(true);
+            registerMvbarConnect(ws);
           } else if (msg.type === 'connect:error') {
             useToastStore.getState().show(msg.data.error || 'MVBar Connect error', 'error', 'top-right');
           } else if (msg.type === 'connect:command_ack') {

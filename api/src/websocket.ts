@@ -1,5 +1,5 @@
 import fp from 'fastify-plugin';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import websocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import Redis from 'ioredis';
@@ -9,7 +9,6 @@ import {
   normalizeConnectCommandResult,
   normalizeConnectRegistration,
   normalizeConnectState,
-  normalizeConnectTrack,
   normalizeConnectTransfer,
   type ConnectDeviceRegistration,
 } from './connectProtocol.js';
@@ -113,7 +112,7 @@ function beginPendingCommand(input: Omit<PendingConnectCommand, 'timeout'>): boo
 
 function clearPendingCommandsForSocket(socket: WebSocket): void {
   for (const pending of [...pendingConnectCommands.values()]) {
-    if (pending.controllerSocket === socket) {
+    if (pending.controllerSocket === socket && !pending.transferSourceSocket) {
       pendingConnectCommands.delete(pendingCommandKey(pending.userId, pending.targetDeviceId, pending.commandId));
       clearTimeout(pending.timeout);
     } else if (pending.targetSocket === socket) {
@@ -164,12 +163,10 @@ function connectClient(userId: string, deviceId: string): ClientInfo | undefined
 
 function safeCommandPayload(command: string, payload: Record<string, unknown>) {
   if (command === 'play_tracks' || command === 'add_tracks' || command === 'play_next') {
-    const queue = Array.isArray(payload.tracks)
-      ? payload.tracks.slice(0, 500).map(normalizeConnectTrack).filter((track) => track != null)
-      : [];
+    const state = normalizeConnectState({ queue: payload.tracks, queueIndex: payload.queueIndex });
     return {
-      tracks: queue,
-      queueIndex: Math.max(0, Math.min(queue.length - 1, Math.trunc(Number(payload.queueIndex) || 0))),
+      tracks: state.queue,
+      queueIndex: Math.max(0, state.queueIndex),
       positionMs: Math.max(0, Math.min(24 * 60 * 60 * 1000, Math.round(Number(payload.positionMs) || 0))),
       isPlaying: payload.isPlaying !== false,
     };
@@ -225,6 +222,7 @@ export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
 
   // Subscribe to Redis for library updates from worker
   const subscriber = new Redis(REDIS_URL);
+  app.addHook('onClose', async () => { subscriber.disconnect(); });
   
   subscriber.subscribe('library:updates', (err) => {
     if (err) {
@@ -256,6 +254,10 @@ export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
     }
   });
 
+  registerWebsocketRoutes(app);
+});
+
+export function registerWebsocketRoutes(app: FastifyInstance): void {
   // WebSocket endpoint for clients
   app.get('/api/ws', { websocket: true }, (socket, req) => {
     // Get user ID from the request if authenticated
@@ -325,6 +327,7 @@ export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
             if (otherInfo !== clients.get(socket)
               && otherInfo.userId === userId
               && otherInfo.connect?.deviceId === registration.deviceId) {
+              clearPendingCommandsForSocket(otherInfo.socket);
               otherInfo.connect = undefined;
               send(otherInfo.socket, 'connect:replaced', { deviceId: registration.deviceId });
             }
@@ -381,6 +384,20 @@ export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
             });
             return;
           }
+          const payload = safeCommandPayload(command.command, command.payload);
+          if (command.command === 'play_index' || command.command === 'remove_index' || command.command === 'reorder') {
+            const fields = command.command === 'reorder' ? ['from', 'to'] : ['index'];
+            const indices = target.connect.state.queueIndices;
+            if (fields.some((field) => !Number.isInteger(command.payload[field]) || indices[Number(command.payload[field])] == null)) {
+              send(socket, 'connect:command_ack', { commandId: command.commandId, accepted: false, error: 'That queue item is no longer available.' });
+              return;
+            }
+            for (const field of fields) (payload as Record<string, unknown>)[field] = indices[Number(command.payload[field])];
+          }
+          if ((command.command === 'add_tracks' || command.command === 'play_next') && Array.isArray(command.payload.tracks) && command.payload.tracks.length > 500) {
+            send(socket, 'connect:command_ack', { commandId: command.commandId, accepted: false, error: 'Add up to 500 tracks at a time with MVBar Connect.' });
+            return;
+          }
           const confirmsCommands = target.connect.capabilities.includes('command-results-v1');
           if (confirmsCommands && !beginPendingCommand({
             controllerSocket: socket,
@@ -401,7 +418,7 @@ export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
             commandId: command.commandId,
             sourceDeviceId: source.connect.deviceId,
             command: command.command,
-            payload: safeCommandPayload(command.command, command.payload),
+            payload,
           });
           if (!confirmsCommands) {
             // Older clients can still be controlled, but cannot confirm execution.
@@ -512,7 +529,7 @@ export const websocketPlugin: FastifyPluginAsync = fp(async (app) => {
       if (userToNotify) sendConnectDevices(userToNotify);
     });
   });
-});
+}
 
 // Export function to get client count (for health checks)
 export function getConnectedClients(): number {

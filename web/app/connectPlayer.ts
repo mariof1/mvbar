@@ -41,12 +41,13 @@ export function useConnectPlayer() {
       closePodcastPlayer();
       closeAudiobookPlayer();
     }
-    sendMvbarConnectCommand(remoteTarget.id, command, {
+    const commandId = sendMvbarConnectCommand(remoteTarget.id, command, {
       tracks: tracks.map(asConnectTrack),
       ...extra,
     });
+    if (commandId && command !== 'play_tracks') showToast(`Queue update sent to ${remoteTarget.name}`, 'queue');
     return true;
-  }, [remoteTarget]);
+  }, [remoteTarget, showToast]);
 
   return {
     ...player,
@@ -65,20 +66,16 @@ export function useConnectPlayer() {
       else player.playIndex(index);
     },
     addToQueue: (track: QueueTrack) => {
-      if (sendTracks('add_tracks', [track])) showToast(`Added "${track.title || 'Track'}" to ${remoteTarget?.name}`, 'queue');
-      else player.addToQueue(track);
+      if (!sendTracks('add_tracks', [track])) player.addToQueue(track);
     },
     addManyToQueue: (tracks: QueueTrack[]) => {
-      if (sendTracks('add_tracks', tracks)) showToast(`Added ${tracks.length} tracks to ${remoteTarget?.name}`, 'queue');
-      else player.addManyToQueue(tracks);
+      if (!sendTracks('add_tracks', tracks)) player.addManyToQueue(tracks);
     },
     playNext: (track: QueueTrack) => {
-      if (sendTracks('play_next', [track])) showToast(`"${track.title || 'Track'}" will play next on ${remoteTarget?.name}`, 'queue');
-      else player.playNext(track);
+      if (!sendTracks('play_next', [track])) player.playNext(track);
     },
     playNextMany: (tracks: QueueTrack[]) => {
-      if (sendTracks('play_next', tracks)) showToast(`${tracks.length} tracks will play next on ${remoteTarget?.name}`, 'queue');
-      else player.playNextMany(tracks);
+      if (!sendTracks('play_next', tracks)) player.playNextMany(tracks);
     },
     removeFromQueue: (index: number) => {
       if (remoteTarget) sendMvbarConnectCommand(remoteTarget.id, 'remove_index', { index });

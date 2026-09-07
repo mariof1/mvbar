@@ -45,7 +45,7 @@ export function directMusicStreamUrl(trackId: number): string {
  * active user gesture. Waiting for React to mount the player first is too late
  * on mobile browsers with strict autoplay policies.
  */
-export function startMusicPlayback(trackId: number): Promise<void> | null {
+export function startMusicPlayback(trackId: number, play = true): Promise<void> | null {
   const audio = getMusicAudioElement();
   if (!audio) return null;
 
@@ -55,6 +55,13 @@ export function startMusicPlayback(trackId: number): Promise<void> | null {
   const streamUrl = directMusicStreamUrl(trackId);
   if (audio.getAttribute('src') !== streamUrl) {
     audio.src = streamUrl;
+  }
+  if (!play) {
+    audio.pause();
+    audio.dataset.mvbarPlaybackState = 'paused';
+    delete audio.dataset.mvbarPlaybackError;
+    publishSystemPlaybackState('paused');
+    return Promise.resolve();
   }
   audio.dataset.mvbarPlaybackState = 'pending';
   delete audio.dataset.mvbarPlaybackError;

@@ -29,6 +29,7 @@ export type ConnectTrack = {
 export type ConnectPlaybackState = {
   track: ConnectTrack | null;
   queue: ConnectTrack[];
+  queueIndices: number[];
   queueIndex: number;
   isPlaying: boolean;
   positionMs: number;
@@ -83,7 +84,7 @@ export function normalizeConnectTrack(value: unknown): ConnectTrack | null {
   const input = object(value);
   if (!input) return null;
   const rawId = typeof input.id === 'number' ? input.id : Number.NaN;
-  if (!Number.isFinite(rawId) || rawId <= 0) return null;
+  if (!Number.isSafeInteger(rawId) || rawId <= 0) return null;
   const id = Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(rawId));
   return {
     id,
@@ -99,15 +100,22 @@ export function normalizeConnectTrack(value: unknown): ConnectTrack | null {
 
 export function normalizeConnectState(value: unknown): ConnectPlaybackState {
   const input = object(value) ?? {};
-  const queue = Array.isArray(input.queue)
-    ? input.queue.slice(0, 500).map(normalizeConnectTrack).filter((track): track is ConnectTrack => track != null)
-    : [];
+  const rawQueue = Array.isArray(input.queue) ? input.queue : [];
+  const requested = Math.trunc(number(input.queueIndex, 0, 0, Math.max(0, rawQueue.length - 1)));
+  // Keep the active song in the bounded snapshot, including when it is beyond
+  // the first 500 entries. Retain native indices for commands sent back to it.
+  const start = Math.max(0, Math.min(requested - 250, rawQueue.length - 500));
+  const entries = rawQueue.slice(start, start + 500).map((value, index) => ({
+    track: normalizeConnectTrack(value), index: start + index,
+  })).filter((entry): entry is { track: ConnectTrack; index: number } => entry.track != null);
+  const queue = entries.map((entry) => entry.track);
+  const queueIndices = entries.map((entry) => entry.index);
   const explicitTrack = normalizeConnectTrack(input.track);
-  const requestedIndex = Math.trunc(number(input.queueIndex, -1, -1, Math.max(-1, queue.length - 1)));
-  const queueIndex = queue.length === 0 ? -1 : Math.max(0, Math.min(queue.length - 1, requestedIndex));
+  const queueIndex = queue.length === 0 ? -1 : Math.max(0, queueIndices.indexOf(requested));
   return {
     track: explicitTrack ?? queue[queueIndex] ?? null,
     queue,
+    queueIndices,
     queueIndex,
     isPlaying: input.isPlaying === true,
     positionMs: Math.round(number(input.positionMs, 0, 0, 24 * 60 * 60 * 1000)),

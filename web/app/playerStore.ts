@@ -28,7 +28,7 @@ type PlayerState = {
   queue: QueueTrack[];
   index: number;
   isOpen: boolean;
-  setQueueAndPlay: (tracks: QueueTrack[], startIndex: number) => void;
+  setQueueAndPlay: (tracks: QueueTrack[], startIndex: number, play?: boolean) => Promise<void> | null;
   playTrackNow: (t: QueueTrack) => void;
   playIndex: (idx: number) => void;
   addToQueue: (t: QueueTrack) => void;
@@ -44,10 +44,10 @@ type PlayerState = {
   reset: () => void;
 };
 
-function playImmediately(track: QueueTrack | undefined): void {
-  if (!track) return;
-  const playPromise = startMusicPlayback(track.id);
-  if (!playPromise) return;
+function playImmediately(track: QueueTrack | undefined, play = true): Promise<void> | null {
+  if (!track) return null;
+  const playPromise = startMusicPlayback(track.id, play);
+  if (!playPromise) return null;
   const attempt = currentMusicPlaybackAttempt();
 
   playPromise.catch((error: unknown) => {
@@ -55,6 +55,7 @@ function playImmediately(track: QueueTrack | undefined): void {
     if (attempt !== currentMusicPlaybackAttempt()) return;
     reportMusicPlaybackFailure(error);
   });
+  return playPromise;
 }
 
 function normalizeQueueTrack(track: QueueTrack): QueueTrack {
@@ -68,18 +69,18 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   queue: [],
   index: 0,
   isOpen: false,
-  setQueueAndPlay: (tracks, startIndex) => {
+  setQueueAndPlay: (tracks, startIndex, play = true) => {
     closePodcastPlayer();
     closeAudiobookPlayer();
     if (tracks.length === 0) {
       stopMusicPlayback(true);
       set({ queue: [], index: 0, isOpen: false });
-      return;
+      return null;
     }
     const normalizedTracks = tracks.map(normalizeQueueTrack);
     const idx = Math.max(0, Math.min(startIndex, normalizedTracks.length - 1));
     set({ queue: normalizedTracks, index: idx, isOpen: true });
-    playImmediately(normalizedTracks[idx]);
+    return playImmediately(normalizedTracks[idx], play);
   },
   playTrackNow: (t) => {
     closePodcastPlayer();

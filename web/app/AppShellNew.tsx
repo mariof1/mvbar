@@ -2272,7 +2272,7 @@ export function AppShellNew() {
         : [];
       if (tracks.length === 0) throw new Error('The transferred queue has no playable tracks.');
       const targetIndex = Math.max(0, Math.min(tracks.length - 1, Number(payload.queueIndex) || 0));
-      setQueueAndPlayLocally(tracks, targetIndex);
+      const playback = setQueueAndPlayLocally(tracks, targetIndex, payload.isPlaying !== false);
       const activeAudio = getMusicAudioElement();
       if (!activeAudio) throw new Error('The music player is not available.');
       const positionSeconds = Math.max(0, (Number(payload.positionMs) || 0) / 1000);
@@ -2285,7 +2285,7 @@ export function AppShellNew() {
         activeAudio.pause();
       } else {
         try {
-          await activeAudio.play();
+          await playback;
         } catch (error) {
           reportMusicPlaybackFailure(error);
           throw new Error('Playback was blocked on this player. Open it once and try again.');
@@ -2424,6 +2424,7 @@ export function AppShellNew() {
     audio.addEventListener('play', publishImmediately);
     audio.addEventListener('pause', publishImmediately);
     audio.addEventListener('loadedmetadata', publishImmediately);
+    audio.addEventListener('seeked', publishImmediately);
     audio.addEventListener('volumechange', publishImmediately);
     publishImmediately();
     return () => {
@@ -2431,6 +2432,7 @@ export function AppShellNew() {
       audio.removeEventListener('play', publishImmediately);
       audio.removeEventListener('pause', publishImmediately);
       audio.removeEventListener('loadedmetadata', publishImmediately);
+      audio.removeEventListener('seeked', publishImmediately);
       audio.removeEventListener('volumechange', publishImmediately);
     };
   }, [asConnectTrack, index, isOpen, nowPlaying, queue]);

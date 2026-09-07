@@ -44,8 +44,19 @@ test('connect state never accepts unbounded queues or invalid tracks', () => {
 
   assert.equal(state.queue.length, 500);
   assert.equal(state.queueIndex, 499);
-  assert.equal(state.track?.id, 500);
+  assert.equal(state.track?.id, 700);
+  assert.equal(state.queueIndices[499], 699);
   assert.equal(state.volume, 1);
+});
+
+test('connect snapshot preserves the selected occurrence in a large queue', () => {
+  const queue = Array.from({ length: 900 }, () => ({ id: 42 }));
+  const state = normalizeConnectState({ queue, queueIndex: 610 });
+  assert.equal(state.queue.length, 500);
+  assert.equal(state.queueIndices[state.queueIndex], 610);
+  const invalid = normalizeConnectState({ queue: [{ id: 0.5 }, { id: 7 }], queueIndex: 1 });
+  assert.deepEqual(invalid.queueIndices, [1]);
+  assert.equal(invalid.queueIndex, 0);
 });
 
 test('connect commands and transfers require valid targets and allowlisted actions', () => {
