@@ -1312,19 +1312,20 @@ export function BrowseNew(props: {
           Back
         </button>
 
-        <div className="flex items-center gap-4">
-          <div className={`w-16 h-16 rounded-xl bg-gradient-to-br ${getGenreColor(selectedGenre)} flex items-center justify-center`}>
+        <div className="flex flex-wrap items-center gap-4 sm:flex-nowrap">
+          <div className={`w-16 h-16 shrink-0 rounded-xl bg-gradient-to-br ${getGenreColor(selectedGenre)} flex items-center justify-center`}>
             <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
             </svg>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-white">{selectedGenre}</h1>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold text-white [overflow-wrap:anywhere]">{selectedGenre}</h1>
             <p className="text-slate-400">{formatCount(genreTracks.length, 'track')}</p>
           </div>
+          <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
           <button
             onClick={() => props.onPlayAll?.(genreTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })))}
-            className="ml-auto px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
+            className="shrink-0 whitespace-nowrap px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M8 5v14l11-7z" />
@@ -1336,6 +1337,7 @@ export function BrowseNew(props: {
             title={`Add ${selectedGenre}...`}
             getTracks={() => genreTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album }))}
           />
+          </div>
         </div>
 
         <div className="space-y-1">
@@ -1401,17 +1403,18 @@ export function BrowseNew(props: {
           Back
         </button>
 
-        <div className="flex items-center gap-4">
-          <div className={`w-16 h-16 rounded-xl bg-gradient-to-br ${getGenreColor(selectedCountry)} flex items-center justify-center`}>
+        <div className="flex flex-wrap items-center gap-4 sm:flex-nowrap">
+          <div className={`w-16 h-16 shrink-0 rounded-xl bg-gradient-to-br ${getGenreColor(selectedCountry)} flex items-center justify-center`}>
             <CountryFlag country={selectedCountry} size="lg" />
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-white">{selectedCountry}</h1>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold text-white [overflow-wrap:anywhere]">{selectedCountry}</h1>
             <p className="text-slate-400">{formatCount(countryTracks.length, 'track')}</p>
           </div>
+          <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
           <button
             onClick={() => props.onPlayAll?.(countryTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })))}
-            className="ml-auto px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
+            className="shrink-0 whitespace-nowrap px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M8 5v14l11-7z" />
@@ -1423,6 +1426,7 @@ export function BrowseNew(props: {
             title={`Add ${selectedCountry}...`}
             getTracks={() => countryTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album }))}
           />
+          </div>
         </div>
 
         <div className="space-y-1">
@@ -1488,19 +1492,20 @@ export function BrowseNew(props: {
           Back
         </button>
 
-        <div className="flex items-center gap-4">
-          <div className={`w-16 h-16 rounded-xl bg-gradient-to-br ${getGenreColor(selectedLanguage)} flex items-center justify-center`}>
+        <div className="flex flex-wrap items-center gap-4 sm:flex-nowrap">
+          <div className={`w-16 h-16 shrink-0 rounded-xl bg-gradient-to-br ${getGenreColor(selectedLanguage)} flex items-center justify-center`}>
             <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
             </svg>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-white">{selectedLanguage}</h1>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold text-white [overflow-wrap:anywhere]">{selectedLanguage}</h1>
             <p className="text-slate-400">{formatCount(languageTracks.length, 'track')}</p>
           </div>
+          <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
           <button
             onClick={() => props.onPlayAll?.(languageTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album })))}
-            className="ml-auto px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
+            className="shrink-0 whitespace-nowrap px-6 py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-full font-medium flex items-center gap-2"
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M8 5v14l11-7z" />
@@ -1512,6 +1517,7 @@ export function BrowseNew(props: {
             title={`Add ${selectedLanguage}...`}
             getTracks={() => languageTracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: t.album }))}
           />
+          </div>
         </div>
 
         <div className="space-y-1">
