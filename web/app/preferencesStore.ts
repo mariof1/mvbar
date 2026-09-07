@@ -25,6 +25,8 @@ const DEFAULT_PREFS: UserPreferences = {
   prefer_hls: false,
 };
 
+let sessionGeneration = 0;
+
 export const usePreferences = create<PreferencesState>((set, get) => ({
   preferences: DEFAULT_PREFS,
   lastfmEnabled: false,
@@ -35,6 +37,7 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
 
   load: async (token: string) => {
     if (get().loaded || get().loading) return;
+    const session = sessionGeneration;
     set({ loading: true });
     try {
       const r = await apiFetch('/preferences', { method: 'GET' }, token) as {
@@ -44,6 +47,7 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
         openrouterConfigured?: boolean;
         openrouterSource?: 'personal' | 'server' | null;
       };
+      if (session !== sessionGeneration) return;
       if (r.ok && r.preferences) {
         set({
           preferences: r.preferences,
@@ -56,11 +60,12 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
     } catch {
       // Keep defaults
     } finally {
-      set({ loading: false });
+      if (session === sessionGeneration) set({ loading: false });
     }
   },
 
   update: async (token: string, updates: Partial<UserPreferences> & { openrouter_api_key?: string }) => {
+    const session = sessionGeneration;
     const current = get().preferences;
     const { openrouter_api_key, ...prefUpdates } = updates;
     const optimistic = { ...current, ...prefUpdates };
@@ -77,6 +82,7 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
         openrouterSource?: 'personal' | 'server' | null;
       };
       
+      if (session !== sessionGeneration) return false;
       if (r.ok && r.preferences) {
         set({
           preferences: r.preferences,
@@ -87,17 +93,20 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
       }
       return false;
     } catch {
-      set({ preferences: current });
+      if (session === sessionGeneration) set({ preferences: current });
       return false;
     }
   },
 
-  reset: () => set({
-    preferences: DEFAULT_PREFS,
-    lastfmEnabled: false,
-    openrouterConfigured: false,
-    openrouterSource: null,
-    loaded: false,
-    loading: false,
-  }),
+  reset: () => {
+    ++sessionGeneration;
+    set({
+      preferences: DEFAULT_PREFS,
+      lastfmEnabled: false,
+      openrouterConfigured: false,
+      openrouterSource: null,
+      loaded: false,
+      loading: false,
+    });
+  },
 }));
