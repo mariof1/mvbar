@@ -1789,6 +1789,8 @@ interface DeviceLog {
 function DeviceLogsTab({ token }: { token: string }) {
   const [logs, setLogs] = useState<DeviceLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState(false);
+  const beginListRequest = useLatestRequest('device-logs', token);
   const [selectedLog, setSelectedLog] = useState<string | null>(null);
   const [logContent, setLogContent] = useState('');
   const [loadingContent, setLoadingContent] = useState(false);
@@ -1818,13 +1820,20 @@ function DeviceLogsTab({ token }: { token: string }) {
   };
 
   const fetchLogs = useCallback(async () => {
+    const isCurrent = beginListRequest();
     setLoading(true);
     try {
       const data = await apiFetch('/admin/device-logs', { method: 'GET' }, token);
-      if (data.ok) setLogs(data.logs);
-    } catch { /* */ }
-    setLoading(false);
-  }, [token]);
+      if (!isCurrent()) return;
+      if (!data.ok) throw new Error('Log list unavailable');
+      setLogs(data.logs);
+      setListError(false);
+    } catch {
+      if (isCurrent()) setListError(true);
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
+  }, [token, beginListRequest]);
 
   useEffect(() => { void fetchLogs(); }, [fetchLogs]);
 
@@ -1911,6 +1920,7 @@ function DeviceLogsTab({ token }: { token: string }) {
       </div>
 
       {/* Controls */}
+      {listError && <p role="alert" className="text-sm text-red-400">Could not load device logs. Please try again.</p>}
       {deleteError && <p role="alert" className="text-sm text-red-400">{deleteError}</p>}
       <div className="flex items-center gap-3">
         <input
@@ -1921,7 +1931,7 @@ function DeviceLogsTab({ token }: { token: string }) {
           className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 flex-1 focus:outline-none focus:border-cyan-500"
         />
         <button onClick={fetchLogs} disabled={deleting || loading} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm text-slate-300">
-          Refresh
+          {loading ? 'Refreshing…' : listError ? 'Retry' : 'Refresh'}
         </button>
         {logs.length > 0 && (
           <button onClick={() => void deleteLog()} disabled={deleting || loading} className="px-3 py-2 bg-red-900/50 hover:bg-red-800/50 disabled:opacity-50 rounded-lg text-sm text-red-400">
@@ -1933,9 +1943,9 @@ function DeviceLogsTab({ token }: { token: string }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Log list */}
         <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden max-h-[600px] overflow-y-auto">
-          {loading ? (
+          {loading && logs.length === 0 ? (
             <p className="p-4 text-sm text-slate-500">Loading...</p>
-          ) : filteredLogs.length === 0 ? (
+          ) : listError && logs.length === 0 ? null : filteredLogs.length === 0 ? (
             <p className="p-4 text-sm text-slate-500">No device logs{filter ? ' matching filter' : ''}</p>
           ) : (
             <div className="divide-y divide-slate-700/50">
@@ -1955,7 +1965,7 @@ function DeviceLogsTab({ token }: { token: string }) {
                   </button>
                   <button
                     aria-label={`Delete log ${log.name}`}
-                    disabled={deleting}
+                    disabled={deleting || loading}
                     onClick={(e) => { e.stopPropagation(); deleteLog(log.name); }}
                     className="text-slate-600 hover:text-red-400 disabled:opacity-50 transition-colors"
                   >
