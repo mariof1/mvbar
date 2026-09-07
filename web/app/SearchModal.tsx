@@ -277,6 +277,14 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
   const [podcastEpisodeHits, setPodcastEpisodeHits] = useState<PodcastEpisodeHit[]>([]);
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
+  const [recentSaving, setRecentSaving] = useState(false);
+  const [recentError, setRecentError] = useState<string | null>(null);
+  const beginRecentMutation = useLatestRequest(isOpen, token);
+  const pendingRecentMutation = useRef<(() => boolean) | null>(null);
+  useEffect(() => {
+    setRecentSaving(false);
+    setRecentError(null);
+  }, [isOpen, token]);
   const [loading, setLoading] = useState(false);
   const [searchedQuery, setSearchedQuery] = useState<string | null>(null);
   const [scanInProgress, setScanInProgress] = useState(false);
@@ -483,35 +491,31 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
     }
   }, [aiPrompt, token, isOpen, mode, openrouterConfigured, beginAiRequest, clear, onPlayAll, onQueueAll, onPlay, onAddToQueue, onClose]);
 
-  const dismissRecentSearch = useCallback(async (item: RecentSearch) => {
-    if (!token) return;
+  const dismissRecentSearch = useCallback(async (item?: RecentSearch) => {
+    if (!token || !isOpen || mode !== 'library' || !recentSearches.length || pendingRecentMutation.current?.()) return;
+    const isCurrent = beginRecentMutation();
+    pendingRecentMutation.current = isCurrent;
     const previous = recentSearches;
-    setRecentSearches((current) => current.filter((recent) => recentItemId(recent) !== recentItemId(item)));
+    setRecentSaving(true);
+    setRecentError(null);
+    setRecentSearches((current) => item ? current.filter((recent) => recentItemId(recent) !== recentItemId(item)) : []);
     try {
-      await removeRecentSearch(token, item.itemType, item.itemKey);
+      if (item) await removeRecentSearch(token, item.itemType, item.itemKey);
+      else await clearRecentSearches(token);
     } catch (reason: any) {
+      if (!isCurrent()) return;
       if (reason?.status === 401) clear();
       else {
         setRecentSearches(previous);
-        setError('Could not remove that recent search.');
+        setRecentError(item ? 'Could not remove that recent search.' : 'Could not clear recent searches.');
+      }
+    } finally {
+      if (isCurrent()) {
+        pendingRecentMutation.current = null;
+        setRecentSaving(false);
       }
     }
-  }, [token, recentSearches, clear]);
-
-  const dismissAllRecentSearches = useCallback(async () => {
-    if (!token || recentSearches.length === 0) return;
-    const previous = recentSearches;
-    setRecentSearches([]);
-    try {
-      await clearRecentSearches(token);
-    } catch (reason: any) {
-      if (reason?.status === 401) clear();
-      else {
-        setRecentSearches(previous);
-        setError('Could not clear recent searches.');
-      }
-    }
-  }, [token, recentSearches, clear]);
+  }, [token, isOpen, mode, beginRecentMutation, recentSearches, clear]);
 
   const handleNavigate = useCallback((route: Parameters<typeof navigate>[0], recent: RecentSearchInput) => {
     void persistRecentSearch(recent);
@@ -1190,6 +1194,9 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
             )}
 
             {/* Spotify-style recently selected results */}
+            {!hasQuery && recentError && (
+              <p role="alert" className="px-5 pt-3 text-sm text-red-400">{recentError}</p>
+            )}
             {!hasQuery && !error && (
               recentLoading ? (
                 <div className="flex items-center justify-center py-12">
@@ -1201,8 +1208,9 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                     <h2 id="recent-searches-title" className="text-sm font-semibold text-white">Recent searches</h2>
                     <button
                       type="button"
-                      onClick={() => void dismissAllRecentSearches()}
-                      className="rounded-lg px-2 py-1 text-xs font-medium text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
+                      onClick={() => void dismissRecentSearch()}
+                      disabled={recentSaving}
+                      className="rounded-lg px-2 py-1 text-xs font-medium text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-50"
                     >
                       Clear all
                     </button>
@@ -1227,6 +1235,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                         <button
                           type="button"
                           onClick={() => void dismissRecentSearch(recent)}
+                          disabled={recentSaving}
                           className="mr-2 rounded-full p-2 text-slate-500 transition hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
                           aria-label={`Remove ${recent.title} from recent searches`}
                           title="Remove"
