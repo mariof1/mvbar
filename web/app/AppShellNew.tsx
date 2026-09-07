@@ -2357,11 +2357,11 @@ export function AppShellNew() {
     } else if (incoming.command === 'next') {
       const state = usePlayer.getState();
       if (state.index >= state.queue.length - 1) return false;
-      nextLocally();
+      await nextLocally(!audio?.paused);
     }
     else if (incoming.command === 'previous') {
       if (usePlayer.getState().index <= 0) return false;
-      prevLocally();
+      await prevLocally(!audio?.paused);
     }
     else if (incoming.command === 'seek' && audio) {
       audio.currentTime = Math.max(0, Math.min(audio.duration || Number.MAX_SAFE_INTEGER, (Number(payload.positionMs) || 0) / 1000));
@@ -2369,7 +2369,7 @@ export function AppShellNew() {
     else if (incoming.command === 'play_index') {
       const targetIndex = Number(payload.index) || 0;
       if (targetIndex < 0 || targetIndex >= usePlayer.getState().queue.length) return false;
-      playIndexLocally(targetIndex);
+      await playIndexLocally(targetIndex);
     }
     else if (incoming.command === 'remove_index') {
       const targetIndex = Number(payload.index) || 0;
@@ -2437,20 +2437,32 @@ export function AppShellNew() {
     };
   }, [asConnectTrack, index, isOpen, nowPlaying, queue]);
 
-  const handleConnectDevice = useCallback((target: MvbarConnectDevice) => {
+  const transferPending = useRef(false);
+  const handleConnectDevice = useCallback(async (target: MvbarConnectDevice) => {
     const state = useMvbarConnect.getState();
     if (target.id === state.selectedDeviceId) return;
-    if (target.id !== state.localDeviceId) {
-      useUi.getState().closePodcastPlayer();
-      useUi.getState().closeAudiobookPlayer();
+    if (transferPending.current) {
+      showRecommendationToast('Playback is already transferring. Please wait.', undefined, 'top-right');
+      return;
+    }
+    if (target.id !== state.localDeviceId && (useUi.getState().podcastEpisode || useUi.getState().audiobookChapter)) {
+      showRecommendationToast('Connect transfers music only. Podcast or audiobook playback stays on this device.', undefined, 'top-right');
+      return;
     }
     const selected = state.devices.find((device) => device.id === state.selectedDeviceId);
     const local = state.devices.find((device) => device.id === state.localDeviceId);
     const source = selected?.state.track ? selected
       : local?.state.track ? local
         : state.devices.find((device) => device.state.isPlaying);
-    if (source?.state.track && source.id !== target.id) {
-      transferMvbarPlayback(source.id, target.id);
+    if (source?.state.track && source.id !== target.id && (source.state.isPlaying || !target.state.isPlaying)) {
+      const userId = useAuth.getState().user?.id;
+      transferPending.current = true;
+      showRecommendationToast(`Transferring playback to ${target.name}…`, undefined, 'top-right');
+      try {
+        if (!await transferMvbarPlayback(source.id, target.id) || useAuth.getState().user?.id !== userId) return;
+      } finally {
+        transferPending.current = false;
+      }
     }
     selectConnectDevice(target.id);
     showRecommendationToast(`Controlling ${target.name}`, 'success', 'top-right');

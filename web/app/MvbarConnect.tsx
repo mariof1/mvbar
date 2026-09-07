@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDialogFocus } from './useDialogFocus';
+import { RemoteSeekSlider } from './RemoteSeekSlider';
 import {
   renameLocalMvbarConnectDevice,
   sendMvbarConnectCommand,
@@ -281,15 +282,9 @@ export function MvbarRemotePlayerBar({
           </div>
         </div>
       )}
-      <input
-        type="range"
-        min={0}
-        max={Math.max(1, duration)}
-        value={position}
-        onChange={(event) => command('seek', { positionMs: Number(event.target.value) })}
-        aria-label={`Seek on ${device.name}`}
-        className="absolute -top-1 left-0 h-2 w-full cursor-pointer accent-cyan-500"
-      />
+      <RemoteSeekSlider key={`${device.id}:${track.id}:${device.state.queueIndex}`}
+        position={position} duration={duration} label={`Seek on ${device.name}`}
+        onSeek={(positionMs) => command('seek', { positionMs })} />
       <div className="mx-auto flex h-full max-w-screen-2xl items-center gap-3 px-3 sm:px-4">
         <img
           src={`/api/library/tracks/${track.id}/art`}

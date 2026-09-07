@@ -479,14 +479,26 @@ export function sendMvbarConnectCommand(
   return commandId;
 }
 
-export function transferMvbarPlayback(sourceDeviceId: string, targetDeviceId: string): string {
+const pendingTransfers = new Map<string, (success: boolean) => void>();
+
+export function transferMvbarPlayback(sourceDeviceId: string, targetDeviceId: string): Promise<boolean> {
   const commandId = globalThis.crypto?.randomUUID?.() ?? `transfer_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   if (globalWs?.readyState !== WebSocket.OPEN) {
     useToastStore.getState().show('MVBar Connect is disconnected. Wait for it to reconnect and try again.', 'error', 'top-right');
-    return '';
+    return Promise.resolve(false);
   }
-  sendWebSocketMessage('connect:transfer', { sourceDeviceId, targetDeviceId, commandId });
-  return commandId;
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      useToastStore.getState().show('Playback transfer was not confirmed. Please try again.', 'error', 'top-right');
+      pendingTransfers.get(commandId)?.(false);
+    }, 15000);
+    pendingTransfers.set(commandId, (success) => {
+      window.clearTimeout(timer);
+      pendingTransfers.delete(commandId);
+      resolve(success);
+    });
+    sendWebSocketMessage('connect:transfer', { sourceDeviceId, targetDeviceId, commandId });
+  });
 }
 
 export function subscribeMvbarConnectCommands(
@@ -662,6 +674,7 @@ export function useWebSocket(authIdentity: string | null) {
           } else if (msg.type === 'connect:error') {
             useToastStore.getState().show(msg.data.error || 'MVBar Connect error', 'error', 'top-right');
           } else if (msg.type === 'connect:command_ack') {
+            pendingTransfers.get(msg.data.commandId)?.(msg.data.accepted);
             if (!msg.data.accepted) {
               useToastStore.getState().show(msg.data.error || 'The selected player is unavailable', 'error', 'top-right');
             }
@@ -711,6 +724,7 @@ export function useWebSocket(authIdentity: string | null) {
 
       ws.onclose = () => {
         if (wsRef.current !== ws) return;
+        for (const finish of pendingTransfers.values()) finish(false);
         wsRef.current = null;
         if (globalWs === ws) globalWs = null;
         useMvbarConnect.getState().setConnected(false);
@@ -764,6 +778,7 @@ export function useWebSocket(authIdentity: string | null) {
 
     return () => {
       activeRef.current = false;
+      for (const finish of pendingTransfers.values()) finish(false);
       window.removeEventListener('online', reconnectNow);
       document.removeEventListener('visibilitychange', reconnectNow);
       if (reconnectTimeoutRef.current) {

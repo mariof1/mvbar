@@ -30,7 +30,7 @@ type PlayerState = {
   isOpen: boolean;
   setQueueAndPlay: (tracks: QueueTrack[], startIndex: number, play?: boolean) => Promise<void> | null;
   playTrackNow: (t: QueueTrack) => void;
-  playIndex: (idx: number) => void;
+  playIndex: (idx: number) => Promise<void> | null;
   addToQueue: (t: QueueTrack) => void;
   addManyToQueue: (tracks: QueueTrack[]) => void;
   playNext: (t: QueueTrack) => void;
@@ -38,8 +38,8 @@ type PlayerState = {
   removeFromQueue: (idx: number) => void;
   reorderQueue: (fromIdx: number, toIdx: number) => void;
   clearQueue: () => void;
-  next: () => void;
-  prev: () => void;
+  next: (play?: boolean) => Promise<void> | null;
+  prev: (play?: boolean) => Promise<void> | null;
   close: () => void;
   reset: () => void;
 };
@@ -95,8 +95,9 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       closePodcastPlayer();
       closeAudiobookPlayer();
       set({ index: idx, isOpen: true });
-      playImmediately(s.queue[idx]);
+      return playImmediately(s.queue[idx]);
     }
+    return null;
   },
   addToQueue: (t) => {
     const s = get();
@@ -213,17 +214,17 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       set({ queue: [s.queue[s.index]], index: 0 });
     }
   },
-  next: () => {
+  next: (play = true) => {
     const s = get();
-    if (s.index + 1 >= s.queue.length) return;
+    if (s.index + 1 >= s.queue.length) return null;
     set({ index: s.index + 1, isOpen: true });
-    playImmediately(s.queue[s.index + 1]);
+    return playImmediately(s.queue[s.index + 1], play);
   },
-  prev: () => {
+  prev: (play = true) => {
     const s = get();
-    if (s.index <= 0) return;
+    if (s.index <= 0) return null;
     set({ index: s.index - 1, isOpen: true });
-    playImmediately(s.queue[s.index - 1]);
+    return playImmediately(s.queue[s.index - 1], play);
   },
   close: () => {
     stopMusicPlayback(true);

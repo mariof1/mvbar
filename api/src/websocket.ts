@@ -36,6 +36,8 @@ interface PendingConnectCommand {
   timeout: ReturnType<typeof setTimeout>;
   transferSourceSocket?: WebSocket;
   transferControllerDeviceId?: string;
+  transferSourceTrackId?: number;
+  transferSourceQueueIndex?: number;
 }
 
 const pendingConnectCommands = new Map<string, PendingConnectCommand>();
@@ -78,6 +80,20 @@ function finishPendingCommand(pending: PendingConnectCommand, success: boolean, 
   if (pendingConnectCommands.get(key) !== pending) return;
   pendingConnectCommands.delete(key);
   clearTimeout(pending.timeout);
+
+  if (success && pending.transferSourceSocket) {
+    const sourceState = clients.get(pending.transferSourceSocket)?.connect?.state;
+    if (sourceState && (sourceState.track?.id !== pending.transferSourceTrackId || sourceState.queueIndices[sourceState.queueIndex] !== pending.transferSourceQueueIndex)) {
+      // The user selected another song while the destination was preparing.
+      // Leave that new playback alone and pause the stale destination instead.
+      send(pending.targetSocket, 'connect:command', {
+        commandId: `${pending.commandId}:cancel`, sourceDeviceId: pending.transferControllerDeviceId,
+        command: 'pause', payload: {},
+      });
+      success = false;
+      error = 'Playback changed while the transfer was starting. Please try again.';
+    }
+  }
 
   if (success && pending.transferSourceSocket && pending.transferSourceSocket !== pending.targetSocket) {
     send(pending.transferSourceSocket, 'connect:command', {
@@ -462,6 +478,11 @@ export function registerWebsocketRoutes(app: FastifyInstance): void {
             });
             return;
           }
+          if ([...pendingConnectCommands.values()].some((pending) => pending.userId === userId && pending.transferSourceSocket &&
+            [source.socket, target.socket].some((endpoint) => endpoint === pending.targetSocket || endpoint === pending.transferSourceSocket))) {
+            send(socket, 'connect:command_ack', { commandId: transfer.commandId, accepted: false, error: 'Playback is already transferring. Please wait.' });
+            return;
+          }
           const confirmsCommands = target.connect.capabilities.includes('command-results-v1');
           if (confirmsCommands && !beginPendingCommand({
             controllerSocket: socket,
@@ -471,6 +492,8 @@ export function registerWebsocketRoutes(app: FastifyInstance): void {
             commandId: transfer.commandId,
             transferSourceSocket: source.socket,
             transferControllerDeviceId: controller.connect.deviceId,
+            transferSourceTrackId: state.track?.id,
+            transferSourceQueueIndex: state.queueIndices[state.queueIndex],
           })) {
             send(socket, 'connect:command_ack', {
               commandId: transfer.commandId,
