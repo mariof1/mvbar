@@ -35,6 +35,8 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
   const [loading, setLoading] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [retry, setRetry] = useState(0);
   useBodyScrollLock(Boolean(track));
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef, onClose, !!track);
@@ -43,6 +45,8 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
     if (!track || !token) return;
     let active = true;
     setLoading(true);
+    setFriends([]);
+    setLoadError(false);
     setError(null);
     setSelected(new Set());
     setMessage('');
@@ -51,11 +55,11 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
       .catch((reason: any) => {
         if (!active) return;
         if (reason?.status === 401) clear();
-        setError('Could not load your friends.');
+        setLoadError(true);
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [track, token, clear]);
+  }, [track, token, clear, retry]);
 
   useEffect(() => {
     if (!track) return;
@@ -78,7 +82,7 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
   };
 
   const submit = async () => {
-    if (!token || selected.size === 0 || sharing) return;
+    if (!token || selected.size === 0 || sharing || loading || loadError) return;
     setSharing(true);
     setError(null);
     try {
@@ -122,7 +126,13 @@ export function ShareTrackDialog({ track, onClose }: { track: QueueTrack | null;
 
         <div className="max-h-[55vh] overflow-y-auto p-4 sm:p-5">
           {loading && <p className="py-8 text-center text-sm text-slate-400">Loading friends…</p>}
-          {!loading && friends.length === 0 && (
+          {loadError && (
+            <div className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-300">
+              <p role="alert">Could not load your friends.</p>
+              <button type="button" onClick={() => setRetry(value => value + 1)} className="mt-2 rounded px-3 py-2 text-cyan-400 hover:bg-white/10">Retry</button>
+            </div>
+          )}
+          {!loading && !loadError && friends.length === 0 && (
             <div className="py-7 text-center">
               <p className="font-medium text-white">Add a friend first</p>
               <p className="mt-1 text-sm text-slate-400">Friends you add in mvbar will appear here.</p>
