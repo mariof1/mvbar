@@ -11,6 +11,7 @@ import {
 import { trackArtistLabel } from './artistDisplay';
 import { useToastStore } from './Toast';
 import { useBodyScrollLock } from './useBodyScrollLock';
+import { useDialogFocus } from './useDialogFocus';
 
 type Track = {
   id: number;
@@ -228,6 +229,8 @@ export function Recommendations() {
   const [recommendationProfile, setRecommendationProfile] = useState<'new' | 'learning' | 'personalized'>('new');
   const [hiddenMixCount, setHiddenMixCount] = useState(0);
   const [detailsBucket, setDetailsBucket] = useState<Bucket | null>(null);
+  const detailsRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(detailsRef, () => setDetailsBucket(null), Boolean(detailsBucket));
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = useToastStore((state) => state.show);
   useBodyScrollLock(Boolean(detailsBucket));
@@ -433,7 +436,9 @@ export function Recommendations() {
           role="presentation"
           onClick={() => setDetailsBucket(null)}
         >
-          <section
+          <div
+            ref={detailsRef}
+            tabIndex={-1}
             role="dialog"
             aria-modal="true"
             aria-labelledby="recommendation-details-title"
@@ -474,7 +479,7 @@ export function Recommendations() {
                 Hide this mix
               </button>
             </div>
-          </section>
+          </div>
         </div>
       )}
     </div>

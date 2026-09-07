@@ -528,10 +528,16 @@ export function BrowseNew(props: {
   }, [tab, artists.length, albums.length, genres.length, countries.length, languages.length, loadArtists, loadAlbums, loadGenres, loadCountries, loadLanguages]);
 
   // Helper to refresh album detail
+  const currentAlbum = useRef({ album: selectedAlbum, token });
+  currentAlbum.current = { album: selectedAlbum, token };
+  const albumRequest = useRef(0);
   const refreshAlbumDetail = useCallback(async () => {
-    if (!token || !selectedAlbum) return;
+    if (!token || !selectedAlbum || currentAlbum.current.album !== selectedAlbum || currentAlbum.current.token !== token) return;
+    const request = ++albumRequest.current;
+    const isCurrent = () => request === albumRequest.current && currentAlbum.current.album === selectedAlbum && currentAlbum.current.token === token;
     try {
       const r = await browseAlbum(token, selectedAlbum.artist, selectedAlbum.album, selectedAlbum.artistId);
+      if (!isCurrent()) return;
       setAlbumDetail({
         name: r.album.name,
         artist: r.album.artist,
@@ -540,6 +546,7 @@ export function BrowseNew(props: {
         totalDiscs: r.album.total_discs ?? 1,
       });
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
     }
   }, [token, selectedAlbum, clear]);
@@ -638,11 +645,10 @@ export function BrowseNew(props: {
 
   // Load album detail
   useEffect(() => {
-    if (!selectedAlbum) {
-      setAlbumDetail(null);
-      return;
-    }
-    refreshAlbumDetail();
+    setAlbumDetail(null);
+    if (selectedAlbum) refreshAlbumDetail();
+    const counter = albumRequest;
+    return () => { ++counter.current; };
   }, [selectedAlbum, refreshAlbumDetail]);
 
   // Load genre tracks

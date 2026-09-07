@@ -85,9 +85,10 @@ function routeToHash(route: Route): string {
 
 // Parse URL hash to route
 function hashToRoute(hash: string): Route {
-  const path = hash.replace(/^#\/?/, '');
+  // Separate the URL query before decoding literal question marks in names.
+  const [path, queryString = ''] = hash.replace(/^#\/?/, '').split('?');
   const parts = path.split('/').map(p => decodeURIComponent(p));
-  const query = new URLSearchParams(hash.split('?')[1] || '');
+  const query = new URLSearchParams(queryString);
   
   if (!path) return { type: 'for-you' };
   if (path === 'search') return { type: 'search' };
@@ -110,7 +111,7 @@ function hashToRoute(hash: string): Route {
     }
     if (parts[1] === 'album' && parts[2] && parts[3]) {
       const artistId = query.get('artistId');
-      return { type: 'browse-album', artist: parts[2], album: parts[3].split('?')[0], artistId: artistId ? parseInt(artistId, 10) : undefined };
+      return { type: 'browse-album', artist: parts[2], album: parts[3], artistId: artistId ? parseInt(artistId, 10) : undefined };
     }
     if (parts[1] === 'genre' && parts[2]) {
       return { type: 'browse-genre', genre: parts[2] };
