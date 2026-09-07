@@ -229,6 +229,8 @@ export function Recommendations() {
   const [recommendationProfile, setRecommendationProfile] = useState<'new' | 'learning' | 'personalized'>('new');
   const [hiddenMixCount, setHiddenMixCount] = useState(0);
   const [detailsBucket, setDetailsBucket] = useState<Bucket | null>(null);
+  const hidingRef = useRef(false);
+  const [hiding, setHiding] = useState(false);
   const detailsRef = useRef<HTMLDivElement>(null);
   useDialogFocus(detailsRef, () => setDetailsBucket(null), Boolean(detailsBucket));
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -302,16 +304,21 @@ export function Recommendations() {
   }, [token]);
 
   const hideBucket = async (bucket: Bucket) => {
-    if (!token) return;
+    if (!token || hidingRef.current) return;
+    hidingRef.current = true;
+    setHiding(true);
     try {
       const result = await sendRecommendationFeedback(token, { action: 'hide_bucket', bucketKey: bucket.key });
       setBuckets((current) => current.filter((item) => item.key !== bucket.key));
       setHiddenMixCount((current) => result.hiddenMixCount ?? current + 1);
-      setDetailsBucket(null);
+      setDetailsBucket(current => current?.key === bucket.key ? null : current);
       showToast(`Hidden “${bucket.name}”`, 'success');
     } catch (feedbackError: any) {
       if (feedbackError?.status === 401) clear();
       showToast('Could not save recommendation feedback', 'error');
+    } finally {
+      hidingRef.current = false;
+      setHiding(false);
     }
   };
 
@@ -475,8 +482,9 @@ export function Recommendations() {
                 type="button"
                 className="rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-red-300 hover:bg-red-500/20"
                 onClick={() => void hideBucket(detailsBucket)}
+                disabled={hiding}
               >
-                Hide this mix
+                {hiding ? 'Saving…' : 'Hide this mix'}
               </button>
             </div>
           </div>
