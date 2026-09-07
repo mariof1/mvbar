@@ -245,11 +245,14 @@ export function Playlists(props: {
     if (!token) return;
     const ok = await showConfirm({ title: 'Delete Playlist', message: 'Delete this playlist? This cannot be undone.', confirmLabel: 'Delete', danger: true });
     if (!ok) return;
+    setError(null);
     try {
       await deletePlaylist(token, Number(id));
       await refreshPlaylists();
     } catch (e: any) {
       if (e?.status === 401) clear();
+      setError('Could not delete playlist. Please try again.');
+      showToast('Could not delete playlist. Please try again.', 'error');
     }
   }
 

@@ -107,22 +107,27 @@ export function RecentlyAdded({
     };
   }, [libraryLastUpdate, loadAlbums, token]);
 
-  const loadAlbumTracks = useCallback(async (album: Album) => {
-    if (!token) return;
+  useEffect(() => {
+    if (!token || !selectedAlbum) return;
+    const controller = new AbortController();
     setTracksLoading(true);
-    try {
-      const data = await apiFetch(`/browse/album?album=${encodeURIComponent(album.album)}&artist=${encodeURIComponent(album.display_artist || '')}`, {}, token);
-      setTracks(data.tracks || []);
-    } catch (err) {
-      console.error('Failed to load album tracks:', err);
-    } finally {
-      setTracksLoading(false);
-    }
-  }, [token]);
+    setTracks([]);
+    const album = selectedAlbum;
+    void apiFetch(`/browse/album?album=${encodeURIComponent(album.album)}&artist=${encodeURIComponent(album.display_artist || '')}`, { signal: controller.signal }, token)
+      .then(data => {
+        if (!controller.signal.aborted) setTracks(data.tracks || []);
+      })
+      .catch(err => {
+        if (!controller.signal.aborted) console.error('Failed to load album tracks:', err);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setTracksLoading(false);
+      });
+    return () => controller.abort();
+  }, [token, selectedAlbum]);
 
   const handleAlbumClick = (album: Album) => {
     setSelectedAlbum(album);
-    loadAlbumTracks(album);
   };
 
   const handlePlayAlbum = (album: Album, e: React.MouseEvent) => {
@@ -200,18 +205,20 @@ export function RecentlyAdded({
             {tracks.map((track, idx) => (
               <div
                 key={track.id}
-                className="flex items-center gap-4 p-3 rounded-lg hover:bg-white/5 group cursor-pointer"
-                onClick={() => onPlay(track)}
+                className="flex items-center gap-4 p-3 rounded-lg hover:bg-white/5 group"
               >
+                <button type="button" onClick={() => onPlay(track)} aria-label={`Play ${track.title}`}
+                  className="flex min-w-0 flex-1 items-center gap-4 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
                 <span className="w-8 text-center text-slate-500 text-sm">
                   {track.track_num || idx + 1}
                 </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-white truncate">{track.title}</div>
-                  <div className="text-slate-400 text-sm truncate">{trackArtistLabel(track)}</div>
-                </div>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-white truncate">{track.title}</span>
+                  <span className="block text-slate-400 text-sm truncate">{trackArtistLabel(track)}</span>
+                </span>
                 <span className="text-slate-500 text-sm">{formatDuration(track.duration_ms)}</span>
-                <div onClick={(e) => e.stopPropagation()} className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                </button>
+                <div className="sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
                   <AddMenu
                     label="track"
                     title="Add to..."
@@ -232,27 +239,28 @@ export function RecentlyAdded({
       {albums.map((album) => (
         <div
           key={`${album.album}-${album.display_artist}`}
-          className="group cursor-pointer relative"
-          onClick={() => handleAlbumClick(album)}
+          className="group relative"
         >
+          <button type="button" aria-label={`Open album ${album.album}`} onClick={() => handleAlbumClick(album)}
+            className="absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400" />
           <div className="relative aspect-square rounded-xl overflow-hidden mb-2">
             <ArtImage 
               path={album.art_path} 
               hash={album.art_hash} 
               className="w-full h-full" 
             />
-            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+            <div className="absolute inset-0 z-20 pointer-events-none bg-black/40 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity flex items-center justify-center">
               <button
                 aria-label={`Play album ${album.album}`}
                 onClick={(e) => handlePlayAlbum(album, e)}
-                className="w-12 h-12 bg-cyan-500 rounded-full flex items-center justify-center transform scale-90 group-hover:scale-100 transition-transform"
+                className="pointer-events-auto w-12 h-12 bg-cyan-500 rounded-full flex items-center justify-center transform scale-90 group-hover:scale-100 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
               >
                 <svg className="w-6 h-6 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 5v14l11-7z" />
                 </svg>
               </button>
             </div>
-            <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+            <div className="absolute top-2 right-2 z-20 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
               <AddMenu
                 variant="subtle"
                 label="album"
