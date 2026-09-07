@@ -122,20 +122,24 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef, onClose);
 
-  // Search podcasts via iTunes API
+  const searchRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => { searchRequest.current?.abort(); }, []);
+
+  // Only the current query may update results or the loading state.
   const handleSearch = useCallback(async () => {
-    if (!searchQuery.trim() || searchQuery.trim().length < 2) return;
-    
+    if (searchQuery.trim().length < 2) return;
+    searchRequest.current?.abort();
+    const request = new AbortController();
+    searchRequest.current = request;
     setLoading(true);
     setError(null);
-    
     try {
-      const res = await apiFetch(`/podcasts/search?q=${encodeURIComponent(searchQuery.trim())}`, {}, token!);
-      setSearchResults(res.results || []);
+      const res = await apiFetch(`/podcasts/search?q=${encodeURIComponent(searchQuery.trim())}`, { signal: request.signal }, token!);
+      if (!request.signal.aborted) setSearchResults(res.results || []);
     } catch (err: any) {
-      setError(err?.error || 'Search failed');
+      if (!request.signal.aborted) setError(err?.data?.error || 'Search failed');
     } finally {
-      setLoading(false);
+      if (!request.signal.aborted) setLoading(false);
     }
   }, [searchQuery, token]);
 
@@ -228,7 +232,13 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
               <input
                 type="text"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  searchRequest.current?.abort();
+                  setSearchQuery(e.target.value);
+                  setSearchResults([]);
+                  setLoading(false);
+                  setError(null);
+                }}
                 onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                 aria-label="Search for podcasts"
                 placeholder="Search for podcasts..."

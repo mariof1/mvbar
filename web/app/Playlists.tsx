@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   addPlaylistCollaborator,
   addTrackToPlaylist,
@@ -196,11 +196,16 @@ export function Playlists(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastLibraryUpdate, selectedId]);
 
+  const createPending = useRef(false);
+  const [creating, setCreating] = useState(false);
+
   async function handleCreate() {
-    if (!token) return;
+    if (!token || createPending.current) return;
     setError(null);
     const n = name.trim();
     if (!n) return;
+    createPending.current = true;
+    setCreating(true);
     try {
       await createPlaylist(token, n);
       setName('');
@@ -208,6 +213,9 @@ export function Playlists(props: {
     } catch (e: any) {
       if (e?.status === 401) clear();
       setError(e?.data?.error ?? e?.message ?? 'error');
+    } finally {
+      createPending.current = false;
+      setCreating(false);
     }
   }
 
@@ -653,12 +661,13 @@ export function Playlists(props: {
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+              disabled={creating}
               placeholder="New playlist name..."
               className="flex-1 px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-transparent transition-all"
             />
             <button
               onClick={handleCreate}
-              disabled={!name.trim()}
+              disabled={creating || !name.trim()}
               className={`px-6 py-3 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 ${
                 name.trim()
                   ? 'bg-cyan-500 hover:bg-cyan-400 text-white'

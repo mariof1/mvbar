@@ -23,9 +23,11 @@ function DeviceIcon({ active = false }: { active?: boolean }) {
 export function MvbarConnectButton({
   onSelect,
   compact = false,
+  placement = 'below',
 }: {
   onSelect: (device: MvbarConnectDevice) => void;
   compact?: boolean;
+  placement?: 'above' | 'below';
 }) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -58,13 +60,23 @@ export function MvbarConnectButton({
     const close = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      setOpen(false);
+      rootRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    };
     document.addEventListener('pointerdown', close);
-    return () => document.removeEventListener('pointerdown', close);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', escape);
+    };
   }, [open, mobile]);
 
   const panel = (
         <div ref={panelRef} role="dialog" aria-modal={mobile ? true : undefined} aria-labelledby={titleId} tabIndex={-1}
-          className={`${mobile ? 'relative w-full max-w-sm max-h-[calc(100dvh-2rem)]' : 'absolute right-0 top-full z-[80] mt-2 w-[min(21rem,calc(100vw-2rem))] max-h-[calc(100dvh-6rem)]'} flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 shadow-2xl`}>
+          className={`${mobile ? 'relative w-full max-w-sm max-h-[calc(100dvh-2rem)]' : `absolute right-0 z-[80] w-[min(21rem,calc(100vw-2rem))] max-h-[calc(100dvh-6rem)] ${placement === 'above' ? 'bottom-full mb-2' : 'top-full mt-2'}`} flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 shadow-2xl`}>
           <div className="flex flex-none items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
             <div>
               <p id={titleId} className="font-semibold text-white">MVBar Connect</p>
@@ -311,7 +323,7 @@ export function MvbarRemotePlayerBar({
           >
             <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>
           </button>
-          <MvbarConnectButton onSelect={onChooseDevice} compact />
+          <MvbarConnectButton onSelect={onChooseDevice} compact placement="above" />
         </div>
       </div>
     </div>
