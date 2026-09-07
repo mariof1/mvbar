@@ -18,8 +18,13 @@ export const useFavorites = create<FavoritesState>((set, get) => ({
   ids: new Set<number>(),
   lastChange: 0,
   refresh: async (token: string) => {
-    const r = await listFavorites(token, 500, 0);
-    set({ ids: new Set((r.tracks ?? []).map((t: any) => Number(t.id))), lastChange: Date.now() });
+    const ids = new Set<number>();
+    for (let offset = 0; ; offset += 200) {
+      const result = await listFavorites(token, 200, offset);
+      for (const track of result.tracks ?? []) ids.add(Number(track.id));
+      if ((result.tracks ?? []).length < 200) break;
+    }
+    set({ ids, lastChange: Date.now() });
   },
   isFavorite: (trackId: number) => get().ids.has(trackId),
   toggle: async (token: string, trackId: number) => {

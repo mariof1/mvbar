@@ -22,12 +22,13 @@ export function History(props: {
 
   async function refresh() {
     if (!token) return;
+    setError(null);
     try {
       const r = await listHistory(token, 100, 0);
       setTracks(r.tracks ?? []);
     } catch (e: any) {
       if (e?.status === 401) clear();
-      setError(e?.message ?? 'error');
+      setError('Could not load recently played songs. Please try again.');
     }
   }
 
@@ -99,26 +100,16 @@ export function History(props: {
             key={`${t.played_at}-${t.id}`}
             className="group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 rounded-xl hover:bg-slate-800/50 transition-colors"
           >
-            {/* Track Number / Play */}
-            <div className="w-6 sm:w-8 flex-shrink-0 text-center">
-              <span className="text-xs sm:text-sm text-slate-500 group-hover:hidden">{idx + 1}</span>
-              <button
-                onClick={() => props.onPlay?.({ id: t.id, title: t.title, artist: trackArtistLabel(t) })}
-                className="hidden group-hover:block text-cyan-400"
-              >
-                <svg className="w-4 h-4 sm:w-5 sm:h-5 mx-auto" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Track Info */}
-            <div className="flex-1 min-w-0">
-              <div className="font-medium text-white truncate text-sm sm:text-base">{t.title ?? t.path}</div>
-              <div className="text-xs sm:text-sm text-slate-400 truncate">
-                {[trackArtistLabel(t), t.album].filter(Boolean).join(' • ')}
-              </div>
-            </div>
+            <button type="button"
+              onClick={() => props.onPlay?.({ id: t.id, title: t.title, artist: trackArtistLabel(t) })}
+              aria-label={`Play ${t.title ?? t.path}`}
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70 sm:gap-4">
+              <span className="w-6 flex-shrink-0 text-center text-xs text-slate-500 sm:w-8 sm:text-sm">{idx + 1}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-white sm:text-base">{t.title ?? t.path}</span>
+                <span className="block truncate text-xs text-slate-400 sm:text-sm">{[trackArtistLabel(t), t.album].filter(Boolean).join(' • ')}</span>
+              </span>
+            </button>
 
             {/* Time Ago */}
             <div className="text-xs sm:text-sm text-slate-500 whitespace-nowrap flex-shrink-0">
@@ -126,7 +117,7 @@ export function History(props: {
             </div>
 
             {/* Actions - hidden on small screens */}
-            <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
               <AddMenu
                 label="track"
                 title="Add to..."
