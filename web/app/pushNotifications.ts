@@ -152,19 +152,17 @@ export async function unsubscribeCurrentPushDevice(token?: string | null) {
     window.localStorage.removeItem(PUSH_ENABLED_KEY);
     return;
   }
-  if (token) {
-    try {
+  try {
+    if (token) {
       await apiFetch('/push/subscriptions', {
         method: 'DELETE',
         body: JSON.stringify({ endpoint: subscription.endpoint }),
       }, token);
-    } finally {
-      await subscription.unsubscribe();
     }
-  } else {
+  } finally {
     await subscription.unsubscribe();
+    window.localStorage.removeItem(PUSH_ENABLED_KEY);
   }
-  window.localStorage.removeItem(PUSH_ENABLED_KEY);
 }
 
 export function systemSocialNotificationsEnabled() {
