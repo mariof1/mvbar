@@ -11,15 +11,18 @@ export function AutoLogin() {
 
   useEffect(() => {
     if (token) return;
+    let active = true;
     (async () => {
       try {
         const r = await me();
+        if (!active || useAuth.getState().token) return;
         if (!r.ok || !r.user) throw new Error('not signed in');
         setAuth(r.user);
       } catch {
-        clear();
+        if (active && !useAuth.getState().token) clear();
       }
     })();
+    return () => { active = false; };
   }, [token, setAuth, clear]);
 
   return null;
