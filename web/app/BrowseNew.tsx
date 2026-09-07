@@ -292,6 +292,8 @@ export function BrowseNew(props: {
 
   const [languageTracks, setLanguageTracks] = useState<Track[]>([]);
 
+  const [listError, setListError] = useState<{ tab: Tab; reset: boolean; silent: boolean } | null>(null);
+
   const PAGE_SIZE = 48;
 
   const beginListRequest = useLatestRequest(`${tab}:${debouncedFilter}`, token);
@@ -304,6 +306,7 @@ export function BrowseNew(props: {
     if (!isCurrent()) return;
     pendingListRequest.current = isCurrent;
     const silent = Boolean(opts?.silent);
+    setListError(null);
     if (silent) setWsRefreshing(true);
     else setLoading(true);
     try {
@@ -323,7 +326,9 @@ export function BrowseNew(props: {
       setArtistsTotal(total);
       setArtistsOffset(offset + rows.length);
     } catch (e: any) {
-      if (isCurrent() && e?.status === 401) clear();
+      if (!isCurrent()) return;
+      if (e?.status === 401) clear();
+      setListError({ tab: 'artists', reset: reset, silent });
     } finally {
       if (isCurrent()) {
         pendingListRequest.current = null;
@@ -340,6 +345,7 @@ export function BrowseNew(props: {
     if (!isCurrent()) return;
     pendingListRequest.current = isCurrent;
     const silent = Boolean(opts?.silent);
+    setListError(null);
     if (silent) setWsRefreshing(true);
     else setLoading(true);
     try {
@@ -359,7 +365,9 @@ export function BrowseNew(props: {
       setAlbumsTotal(total);
       setAlbumsOffset(offset + rows.length);
     } catch (e: any) {
-      if (isCurrent() && e?.status === 401) clear();
+      if (!isCurrent()) return;
+      if (e?.status === 401) clear();
+      setListError({ tab: 'albums', reset: reset, silent });
     } finally {
       if (isCurrent()) {
         pendingListRequest.current = null;
@@ -376,6 +384,7 @@ export function BrowseNew(props: {
     if (!isCurrent()) return;
     pendingListRequest.current = isCurrent;
     const silent = Boolean(opts?.silent);
+    setListError(null);
     if (silent) setWsRefreshing(true);
     else setLoading(true);
     try {
@@ -395,7 +404,9 @@ export function BrowseNew(props: {
       setGenresTotal(total);
       setGenresOffset(offset + rows.length);
     } catch (e: any) {
-      if (isCurrent() && e?.status === 401) clear();
+      if (!isCurrent()) return;
+      if (e?.status === 401) clear();
+      setListError({ tab: 'genres', reset: reset, silent });
     } finally {
       if (isCurrent()) {
         pendingListRequest.current = null;
@@ -407,45 +418,65 @@ export function BrowseNew(props: {
 
   // Load countries
   const loadCountries = useCallback(async (opts?: { silent?: boolean }) => {
-    if (!token) return;
+    if (!token || pendingListRequest.current?.()) return;
+    const isCurrent = beginListRequest();
+    if (!isCurrent()) return;
+    pendingListRequest.current = isCurrent;
     const silent = Boolean(opts?.silent);
+    setListError(null);
     if (silent) setWsRefreshing(true);
     else setLoading(true);
     try {
       const r = await browseCountries(token);
+      if (!isCurrent()) return;
       const filtered = debouncedFilter
         ? r.countries.filter(c => c.country.toLowerCase().includes(debouncedFilter.toLowerCase()))
         : r.countries;
       setCountries(filtered);
       setCountriesTotal(filtered.length);
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
+      setListError({ tab: 'countries', reset: false, silent });
     } finally {
-      if (silent) setWsRefreshing(false);
-      else setLoading(false);
+      if (isCurrent()) {
+        pendingListRequest.current = null;
+        setWsRefreshing(false);
+        setLoading(false);
+      }
     }
-  }, [token, clear, debouncedFilter]);
+  }, [token, clear, debouncedFilter, beginListRequest]);
 
   // Load languages
   const loadLanguages = useCallback(async (opts?: { silent?: boolean }) => {
-    if (!token) return;
+    if (!token || pendingListRequest.current?.()) return;
+    const isCurrent = beginListRequest();
+    if (!isCurrent()) return;
+    pendingListRequest.current = isCurrent;
     const silent = Boolean(opts?.silent);
+    setListError(null);
     if (silent) setWsRefreshing(true);
     else setLoading(true);
     try {
       const r = await browseLanguages(token);
+      if (!isCurrent()) return;
       const filtered = debouncedFilter
         ? r.languages.filter(l => l.language.toLowerCase().includes(debouncedFilter.toLowerCase()))
         : r.languages;
       setLanguages(filtered);
       setLanguagesTotal(filtered.length);
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
+      setListError({ tab: 'languages', reset: false, silent });
     } finally {
-      if (silent) setWsRefreshing(false);
-      else setLoading(false);
+      if (isCurrent()) {
+        pendingListRequest.current = null;
+        setWsRefreshing(false);
+        setLoading(false);
+      }
     }
-  }, [token, clear, debouncedFilter]);
+  }, [token, clear, debouncedFilter, beginListRequest]);
 
   // One initial/reset request per tab and filter; pagination never resets the list.
   useEffect(() => {
@@ -1626,7 +1657,7 @@ export function BrowseNew(props: {
             (tab === 'genres' && genres.length === 0) ||
             (tab === 'countries' && countries.length === 0) ||
             (tab === 'languages' && languages.length === 0)
-          ) ? 'Loading…' : (
+          ) ? 'Loading…' : listError ? 'Unavailable' : (
             <>
               {tab === 'artists' && formatCount(artistsTotal, 'artist')}
               {tab === 'albums' && formatCount(albumsTotal, 'album')}
@@ -1637,6 +1668,20 @@ export function BrowseNew(props: {
           )}
         </div>
       </div>
+
+      {listError && (
+        <div className="rounded-xl bg-red-500/10 p-3 text-sm text-red-300">
+          <p role="alert">Could not load {listError.tab}. Please try again.</p>
+          <button type="button" className="mt-2 rounded px-3 py-2 text-cyan-400 hover:bg-white/10" onClick={() => {
+            const opts = { silent: listError.silent };
+            if (listError.tab === 'artists') void loadArtists(listError.reset, opts);
+            else if (listError.tab === 'albums') void loadAlbums(listError.reset, opts);
+            else if (listError.tab === 'genres') void loadGenres(listError.reset, opts);
+            else if (listError.tab === 'countries') void loadCountries(opts);
+            else void loadLanguages(opts);
+          }}>Retry</button>
+        </div>
+      )}
 
       {/* Content */}
       <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto no-scrollbar" style={{ maxHeight: 'calc(100vh - 280px)' }}>
