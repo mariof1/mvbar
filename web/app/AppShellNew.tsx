@@ -2098,7 +2098,7 @@ function MobileSidebar(props: {
 
 function Sidebar(props: { tab: string; setTab: (t: string) => void; isAdmin: boolean; missingMusicEnabled: boolean; socialBadge: number; user: { email: string; role: string; avatar_path?: string | null } | null; onLogout: () => void }) {
   return (
-    <aside className="hidden lg:flex flex-col w-64 h-screen fixed left-0 top-0 bg-black/50 border-r border-white/10 p-4">
+    <aside className="hidden lg:flex flex-col w-64 h-screen fixed left-0 top-0 overflow-y-auto overscroll-contain [&>*]:shrink-0 bg-black/50 border-r border-white/10 p-4">
       {/* Logo */}
       <div className="flex items-center gap-3 px-3 py-4 mb-4">
         <img src="/logo.png" alt="mvbar" className="h-12 w-auto" />
