@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useDialogFocus } from './useDialogFocus';
 import {
   renameLocalMvbarConnectDevice,
   sendMvbarConnectCommand,
@@ -29,50 +31,49 @@ export function MvbarConnectButton({
   const [renaming, setRenaming] = useState(false);
   const [deviceName, setDeviceName] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 1023px)');
+    const update = () => setMobile(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  useDialogFocus(panelRef, () => setOpen(false), open && mobile);
+  useEffect(() => {
+    if (!open || !mobile) return;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = overflow; };
+  }, [open, mobile]);
   const devices = useMvbarConnect((state) => state.devices);
   const selectedDeviceId = useMvbarConnect((state) => state.selectedDeviceId);
   const localDeviceId = useMvbarConnect((state) => state.localDeviceId);
   const selected = devices.find((device) => device.id === selectedDeviceId);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || mobile) return;
     const close = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener('pointerdown', close);
     return () => document.removeEventListener('pointerdown', close);
-  }, [open]);
+  }, [open, mobile]);
 
-  return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className={`relative inline-flex items-center justify-center rounded-xl border transition-all ${
-          selectedDeviceId && selectedDeviceId !== localDeviceId
-            ? 'border-cyan-400/40 bg-cyan-500/15 text-cyan-300'
-            : 'border-white/10 bg-white/5 text-slate-400 hover:border-white/20 hover:bg-white/10 hover:text-white'
-        } ${compact ? 'h-9 w-9' : 'h-10 gap-2 px-3'}`}
-        aria-label="MVBar Connect players"
-        aria-expanded={open}
-        title={selected ? `Playing on ${selected.name}` : 'MVBar Connect'}
-      >
-        <DeviceIcon active={Boolean(selected?.state.isPlaying)} />
-        {!compact && <span className="hidden xl:inline text-sm">{selected?.name || 'Connect'}</span>}
-        {devices.length > 1 && (
-          <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-cyan-500 px-1 text-[9px] font-bold text-black">
-            {devices.length}
-          </span>
-        )}
-      </button>
-
-      {open && (
-        <div className="absolute right-0 top-full z-[80] mt-2 w-[min(21rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-white/10 bg-zinc-900/98 shadow-2xl backdrop-blur-xl">
-          <div className="border-b border-white/10 px-4 py-3">
-            <p className="font-semibold text-white">MVBar Connect</p>
-            <p className="mt-0.5 text-xs text-white/45">Choose where playback happens</p>
+  const panel = (
+        <div ref={panelRef} role="dialog" aria-modal={mobile ? true : undefined} aria-labelledby={titleId} tabIndex={-1}
+          className={`${mobile ? 'relative w-full max-w-sm max-h-[calc(100dvh-2rem)]' : 'absolute right-0 top-full z-[80] mt-2 w-[min(21rem,calc(100vw-2rem))] max-h-[calc(100dvh-6rem)]'} flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 shadow-2xl`}>
+          <div className="flex flex-none items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+            <div>
+              <p id={titleId} className="font-semibold text-white">MVBar Connect</p>
+              <p className="mt-0.5 text-xs text-white/45">Choose where playback happens</p>
+            </div>
+            <button type="button" aria-label="Close MVBar Connect" onClick={() => setOpen(false)}
+              className="flex h-10 w-10 flex-none items-center justify-center rounded-lg text-xl text-white/60 hover:bg-white/10 hover:text-white">×</button>
           </div>
-          <div className="max-h-80 overflow-y-auto p-2">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
             {devices.map((device) => {
               const isSelected = device.id === selectedDeviceId;
               const isLocal = device.id === localDeviceId;
@@ -158,7 +159,38 @@ export function MvbarConnectButton({
             Only players signed in to this MVBar account are visible. Browser hostnames are private, so you can use the computer name as a custom label.
           </p>
         </div>
-      )}
+  );
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className={`relative inline-flex items-center justify-center rounded-xl border transition-all ${
+          selectedDeviceId && selectedDeviceId !== localDeviceId
+            ? 'border-cyan-400/40 bg-cyan-500/15 text-cyan-300'
+            : 'border-white/10 bg-white/5 text-slate-400 hover:border-white/20 hover:bg-white/10 hover:text-white'
+        } ${compact ? 'h-9 w-9' : 'h-10 gap-2 px-3'}`}
+        aria-label="MVBar Connect players"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={selected ? `Playing on ${selected.name}` : 'MVBar Connect'}
+      >
+        <DeviceIcon active={Boolean(selected?.state.isPlaying)} />
+        {!compact && <span className="hidden xl:inline text-sm">{selected?.name || 'Connect'}</span>}
+        {devices.length > 1 && (
+          <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-cyan-500 px-1 text-[9px] font-bold text-black">
+            {devices.length}
+          </span>
+        )}
+      </button>
+
+      {open && (mobile ? createPortal(
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+          onPointerDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+          {panel}
+        </div>, document.body
+      ) : panel)}
     </div>
   );
 }
