@@ -1793,6 +1793,21 @@ function DeviceLogsTab({ token }: { token: string }) {
   const [loadingContent, setLoadingContent] = useState(false);
   const [filter, setFilter] = useState('');
   const [uploadUrl, setUploadUrl] = useState('');
+  const uploadUrlRef = useRef<HTMLInputElement>(null);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+
+  const copyUploadUrl = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(uploadUrl);
+        setCopyNotice('Upload endpoint copied.');
+        return;
+      }
+    } catch { /* Select the address for manual copying when access is denied. */ }
+    uploadUrlRef.current?.focus();
+    uploadUrlRef.current?.select();
+    setCopyNotice('Could not copy automatically. The address is selected so you can copy it manually.');
+  };
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
@@ -1861,12 +1876,13 @@ function DeviceLogsTab({ token }: { token: string }) {
       <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700/50">
         <h3 className="text-sm font-medium text-slate-300 mb-2">📱 Android Upload Endpoint</h3>
         <div className="flex items-center gap-2">
-          <code className="text-xs bg-slate-900/50 px-3 py-1.5 rounded-lg text-cyan-400 flex-1 overflow-x-auto">{uploadUrl}</code>
+          <input ref={uploadUrlRef} readOnly value={uploadUrl} aria-label="Android log upload endpoint" className="min-w-0 text-xs font-mono bg-slate-900/50 px-3 py-1.5 rounded-lg text-cyan-400 flex-1" />
           <button
-            onClick={() => { navigator.clipboard.writeText(uploadUrl); }}
+            onClick={() => void copyUploadUrl()}
             className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-xs rounded-lg text-slate-300"
           >Copy</button>
         </div>
+        {copyNotice && <p role="status" className="mt-2 text-xs text-slate-300">{copyNotice}</p>}
         <p className="text-xs text-slate-500 mt-2">POST raw log text • Headers: X-Device, X-App-Version (optional)</p>
       </div>
 
