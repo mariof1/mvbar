@@ -131,6 +131,17 @@ export function Social() {
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchAttempted, setSearchAttempted] = useState(false);
+  const [searchError, setSearchError] = useState(false);
+  const normalizedQuery = query.trim();
+  const beginSearch = useLatestRequest(normalizedQuery, token);
+  const pendingSearch = useRef<(() => boolean) | null>(null);
+
+  useEffect(() => {
+    setSearchResults([]);
+    setSearchAttempted(false);
+    setSearchError(false);
+    setSearching(false);
+  }, [normalizedQuery, token]);
 
   useEffect(() => { setTab(routeTab); }, [routeTab]);
 
@@ -239,17 +250,27 @@ export function Social() {
 
   const search = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!token || query.trim().length < 2 || searching) return;
+    if (!token || normalizedQuery.length < 2 || pendingSearch.current?.()) return;
+    const isCurrent = beginSearch();
+    pendingSearch.current = isCurrent;
     setSearching(true);
-    setSearchAttempted(true);
+    setSearchAttempted(false);
+    setSearchError(false);
+    setSearchResults([]);
     try {
-      const result = await searchSocialUsers(token, query.trim());
+      const result = await searchSocialUsers(token, normalizedQuery);
+      if (!isCurrent()) return;
       setSearchResults(result.users);
+      setSearchAttempted(true);
     } catch (error: any) {
+      if (!isCurrent()) return;
       if (error?.status === 401) clear();
-      else showToast('Could not search users', 'error');
+      else setSearchError(true);
     } finally {
-      setSearching(false);
+      if (isCurrent()) {
+        pendingSearch.current = null;
+        setSearching(false);
+      }
     }
   };
 
@@ -454,6 +475,7 @@ export function Social() {
               </button>
             </form>
             <div className="mt-4 space-y-2">
+              {searchError && <p role="alert" className="text-sm text-red-300">Could not search users. Please try again.</p>}
               {searchResults.map((user) => (
                 <div key={user.id} className="flex items-center gap-3 rounded-xl bg-black/20 p-3">
                   <Avatar user={user} />
