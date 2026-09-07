@@ -28,15 +28,13 @@ export const useFavorites = create<FavoritesState>((set, get) => ({
   },
   isFavorite: (trackId: number) => get().ids.has(trackId),
   toggle: async (token: string, trackId: number) => {
-    const ids = new Set(get().ids);
-    if (ids.has(trackId)) {
+    if (get().ids.has(trackId)) {
       await removeFavorite(token, trackId);
-      ids.delete(trackId);
+      get().removeFromSet(trackId);
     } else {
       await addFavorite(token, trackId);
-      ids.add(trackId);
+      get().addToSet(trackId);
     }
-    set({ ids, lastChange: Date.now() });
   },
   addToSet: (trackId: number) => {
     const ids = new Set(get().ids);
