@@ -110,6 +110,8 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [rssLoading, setRssLoading] = useState(false);
+  const rssPending = useRef(false);
   const [subscribing, setSubscribing] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewDialog, setPreviewDialog] = useState<{
@@ -184,9 +186,10 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
   // Subscribe via direct RSS URL
   const handleRssSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!feedUrl.trim()) return;
+    if (!feedUrl.trim() || rssPending.current) return;
+    rssPending.current = true;
 
-    setLoading(true);
+    setRssLoading(true);
     setError(null);
 
     try {
@@ -196,7 +199,8 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
     } catch (err: any) {
       setError(err?.error || err?.message || 'Failed to subscribe');
     } finally {
-      setLoading(false);
+      rssPending.current = false;
+      setRssLoading(false);
     }
   };
 
@@ -216,7 +220,12 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
           </ChipButton>
           <ChipButton
             selected={tab === 'rss'}
-            onClick={() => setTab('rss')}
+            onClick={() => {
+              searchRequest.current?.abort();
+              setLoading(false);
+              setError(null);
+              setTab('rss');
+            }}
           >
             <RssGlyph />
             RSS URL
@@ -328,10 +337,10 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
               </button>
               <button
                 type="submit"
-                disabled={loading || !feedUrl.trim()}
+                disabled={rssLoading || !feedUrl.trim()}
                 className="flex-1 px-4 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-500 transition-colors disabled:opacity-50"
               >
-                {loading ? 'Subscribing...' : 'Subscribe'}
+                {rssLoading ? 'Subscribing...' : 'Subscribe'}
               </button>
             </div>
           </form>

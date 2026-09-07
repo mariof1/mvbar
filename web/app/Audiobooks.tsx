@@ -61,8 +61,8 @@ async function fetchAudiobooks(token: string): Promise<Audiobook[]> {
   return apiFetch('/audiobooks', {}, token);
 }
 
-async function fetchAudiobook(id: number, token: string): Promise<AudiobookDetail> {
-  const data = await apiFetch(`/audiobooks/${id}`, {}, token) as {
+async function fetchAudiobook(id: number, token: string, signal?: AbortSignal): Promise<AudiobookDetail> {
+  const data = await apiFetch(`/audiobooks/${id}`, { signal }, token) as {
     audiobook: Omit<Audiobook, 'chapter_count' | 'progress'> & { description: string | null };
     chapters: AudiobookChapter[];
     progress: Audiobook['progress'];
@@ -657,21 +657,28 @@ function AudiobookDetailView({
   const [editChapterSaving, setEditChapterSaving] = useState(false);
   useBodyScrollLock(editBookOpen || Boolean(editChapter));
 
+  const detailRequest = useRef<AbortController | null>(null);
   const load = useCallback(async () => {
     if (!token) return;
+    detailRequest.current?.abort();
+    const request = new AbortController();
+    detailRequest.current = request;
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchAudiobook(bookId, token);
-      setBook(data);
+      const data = await fetchAudiobook(bookId, token, request.signal);
+      if (!request.signal.aborted) setBook(data);
     } catch (err: any) {
-      setError(err?.message || 'Failed to load audiobook');
+      if (!request.signal.aborted) setError(err?.message || 'Failed to load audiobook');
     } finally {
-      setLoading(false);
+      if (!request.signal.aborted) setLoading(false);
     }
   }, [bookId, token]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    return () => { detailRequest.current?.abort(); };
+  }, [load]);
 
   const playChapter = (chapter: AudiobookChapter, positionMs = 0) => {
     if (!book) return;
@@ -1089,6 +1096,7 @@ export function Audiobooks() {
   if (selectedBookId !== null) {
     return (
       <AudiobookDetailView
+        key={selectedBookId}
         bookId={selectedBookId}
         onBack={() => { navigate({ type: 'audiobooks' }); load(); }}
       />

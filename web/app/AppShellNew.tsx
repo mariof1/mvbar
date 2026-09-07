@@ -2527,6 +2527,8 @@ export function AppShellNew() {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
+        // Do not open search underneath another modal or steal its focus.
+        if (document.querySelector('[role="dialog"][aria-modal="true"]:not([aria-label="Search library"])')) return;
         setSearchOpen((v) => !v);
       }
     };
