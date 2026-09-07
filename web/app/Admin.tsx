@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { useLatestRequest } from './useLatestRequest';
 import {
   adminCreateUser,
   adminDeleteUser,
@@ -1791,6 +1792,7 @@ function DeviceLogsTab({ token }: { token: string }) {
   const [selectedLog, setSelectedLog] = useState<string | null>(null);
   const [logContent, setLogContent] = useState('');
   const [loadingContent, setLoadingContent] = useState(false);
+  const beginLogRequest = useLatestRequest('device-log', token);
   const [filter, setFilter] = useState('');
   const [uploadUrl, setUploadUrl] = useState('');
   const uploadUrlRef = useRef<HTMLInputElement>(null);
@@ -1827,18 +1829,22 @@ function DeviceLogsTab({ token }: { token: string }) {
   }, []);
 
   const viewLog = async (name: string) => {
+    const isCurrent = beginLogRequest();
     setSelectedLog(name);
     setLoadingContent(true);
+    setLogContent('');
     try {
       const data = await apiFetch(`/admin/device-logs/${encodeURIComponent(name)}`, {
         method: 'GET',
       }, token);
+      if (!isCurrent()) return;
       if (data.ok) setLogContent(data.content);
       else setLogContent('Failed to load log');
     } catch {
-      setLogContent('Failed to load log');
+      if (isCurrent()) setLogContent('Failed to load log');
+    } finally {
+      if (isCurrent()) setLoadingContent(false);
     }
-    setLoadingContent(false);
   };
 
   const deleteLog = async (name: string) => {
@@ -1920,15 +1926,14 @@ function DeviceLogsTab({ token }: { token: string }) {
                   className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors ${
                     selectedLog === log.name ? 'bg-cyan-900/20' : 'hover:bg-slate-700/30'
                   }`}
-                  onClick={() => viewLog(log.name)}
                 >
-                  <div className="flex-1 min-w-0">
+                  <button type="button" aria-label={`View log ${log.name}`} onClick={() => void viewLog(log.name)} className="flex-1 min-w-0 text-left rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
                     <p className="text-sm text-slate-200 truncate">{log.device}</p>
                     <p className="text-xs text-slate-500">
                       {log.createdAt} • {formatSize(log.size)}
                       {log.appVersion && ` • v${log.appVersion}`}
                     </p>
-                  </div>
+                  </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteLog(log.name); }}
                     className="text-slate-600 hover:text-red-400 transition-colors"
@@ -1949,7 +1954,7 @@ function DeviceLogsTab({ token }: { token: string }) {
             <div className="flex flex-col h-full max-h-[600px]">
               <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50">
                 <span className="text-sm text-slate-300 truncate">{selectedLog}</span>
-                <button onClick={() => { setSelectedLog(null); setLogContent(''); }} className="text-slate-500 hover:text-slate-300">
+                <button aria-label="Close log viewer" onClick={() => { beginLogRequest(); setSelectedLog(null); setLogContent(''); setLoadingContent(false); }} className="text-slate-500 hover:text-slate-300">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
