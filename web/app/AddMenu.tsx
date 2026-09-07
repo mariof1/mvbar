@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { useDialogFocus } from './useDialogFocus';
 import { createPortal } from 'react-dom';
 import { useAuth } from './store';
@@ -46,6 +46,9 @@ export function AddMenu({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [playlistsLoading, setPlaylistsLoading] = useState(false);
+  const [playlistsError, setPlaylistsError] = useState(false);
+  const playlistRequest = useRef(0);
   const [plistOpen, setPlistOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
@@ -63,15 +66,30 @@ export function AddMenu({
     const el = triggerRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const menuW = 224;
-    const menuH = label === 'track' ? 244 : 200;
+    const menuW = menuRef.current?.getBoundingClientRect().width ?? Math.min(224, window.innerWidth - 16);
+    const menuH = menuRef.current?.getBoundingClientRect().height ?? 0;
     let left = rect.right - menuW;
     let top = rect.bottom + 6;
     if (left < 8) left = 8;
     if (left + menuW > window.innerWidth - 8) left = window.innerWidth - menuW - 8;
     if (top + menuH > window.innerHeight - 8) top = rect.top - menuH - 6;
-    setCoords({ top, left });
-  }, [label]);
+    top = Math.max(8, Math.min(top, window.innerHeight - menuH - 8));
+    setCoords(previous => previous?.top === top && previous.left === left ? previous : { top, left });
+  }, []);
+
+  const menuMounted = open && !!coords;
+  useLayoutEffect(() => {
+    if (!menuMounted || !menuRef.current) return;
+    computeCoords();
+    const observer = new ResizeObserver(computeCoords);
+    observer.observe(menuRef.current);
+    return () => observer.disconnect();
+  }, [menuMounted, computeCoords]);
+
+  useEffect(() => {
+    const requestCounter = playlistRequest;
+    return () => { ++requestCounter.current; };
+  }, [open, token]);
 
   useEffect(() => {
     if (!open) return;
@@ -94,8 +112,13 @@ export function AddMenu({
 
   const loadPlaylists = useCallback(async () => {
     if (!token) return;
+    const request = ++playlistRequest.current;
+    setPlaylistsLoading(true);
+    setPlaylistsError(false);
+    setPlaylists([]);
     try {
       const r = await listPlaylists(token);
+      if (request !== playlistRequest.current) return;
       setPlaylists((r.playlists ?? []).map((p) => ({
         id: String(p.id),
         name: p.name,
@@ -103,7 +126,11 @@ export function AddMenu({
         isOwner: p.is_owner,
       })));
     } catch (e: any) {
+      if (request !== playlistRequest.current) return;
       if (e?.status === 401) clear();
+      setPlaylistsError(true);
+    } finally {
+      if (request === playlistRequest.current) setPlaylistsLoading(false);
     }
   }, [token, clear]);
 
@@ -272,7 +299,7 @@ export function AddMenu({
               tabIndex={-1}
               role="menu"
               className="fixed z-[300] w-56 rounded-xl bg-slate-900/95 backdrop-blur-md border border-white/10 shadow-2xl shadow-black/60 py-1 text-sm text-white"
-              style={{ top: coords.top, left: coords.left }}
+              style={{ top: coords.top, left: coords.left, maxWidth: 'calc(100vw - 16px)', maxHeight: 'calc(100dvh - 16px)', overflowY: 'auto' }}
               onClick={(e) => e.stopPropagation()}
             >
             {!plistOpen ? (
@@ -349,7 +376,14 @@ export function AddMenu({
                   <span className="text-xs uppercase tracking-wider text-slate-400">Add to playlist</span>
                 </div>
                 <div className="max-h-56 overflow-y-auto py-1">
-                  {playlists.length === 0 && (
+                  {playlistsLoading && <div role="status" className="px-3 py-2 text-slate-400 text-xs">Loading playlists...</div>}
+                  {playlistsError && (
+                    <div className="px-3 py-2 text-xs">
+                      <p role="alert">Could not load playlists.</p>
+                      <button type="button" onClick={loadPlaylists} className="mt-2 rounded px-2 py-1 text-cyan-400 hover:bg-white/10">Retry</button>
+                    </div>
+                  )}
+                  {!playlistsLoading && !playlistsError && playlists.length === 0 && (
                     <div className="px-3 py-2 text-slate-500 text-xs">No playlists yet</div>
                   )}
                   {playlists.map((p) => (

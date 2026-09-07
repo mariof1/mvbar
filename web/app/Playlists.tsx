@@ -82,6 +82,10 @@ export function Playlists(props: {
   // Derive state from route
   const tab = (route.type === 'playlists' && route.sub ? route.sub : 'regular') as PlaylistTab;
   const selectedId = route.type === 'playlist' ? route.playlistId : null;
+  const selection = useRef({ id: selectedId, token });
+  selection.current = { id: selectedId, token };
+  const itemsRequest = useRef(0);
+  const collaborationRequest = useRef(0);
 
   const [pls, setPls] = useState<Playlist[]>([]);
   const [items, setItems] = useState<PlaylistItem[]>([]);
@@ -130,21 +134,29 @@ export function Playlists(props: {
   }
 
   async function refreshItems(id: string) {
-    if (!token) return;
+    if (!token || selection.current.id !== id || selection.current.token !== token) return;
+    const request = ++itemsRequest.current;
+    const isCurrent = () => request === itemsRequest.current && selection.current.id === id && selection.current.token === token;
     try {
       const r = await getPlaylistItems(token, id);
+      if (!isCurrent()) return;
       setItems(r.items ?? []);
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
       setError(e?.message ?? 'error');
     }
   }
 
   async function refreshCollaboration(id: string) {
-    if (!token) return;
+    if (!token || selection.current.id !== id || selection.current.token !== token) return;
+    const request = ++collaborationRequest.current;
+    const isCurrent = () => request === collaborationRequest.current && selection.current.id === id && selection.current.token === token;
     try {
-      setCollaboration(await getPlaylistCollaborators(token, id));
+      const result = await getPlaylistCollaborators(token, id);
+      if (isCurrent()) setCollaboration(result);
     } catch (e: any) {
+      if (!isCurrent()) return;
       if (e?.status === 401) clear();
       else if (e?.status === 404) setCollaboration(null);
     }
@@ -157,10 +169,20 @@ export function Playlists(props: {
   }, [token]);
 
   useEffect(() => {
-    if (!selectedId) return;
-    refreshItems(selectedId);
-    refreshCollaboration(selectedId);
+    setItems([]);
+    setCollaboration(null);
+    setError(null);
+    if (selectedId) {
+      refreshItems(selectedId);
+      refreshCollaboration(selectedId);
+    }
     setShowCollaborators(false);
+    const itemCounter = itemsRequest;
+    const collaborationCounter = collaborationRequest;
+    return () => {
+      ++itemCounter.current;
+      ++collaborationCounter.current;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, token]);
 
