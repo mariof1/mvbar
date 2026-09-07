@@ -25,6 +25,7 @@ import { useSocialUpdates } from './socialStore';
 import { trackArtistLabel } from './artistDisplay';
 import { formatCalendarDate } from './format';
 import { useRoute, useRouter } from './router';
+import { useLatestRequest } from './useLatestRequest';
 
 type SearchResult = SocialUser & {
   relationshipId: number | null;
@@ -119,6 +120,9 @@ export function Social() {
   const [summary, setSummary] = useState<SocialSummary | null>(null);
   const [shares, setShares] = useState<TrackShare[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const beginLoad = useLatestRequest('social', token);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -134,21 +138,30 @@ export function Social() {
 
   const load = useCallback(async () => {
     if (!token) return;
+    const isCurrent = beginLoad();
+    if (!isCurrent()) return;
+    setRefreshing(true);
     try {
       const [nextSummary, shareResult] = await Promise.all([
         getSocialSummary(token),
         listTrackShares(token),
       ]);
+      if (!isCurrent()) return;
       setSummary(nextSummary);
       setShares(shareResult.shares);
       setSocialCounts(nextSummary.unreadShares, nextSummary.incoming.length);
+      setLoadError(false);
     } catch (error: any) {
+      if (!isCurrent()) return;
       if (error?.status === 401) clear();
-      else showToast('Could not load friends and shares', 'error');
+      else setLoadError(true);
     } finally {
-      setLoading(false);
+      if (isCurrent()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [token, clear, showToast, setSocialCounts]);
+  }, [token, clear, setSocialCounts, beginLoad]);
 
   useEffect(() => { void load(); }, [load, socialLastUpdate]);
 
@@ -277,8 +290,14 @@ export function Social() {
       </div>
 
       {loading && <div className="py-16 text-center text-sm text-slate-400">Loading…</div>}
+      {loadError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-200">
+          <span>Could not load friends and shares. Please try again.</span>
+          <SmallButton disabled={refreshing} onClick={() => void load()}>{refreshing ? 'Retrying…' : 'Retry'}</SmallButton>
+        </div>
+      )}
 
-      {!loading && tab === 'shares' && (
+      {!loading && (!loadError || summary) && tab === 'shares' && (
         <div className="space-y-3">
           {summary && summary.unreadShares > 0 && (
             <div className="flex justify-end">
