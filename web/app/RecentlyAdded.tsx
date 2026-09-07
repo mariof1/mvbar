@@ -8,6 +8,8 @@ import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu, type AddMenuTrack } from './AddMenu';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
+import { useToastStore } from './Toast';
+import { useLatestRequest } from './useLatestRequest';
 
 type Album = {
   album: string;
@@ -72,6 +74,11 @@ export function RecentlyAdded({
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [tracksLoading, setTracksLoading] = useState(false);
+  const [albumsError, setAlbumsError] = useState(false);
+  const [tracksError, setTracksError] = useState(false);
+  const [tracksRetry, setTracksRetry] = useState(0);
+  const showToast = useToastStore((state) => state.show);
+  const beginAlbumsRequest = useLatestRequest('recent-albums', token);
   const { setQueueAndPlay, addToQueue: addToPlayerQueue } = useConnectPlayer();
 
   // Live updates
@@ -80,15 +87,18 @@ export function RecentlyAdded({
 
   const loadAlbums = useCallback(async () => {
     if (!token) return;
+    const isCurrent = beginAlbumsRequest();
+    if (!isCurrent()) return;
+    setAlbumsError(false);
     try {
       const data = await apiFetch('/browse/albums?sort=created&limit=100', {}, token);
-      setAlbums(data.albums || []);
+      if (isCurrent()) setAlbums(data.albums || []);
     } catch (err) {
-      console.error('Failed to load albums:', err);
+      if (isCurrent()) setAlbumsError(true);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [token]);
+  }, [token, beginAlbumsRequest]);
 
   useEffect(() => {
     loadAlbums();
@@ -111,6 +121,7 @@ export function RecentlyAdded({
     if (!token || !selectedAlbum) return;
     const controller = new AbortController();
     setTracksLoading(true);
+    setTracksError(false);
     setTracks([]);
     const album = selectedAlbum;
     void apiFetch(`/browse/album?album=${encodeURIComponent(album.album)}&artist=${encodeURIComponent(album.display_artist || '')}`, { signal: controller.signal }, token)
@@ -118,13 +129,13 @@ export function RecentlyAdded({
         if (!controller.signal.aborted) setTracks(data.tracks || []);
       })
       .catch(err => {
-        if (!controller.signal.aborted) console.error('Failed to load album tracks:', err);
+        if (!controller.signal.aborted) setTracksError(true);
       })
       .finally(() => {
         if (!controller.signal.aborted) setTracksLoading(false);
       });
     return () => controller.abort();
-  }, [token, selectedAlbum]);
+  }, [token, selectedAlbum, tracksRetry]);
 
   const handleAlbumClick = (album: Album) => {
     setSelectedAlbum(album);
@@ -144,8 +155,11 @@ export function RecentlyAdded({
         }));
         if (albumTracks.length > 0) {
           setQueueAndPlay(albumTracks, 0);
+        } else {
+          showToast('No tracks available in this album', 'error');
         }
-      });
+      })
+      .catch(() => showToast('Could not play album. Please try again.', 'error'));
   };
 
   const handleBack = () => {
@@ -196,7 +210,12 @@ export function RecentlyAdded({
           </div>
         </div>
 
-        {tracksLoading ? (
+        {tracksError ? (
+          <div className="rounded-xl bg-red-500/10 p-4 text-red-400">
+            <p role="alert">Could not load album tracks.</p>
+            <button type="button" onClick={() => setTracksRetry(value => value + 1)} className="mt-2 rounded px-3 py-2 text-cyan-400 hover:bg-white/10">Retry</button>
+          </div>
+        ) : tracksLoading ? (
           <div className="flex items-center justify-center h-32">
             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-cyan-500" />
           </div>
@@ -235,6 +254,13 @@ export function RecentlyAdded({
 
   // Album grid view
   return (
+    <>
+    {albumsError && (
+      <div className="mb-4 rounded-xl bg-red-500/10 p-4 text-red-400">
+        <p role="alert">Could not load recently added albums.</p>
+        <button type="button" onClick={() => { setLoading(true); void loadAlbums(); }} className="mt-2 rounded px-3 py-2 text-cyan-400 hover:bg-white/10">Retry</button>
+      </div>
+    )}
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
       {albums.map((album) => (
         <div
@@ -278,5 +304,6 @@ export function RecentlyAdded({
         </div>
       ))}
     </div>
+    </>
   );
 }
