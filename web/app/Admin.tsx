@@ -1793,6 +1793,12 @@ function DeviceLogsTab({ token }: { token: string }) {
   const [logContent, setLogContent] = useState('');
   const [loadingContent, setLoadingContent] = useState(false);
   const beginLogRequest = useLatestRequest('device-log', token);
+  const beginDeleteRequest = useLatestRequest('device-log-delete', token);
+  const pendingDelete = useRef<(() => boolean) | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const selectedLogRef = useRef(selectedLog);
+  selectedLogRef.current = selectedLog;
   const [filter, setFilter] = useState('');
   const [uploadUrl, setUploadUrl] = useState('');
   const uploadUrlRef = useRef<HTMLInputElement>(null);
@@ -1847,23 +1853,35 @@ function DeviceLogsTab({ token }: { token: string }) {
     }
   };
 
-  const deleteLog = async (name: string) => {
-    if (!await showConfirm({ title: 'Delete Log', message: `Delete log "${name}"?`, confirmLabel: 'Delete', danger: true })) return;
-    await apiFetch(`/admin/device-logs/${encodeURIComponent(name)}`, {
-      method: 'DELETE',
-    }, token);
-    if (selectedLog === name) { setSelectedLog(null); setLogContent(''); }
-    fetchLogs();
-  };
-
-  const deleteAll = async () => {
-    if (!await showConfirm({ title: 'Delete All Logs', message: `Delete ALL ${logs.length} device logs?`, confirmLabel: 'Delete All', danger: true })) return;
-    await apiFetch('/admin/device-logs', {
-      method: 'DELETE',
-    }, token);
-    setSelectedLog(null);
-    setLogContent('');
-    fetchLogs();
+  const deleteLog = async (name?: string) => {
+    if (loading || pendingDelete.current?.()) return;
+    const isCurrent = beginDeleteRequest();
+    pendingDelete.current = isCurrent;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const confirmed = await showConfirm(name
+        ? { title: 'Delete Log', message: `Delete log "${name}"?`, confirmLabel: 'Delete', danger: true }
+        : { title: 'Delete All Logs', message: `Delete ALL ${logs.length} device logs?`, confirmLabel: 'Delete All', danger: true });
+      if (!confirmed || !isCurrent()) return;
+      const result = await apiFetch(name ? `/admin/device-logs/${encodeURIComponent(name)}` : '/admin/device-logs', { method: 'DELETE' }, token);
+      if (!isCurrent()) return;
+      if (!result.ok) throw new Error('Deletion was not accepted');
+      setLogs(current => name ? current.filter(log => log.name !== name) : []);
+      if (!name || selectedLogRef.current === name) {
+        beginLogRequest();
+        setSelectedLog(null);
+        setLogContent('');
+        setLoadingContent(false);
+      }
+    } catch {
+      if (isCurrent()) setDeleteError('Could not delete device logs. Please try again.');
+    } finally {
+      if (isCurrent()) {
+        pendingDelete.current = null;
+        setDeleting(false);
+      }
+    }
   };
 
   const filteredLogs = filter
@@ -1893,6 +1911,7 @@ function DeviceLogsTab({ token }: { token: string }) {
       </div>
 
       {/* Controls */}
+      {deleteError && <p role="alert" className="text-sm text-red-400">{deleteError}</p>}
       <div className="flex items-center gap-3">
         <input
           type="text"
@@ -1901,11 +1920,11 @@ function DeviceLogsTab({ token }: { token: string }) {
           onChange={(e) => setFilter(e.target.value)}
           className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 flex-1 focus:outline-none focus:border-cyan-500"
         />
-        <button onClick={fetchLogs} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300">
+        <button onClick={fetchLogs} disabled={deleting || loading} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm text-slate-300">
           Refresh
         </button>
         {logs.length > 0 && (
-          <button onClick={deleteAll} className="px-3 py-2 bg-red-900/50 hover:bg-red-800/50 rounded-lg text-sm text-red-400">
+          <button onClick={() => void deleteLog()} disabled={deleting || loading} className="px-3 py-2 bg-red-900/50 hover:bg-red-800/50 disabled:opacity-50 rounded-lg text-sm text-red-400">
             Delete All
           </button>
         )}
@@ -1935,8 +1954,10 @@ function DeviceLogsTab({ token }: { token: string }) {
                     </p>
                   </button>
                   <button
+                    aria-label={`Delete log ${log.name}`}
+                    disabled={deleting}
                     onClick={(e) => { e.stopPropagation(); deleteLog(log.name); }}
-                    className="text-slate-600 hover:text-red-400 transition-colors"
+                    className="text-slate-600 hover:text-red-400 disabled:opacity-50 transition-colors"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
