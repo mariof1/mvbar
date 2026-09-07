@@ -278,6 +278,7 @@ export function SmartPlaylists() {
   const [editId, setEditId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const beginSave = useLatestRequest(`${editing}:${editId}`, token);
+  const beginOpenEditor = useLatestRequest('smart-editor', token);
   const pendingSave = useRef<(() => boolean) | null>(null);
   useEffect(() => { setSaving(false); }, [editing, editId, token]);
   const [editName, setEditName] = useState('');
@@ -529,6 +530,8 @@ export function SmartPlaylists() {
   }
 
   async function openEditor(pl?: SmartPlaylist) {
+    if (!token) return;
+    const isCurrent = beginOpenEditor();
     if (pl) {
       setEditId(pl.id);
       setEditName(pl.name);
@@ -550,6 +553,7 @@ export function SmartPlaylists() {
       if (incArtistIds.length > 0 || excArtistIds.length > 0) {
         resolvedNames = await resolveArtistNames([...incArtistIds, ...excArtistIds]);
       }
+      if (!isCurrent()) return;
       
       setIncludeArtists(incArtistIds.map((id) => ({ id, name: resolvedNames.get(id) || `Artist #${id}` })));
       setIncludeArtistsMode(f.include?.artistsMode || 'any');
