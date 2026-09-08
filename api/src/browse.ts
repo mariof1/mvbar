@@ -5,6 +5,9 @@ import { allowedLibrariesForUser } from './access.js';
 import { asciiFold } from './asciiFold.js';
 import { artistDisplay, artistNamesFromValue, trackArtistDisplay } from './artistDisplay.js';
 
+// Virtual grouping only: preserve the original album tags in track responses and files.
+const albumNameSql = "coalesce(nullif(btrim(t.album), ''), 'Unknown Album — ' || coalesce(nullif(btrim(t.album_artist), ''), nullif(btrim(t.artist), ''), 'Unknown Artist'))";
+
 export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
   // Paginated artists list with ID for routing
   app.get('/api/browse/artists', async (req, reply) => {
@@ -155,7 +158,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
     let nameFilter = '';
     if (filter) {
       // Search both original and ASCII-folded versions for international character support
-      nameFilter = `and (lower(t.album) like $${paramIdx} or lower(coalesce(t.album_artist, t.artist)) like $${paramIdx} or lower(t.album) like $${paramIdx + 1} or lower(coalesce(t.album_artist, t.artist)) like $${paramIdx + 1})`;
+      nameFilter = `and (lower(${albumNameSql}) like $${paramIdx} or lower(coalesce(t.album_artist, t.artist)) like $${paramIdx} or lower(${albumNameSql}) like $${paramIdx + 1} or lower(coalesce(t.album_artist, t.artist)) like $${paramIdx + 1})`;
       params.push(`%${filter}%`);
       params.push(`%${filterAscii}%`);
       paramIdx += 2;
@@ -163,9 +166,9 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
 
     let letterFilter = '';
     if (letter === '#') {
-      letterFilter = `and lower(left(t.album, 1)) !~ '^[a-z]$'`;
+      letterFilter = `and lower(left(${albumNameSql}, 1)) !~ '^[a-z]$'`;
     } else if (letter) {
-      letterFilter = `and lower(left(t.album, 1)) = $${paramIdx}`;
+      letterFilter = `and lower(left(${albumNameSql}, 1)) = $${paramIdx}`;
       params.push(letter);
       paramIdx++;
     }
@@ -189,30 +192,30 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
     const r = await db().query(
       `
       with unique_albums as (
-        select distinct on (t.album)
-          t.album,
+        select distinct on (${albumNameSql})
+          ${albumNameSql} as album,
           t.id as first_track_id,
           t.art_path,
           t.art_hash,
           t.updated_at,
           t.mtime_ms
         from active_tracks t
-        where t.album is not null and t.album <> ''
+        where true
         ${artistFilter}
         ${nameFilter}
         ${letterFilter}
         ${libFilter}
-        order by t.album, t.path
+        order by ${albumNameSql}, t.path
       ),
       album_counts as (
-        select t.album, count(*)::int as track_count, max(t.updated_at) as max_updated, min(t.created_at) as min_created_at
+        select ${albumNameSql} as album, count(*)::int as track_count, max(t.updated_at) as max_updated, case when bool_or(nullif(btrim(t.album), '') is null) then max(t.created_at) else min(t.created_at) end as min_created_at
         from active_tracks t
-        where t.album is not null and t.album <> ''
+        where true
         ${artistFilter}
         ${nameFilter}
         ${letterFilter}
         ${libFilter}
-        group by t.album
+        group by ${albumNameSql}
       )
       select
         ua.album,
@@ -252,7 +255,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
 
     let countNameFilter = '';
     if (filter) {
-      countNameFilter = `and (lower(t.album) like $${countParamIdx} or lower(coalesce(t.album_artist, t.artist)) like $${countParamIdx} or lower(t.album) like $${countParamIdx + 1} or lower(coalesce(t.album_artist, t.artist)) like $${countParamIdx + 1})`;
+      countNameFilter = `and (lower(${albumNameSql}) like $${countParamIdx} or lower(coalesce(t.album_artist, t.artist)) like $${countParamIdx} or lower(${albumNameSql}) like $${countParamIdx + 1} or lower(coalesce(t.album_artist, t.artist)) like $${countParamIdx + 1})`;
       countParams.push(`%${filter}%`);
       countParams.push(`%${filterAscii}%`);
       countParamIdx += 2;
@@ -260,9 +263,9 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
 
     let countLetterFilter = '';
     if (letter === '#') {
-      countLetterFilter = `and lower(left(t.album, 1)) !~ '^[a-z]$'`;
+      countLetterFilter = `and lower(left(${albumNameSql}, 1)) !~ '^[a-z]$'`;
     } else if (letter) {
-      countLetterFilter = `and lower(left(t.album, 1)) = $${countParamIdx}`;
+      countLetterFilter = `and lower(left(${albumNameSql}, 1)) = $${countParamIdx}`;
       countParams.push(letter);
       countParamIdx++;
     }
@@ -275,9 +278,9 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
 
     const countR = await db().query(
       `
-      select count(distinct t.album)::int as total
+      select count(distinct ${albumNameSql})::int as total
       from active_tracks t
-      where t.album is not null and t.album <> ''
+      where true
       ${countArtistFilter}
       ${countNameFilter}
       ${countLetterFilter}
@@ -698,28 +701,26 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
     const albumsR = await db().query(
       `
       with album_tracks as (
-        select distinct on (t.album)
-          t.album,
+        select distinct on (${albumNameSql})
+          ${albumNameSql} as album,
           t.id as first_track_id,
           t.art_path,
           t.art_hash
         from track_artists ta
         join active_tracks t on t.id = ta.track_id
         where ta.artist_id = $1
-          and ta.role = 'albumartist'
-          and t.album is not null and t.album <> ''
+          and (ta.role = 'albumartist' or (ta.role = 'artist' and nullif(btrim(t.album), '') is null and not exists (select 1 from track_artists credit where credit.track_id=t.id and credit.role='albumartist')))
           ${libFilter}
-        order by t.album, t.path
+        order by ${albumNameSql}, t.path
       ),
       album_counts as (
-        select t.album, count(*)::int as track_count
+        select ${albumNameSql} as album, count(*)::int as track_count
         from track_artists ta
         join active_tracks t on t.id = ta.track_id
         where ta.artist_id = $1
-          and ta.role = 'albumartist'
-          and t.album is not null and t.album <> ''
+          and (ta.role = 'albumartist' or (ta.role = 'artist' and nullif(btrim(t.album), '') is null and not exists (select 1 from track_artists credit where credit.track_id=t.id and credit.role='albumartist')))
           ${libFilter}
-        group by t.album
+        group by ${albumNameSql}
       )
       select 
         at.album,
@@ -747,17 +748,16 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       `
       with own_albums as (
         -- Albums where this artist is album artist on at least one track
-        select distinct t.album
+        select distinct ${albumNameSql} as album
         from track_artists ta
         join active_tracks t on t.id = ta.track_id
         where ta.artist_id = $1
-          and ta.role = 'albumartist'
-          and t.album is not null and t.album <> ''
+          and (ta.role = 'albumartist' or (ta.role = 'artist' and nullif(btrim(t.album), '') is null and not exists (select 1 from track_artists credit where credit.track_id=t.id and credit.role='albumartist')))
           ${libFilter}
       ),
       album_tracks as (
-        select distinct on (t.album)
-          t.album,
+        select distinct on (${albumNameSql})
+          ${albumNameSql} as album,
           t.id as first_track_id,
           t.art_path,
           t.art_hash
@@ -765,21 +765,19 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         join active_tracks t on t.id = ta.track_id
         where ta.artist_id = $1
           and ta.role = 'artist'
-          and t.album is not null and t.album <> ''
           ${libFilter}
-          and t.album not in (select album from own_albums)
-        order by t.album, t.path
+          and ${albumNameSql} not in (select album from own_albums)
+        order by ${albumNameSql}, t.path
       ),
       album_counts as (
-        select t.album, count(*)::int as track_count
+        select ${albumNameSql} as album, count(*)::int as track_count
         from track_artists ta
         join active_tracks t on t.id = ta.track_id
         where ta.artist_id = $1
           and ta.role = 'artist'
-          and t.album is not null and t.album <> ''
           ${libFilter}
-          and t.album not in (select album from own_albums)
-        group by t.album
+          and ${albumNameSql} not in (select album from own_albums)
+        group by ${albumNameSql}
       )
       select 
         at.album,
@@ -840,7 +838,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         from active_tracks t
         join track_artists ta on ta.track_id = t.id
         where ta.artist_id = $1
-          and t.album = $2
+          and ${albumNameSql} = $2
           ${libFilter}
         order by t.id, coalesce(t.disc_number, 1), coalesce(t.track_number, 0), t.path, t.title
         `,
@@ -877,7 +875,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
           from active_tracks t
           join track_artists ta on ta.track_id = t.id
           where ta.artist_id = $1
-            and t.album = $2
+            and ${albumNameSql} = $2
             ${libFilter}
           order by t.id, coalesce(t.disc_number, 1), coalesce(t.track_number, 0), t.path, t.title
           `,
@@ -900,7 +898,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
           select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
                  t.track_number, t.track_total, t.disc_number, t.disc_total
           from active_tracks t
-          where t.album = $2 and (
+          where ${albumNameSql} = $2 and (
             t.album_artist = $1 
             or t.artist = $1 
             or t.album_artist like $1 || ';%'
@@ -920,7 +918,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
                t.track_number, t.track_total, t.disc_number, t.disc_total
         from active_tracks t
-        where t.album = $1
+        where ${albumNameSql} = $1
         ${libFilter}
         order by coalesce(t.disc_number, 1), coalesce(t.track_number, 0), t.path, t.title
         `,
@@ -1028,13 +1026,13 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
 
       const albumsR = await db().query(
         `
-        select t.album, count(*)::int as track_count
+        select ${albumNameSql} as album, count(*)::int as track_count
         from track_artists ta
         join active_tracks t on t.id = ta.track_id
-        where ta.artist_id = $1 and t.album is not null and t.album <> ''
+        where ta.artist_id = $1 and true
         ${libFilter}
-        group by t.album
-        order by t.album
+        group by ${albumNameSql}
+        order by ${albumNameSql}
       `,
         params as any
       );
