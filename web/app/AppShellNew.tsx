@@ -565,7 +565,8 @@ function PlayerBar(props: {
       if (Math.abs(dy) < 16 || Math.abs(dy) <= Math.abs(dx)) return;
       const expanding = !queueExpanded && dy < 0 && (props.queue?.length ?? 0) > 1;
       const collapsing = queueExpanded && dy > 0 && (!gesture.inQueue || (gesture.queueAtTop && (mobileQueueListRef.current?.scrollTop ?? 0) <= 0));
-      if (!expanding && !collapsing) return;
+      const minimizing = !queueExpanded && dy > 0 && (!gesture.inQueue || gesture.queueAtTop);
+      if (!expanding && !collapsing && !minimizing) return;
       if (event.cancelable) event.preventDefault();
       suppressSurfaceClickUntil.current = Date.now() + 500;
       if (Math.abs(dy) >= 48) {
@@ -574,7 +575,8 @@ function PlayerBar(props: {
         playerDragRef.current = null;
         setIsPlayerDragging(false);
         setPlayerDragY(0);
-        setQueueExpanded(expanding);
+        if (minimizing) { setExpanded(false); setShowExpandedOptions(false); }
+        else setQueueExpanded(expanding);
       }
     };
     const end = () => { surfaceGestureRef.current = null; };
@@ -1227,52 +1229,6 @@ function PlayerBar(props: {
     props.onRecommendationFeedback?.(action);
   };
 
-  const handlePlayerDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.pointerType === 'mouse' && event.button !== 0) return;
-    if (playerDismissTimerRef.current) clearTimeout(playerDismissTimerRef.current);
-    playerDragRef.current = {
-      pointerId: event.pointerId,
-      startY: event.clientY,
-      startedAt: performance.now(),
-    };
-    suppressPlayerHandleClickRef.current = false;
-    setIsPlayerDragging(true);
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const handlePlayerDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const gesture = playerDragRef.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    const distance = Math.max(0, event.clientY - gesture.startY);
-    if (Math.abs(event.clientY - gesture.startY) > 6) suppressPlayerHandleClickRef.current = true;
-    setPlayerDragY(distance);
-  };
-
-  const handlePlayerDragEnd = (event: React.PointerEvent<HTMLDivElement>) => {
-    const gesture = playerDragRef.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    const distance = Math.max(0, event.clientY - gesture.startY);
-    const elapsed = Math.max(1, performance.now() - gesture.startedAt);
-    const velocity = distance / elapsed;
-    const shouldMinimize = distance >= Math.min(160, window.innerHeight * 0.2)
-      || (distance >= 28 && velocity >= 0.65);
-    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
-    playerDragRef.current = null;
-    setIsPlayerDragging(false);
-    if (event.clientY - gesture.startY < -45 && (props.queue?.length ?? 0) > 1) { setQueueExpanded(true); setPlayerDragY(0); }
-    else if (queueExpanded && distance > 45) { setQueueExpanded(false); setPlayerDragY(0); }
-    else if (shouldMinimize) minimizeExpandedPlayer(true);
-    else setPlayerDragY(0);
-    if (suppressPlayerHandleClickRef.current) {
-      setTimeout(() => { suppressPlayerHandleClickRef.current = false; }, 0);
-    }
-  };
-
-  const handlePlayerDragCancel = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (playerDragRef.current?.pointerId !== event.pointerId) return;
-    resetExpandedPlayerDrag();
-  };
-
   const startQueueLongPress = (event: React.TouchEvent<HTMLButtonElement>, index: number) => {
     if (event.touches.length !== 1 || !props.onReorderQueue) return;
     const existing = queueTouchGestureRef.current;
@@ -1305,13 +1261,6 @@ function PlayerBar(props: {
           className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl lg:hidden animate-fade-in"
           onClick={() => minimizeExpandedPlayer()}
         >
-          {queueExpanded && <div className="absolute inset-x-0 top-0 z-20 flex h-[25dvh] items-end gap-4 overflow-hidden bg-slate-950 px-5 pb-4 pt-[env(safe-area-inset-top)]" onClick={event => event.stopPropagation()}>
-            <div className="pointer-events-none absolute -top-12 left-5 h-36 w-36 overflow-hidden rounded-2xl opacity-35" aria-hidden="true">
-              {artOk && <img src={`/api/art/${props.nowPlaying.id}`} alt="" className="h-full w-full object-cover" />}
-            </div>
-            <div className="relative min-w-0 flex-1"><p className="truncate font-semibold text-white">{props.nowPlaying.title ?? 'Untitled'}</p><p className="truncate text-sm text-white/60">{props.nowPlaying.artist ?? 'Unknown Artist'}</p></div>
-            <button type="button" aria-label={isPlaying ? 'Pause' : 'Play'} onClick={togglePlay} className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-cyan-400 text-black">{isPlaying ? <Icons.Pause /> : <Icons.Play />}</button>
-          </div>}
           <div ref={mobilePlayerScrollRef}
             data-mobile-full-player
             className={`h-full flex flex-col overflow-y-auto overscroll-contain [&>*]:shrink-0 ${
@@ -1325,27 +1274,8 @@ function PlayerBar(props: {
             }}
           >
             <div
-              className={`shrink-0 touch-none select-none ${isPlayerDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
-              onPointerDown={handlePlayerDragStart}
-              onPointerMove={handlePlayerDragMove}
-              onPointerUp={handlePlayerDragEnd}
-              onPointerCancel={handlePlayerDragCancel}
+              className="shrink-0 select-none pt-[max(16px,env(safe-area-inset-top))]"
             >
-              {/* Close handle */}
-              <div className="flex justify-center pt-4 pb-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (suppressPlayerHandleClickRef.current) return;
-                    minimizeExpandedPlayer();
-                  }}
-                  className="h-6 w-16 rounded-full p-2.5"
-                  aria-label="Minimize player"
-                >
-                  <span className="block h-1.5 w-full rounded-full bg-white/30" />
-                </button>
-              </div>
-
               {/* Artwork */}
               <div className="flex-shrink-0 px-8 pt-3 pb-4">
                 {artOk ? (
@@ -1539,7 +1469,7 @@ function PlayerBar(props: {
             {/* Queue Section */}
             {props.queue && props.queue.length > 1 && (
               <div ref={mobileQueueSectionRef} data-mobile-queue-expanded={queueExpanded} className={`flex flex-col px-4 pb-[max(16px,env(safe-area-inset-bottom))] ${queueExpanded ? "h-[75dvh]" : "pb-8"}`}>
-                <div className="mb-3 flex shrink-0 items-center justify-between gap-3 px-4 touch-none" onPointerDown={handlePlayerDragStart} onPointerMove={handlePlayerDragMove} onPointerUp={handlePlayerDragEnd} onPointerCancel={handlePlayerDragCancel}>
+                <div className="mb-3 flex shrink-0 items-center justify-between gap-3 px-4 touch-none">
                   <h3 className="text-sm font-semibold uppercase tracking-wide text-white/70">
                     Queue <span className="text-white/40">{props.queue.length}</span>
                   </h3>
