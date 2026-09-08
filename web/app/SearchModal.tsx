@@ -606,7 +606,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
   const searchPending = hasQuery && (loading || searchedQuery !== normalizedQuery);
 
   return (
-    <div className="fixed inset-0 z-[150] flex items-start justify-center pt-[8vh] sm:pt-[12vh] px-4">
+    <div className="fixed inset-0 z-[150] flex items-start justify-center p-2 sm:px-4 sm:pt-[min(8dvh,4rem)] sm:pb-4">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in"
@@ -616,7 +616,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
 
       {/* Modal */}
       <div
-        className="relative w-full max-w-2xl animate-slide-up"
+        className="relative flex min-h-0 max-h-[calc(100dvh-1rem)] w-full max-w-2xl flex-col animate-slide-up sm:max-h-[calc(100dvh-5rem)]"
         onClick={(e) => e.stopPropagation()}
         ref={dialogRef}
         tabIndex={-1}
@@ -624,9 +624,18 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
         aria-modal="true"
         aria-label="Search library"
       >
-        <div className="glass rounded-2xl border border-white/10 shadow-2xl shadow-black/50 overflow-hidden">
+        <div className="glass flex min-h-0 flex-col rounded-2xl border border-white/10 shadow-2xl shadow-black/50 overflow-hidden">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-1">
+            <h2 className="text-sm font-medium text-slate-300">{mode === 'ai' ? 'Ask AI for music' : 'Search library'}</h2>
+            <button type="button" onClick={onClose} aria-label="Close search"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-300 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
           {/* Search Input */}
-          <div className="flex items-center gap-2 sm:gap-3 px-4 sm:px-5 py-4 border-b border-white/10">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3 px-3 sm:px-5 py-3 border-b border-white/10">
             {mode === 'ai' ? (
               <span className="w-5 text-lg leading-none text-center flex-shrink-0" aria-hidden="true">✨</span>
             ) : (
@@ -655,7 +664,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
               }}
               placeholder={mode === 'ai'
                 ? 'Try “play soft music” or describe a mood...'
-                : undefined}
+                : 'Artists, albums, songs...'}
               maxLength={mode === 'ai' ? 500 : 200}
               className="min-w-0 flex-1 bg-transparent text-white text-base sm:text-lg placeholder-slate-500 focus:outline-none"
               autoComplete="off"
@@ -677,7 +686,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                   }
                   inputRef.current?.focus();
                 }}
-                className="p-1 hover:bg-white/10 rounded-md transition-colors flex-shrink-0"
+                className="flex h-11 w-11 items-center justify-center hover:bg-white/10 rounded-md transition-colors flex-shrink-0"
                 aria-label="Clear search"
                 title="Clear search"
               >
@@ -727,7 +736,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
           </div>
 
           {/* Results */}
-          <div className="max-h-[60vh] overflow-y-auto overscroll-contain">
+          <div className="min-h-0 max-h-[60dvh] overflow-y-auto overscroll-contain">
             {mode === 'ai' ? (
               <div className={`min-h-[280px] px-4 py-6 sm:px-6 sm:py-8 flex flex-col ${aiResult ? 'items-stretch text-left' : 'items-center justify-center text-center'}`}>
                 {!openrouterConfigured ? (
