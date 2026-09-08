@@ -19,6 +19,27 @@ async function getUserLBToken(userId: string): Promise<string | null> {
 }
 
 export const favoritesPlugin: FastifyPluginAsync = fp(async (app) => {
+  app.post('/api/favorites/reorder', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    const { trackId, beforeTrackId } = (req.body ?? {}) as { trackId?: number; beforeTrackId?: number | null };
+    if (!Number.isSafeInteger(trackId) || trackId! <= 0 ||
+      (beforeTrackId !== null && (!Number.isSafeInteger(beforeTrackId) || beforeTrackId! <= 0))) {
+      return reply.code(400).send({ ok: false, error: 'invalid_order' });
+    }
+    const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
+    const ids = beforeTrackId === null ? [trackId] : [trackId, beforeTrackId];
+    const rows = await db().query<{ id: number; library_id: number }>(
+      'select id, library_id from active_tracks where id=any($1::bigint[])', [ids]);
+    if (rows.rows.length !== new Set(ids).size || rows.rows.some(row => !isLibraryAllowed(Number(row.library_id), allowed))) {
+      return reply.code(404).send({ ok: false });
+    }
+    if (!await fav.moveFavorite(req.user.userId, trackId!, beforeTrackId!)) {
+      return reply.code(409).send({ ok: false, error: 'favorites_changed' });
+    }
+    broadcastToUser(req.user.userId, 'favorite:reordered', {});
+    return { ok: true };
+  });
+
   app.post('/api/favorites/:trackId', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     const trackId = Number((req.params as { trackId: string }).trackId);
@@ -79,6 +100,7 @@ export const favoritesPlugin: FastifyPluginAsync = fp(async (app) => {
     const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
     const tracks = (await fav.listFavorites(req.user.userId, limit, offset, allowed)).map((track: any) => ({
       ...track,
+      id: Number(track.id),
       display_artist: artistDisplay(track.artist, track.album_artist),
     }));
     return { ok: true, tracks, limit, offset };

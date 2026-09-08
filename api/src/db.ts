@@ -318,6 +318,8 @@ export async function initDb() {
     );
   `);
 
+  await pool.query('alter table favorite_tracks add column if not exists position integer');
+
   // incremental schema updates for existing DBs
   await pool.query('alter table tracks add column if not exists library_id bigint');
   await pool.query('alter table tracks add column if not exists last_seen_job_id bigint');

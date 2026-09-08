@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { listFavorites, removeFavorite } from './apiClient';
+import { listFavorites, removeFavorite, moveFavorite } from './apiClient';
+import { FavoriteDragHandle } from './FavoriteDragHandle';
 import { useFavorites } from './favoritesStore';
 import { useAuth } from './store';
 import { useLibraryUpdates } from './useWebSocket';
@@ -31,9 +32,55 @@ export function Favorites(props: {
   const lastLibraryUpdate = useLibraryUpdates((s) => s.lastUpdate);
   const lastRefreshRef = useRef<number>(0);
   const previousChange = useRef(lastChange);
+  const [savingOrder, setSavingOrder] = useState(false);
+  const reorderBusy = useRef(false);
+  const orderDraft = useRef<any[] | null>(null);
+  const orderOriginal = useRef<any[] | null>(null);
+
+  function hoverTrack(id: number, target: number, after: boolean) {
+    if (id === target || reorderBusy.current) return;
+    const current = orderDraft.current ?? tracks;
+    const from = current.findIndex(t => t.id === id);
+    if (from < 0 || !current.some(t => t.id === target)) return;
+    const next = [...current];
+    const [track] = next.splice(from, 1);
+    next.splice(next.findIndex(t => t.id === target) + (after ? 1 : 0), 0, track);
+    if (next.every((t, i) => t.id === current[i].id)) return;
+    orderOriginal.current ??= tracks;
+    orderDraft.current = next;
+    setTracks(next);
+  }
+
+  function cancelOrder() {
+    if (orderOriginal.current) setTracks(orderOriginal.current);
+    orderOriginal.current = orderDraft.current = null;
+  }
+
+  async function saveOrder(id: number) {
+    const next = orderDraft.current;
+    if (!next || !token || reorderBusy.current) return;
+    reorderBusy.current = true;
+    setSavingOrder(true);
+    ++requestId.current;
+    try {
+      const index = next.findIndex(t => t.id === id);
+      let before = next[index + 1]?.id ?? null;
+      if (before === null && hasMore) before = (await listFavorites(token, 1, next.length)).tracks[0]?.id ?? null;
+      await moveFavorite(token, id, before);
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      showToast('Could not save favorites order. Please try again.', 'error');
+      if (orderOriginal.current) setTracks(orderOriginal.current);
+    } finally {
+      orderOriginal.current = orderDraft.current = null;
+      reorderBusy.current = false;
+      setSavingOrder(false);
+      await refresh();
+    }
+  }
 
   async function refresh(pageCount = pages.current) {
-    if (!token) return;
+    if (!token || reorderBusy.current || orderDraft.current) return;
     const request = ++requestId.current;
     loadingRef.current = true;
     setLoading(true);
@@ -51,7 +98,7 @@ export function Favorites(props: {
         if (!more) break;
       }
       pages.current = loadedPages;
-      setTracks(Array.from(new Map(next.map(track => [track.id, track])).values()));
+      if (!orderDraft.current) setTracks(Array.from(new Map(next.map(track => [track.id, track])).values()));
       setHasMore(more);
     } catch (e: any) {
       if (request !== requestId.current) return;
@@ -96,6 +143,7 @@ export function Favorites(props: {
           <div>
             <h2 className="text-2xl font-bold text-white">Favorites</h2>
             <p className="text-sm text-slate-400">{tracks.length} liked songs{hasMore ? " loaded" : ""}</p>
+            <p className="text-xs text-slate-400" role="status">{savingOrder ? 'Saving order…' : 'Hold the grip and drag to reorder'}</p>
           </div>
         </div>
         <button
@@ -117,12 +165,20 @@ export function Favorites(props: {
       )}
 
       {/* Track List */}
-      <div className="space-y-1">
+      <div className="space-y-1" data-favorites-list>
         {tracks.map((t, idx) => (
           <div
             key={t.id}
+            data-favorite-id={t.id}
             className="group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 rounded-xl hover:bg-slate-800/50 transition-colors"
           >
+            <FavoriteDragHandle label={t.title ?? t.path} disabled={savingOrder || loading || removing.size > 0}
+              onHover={(target, after) => hoverTrack(t.id, target, after)}
+              onDrop={() => void saveOrder(t.id)} onCancel={cancelOrder}
+              onStep={direction => {
+                const target = tracks[idx + direction];
+                if (target) { hoverTrack(t.id, target.id, direction === 1); void saveOrder(t.id); }
+              }} />
             <button
               type="button"
               onClick={() => props.onPlay?.({ id: t.id, title: t.title, artist: trackArtistLabel(t) })}
@@ -153,7 +209,7 @@ export function Favorites(props: {
                 />
               </div>
               <button
-                disabled={removing.has(t.id)}
+                disabled={savingOrder || removing.has(t.id)}
                 aria-label={`Remove ${t.title ?? t.path} from favorites`}
                 onClick={async () => {
                   if (pendingRemovals.current.has(t.id)) return;

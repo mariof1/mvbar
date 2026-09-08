@@ -760,6 +760,12 @@ export async function listFavorites(token: string, limit = 100, offset = 0) {
   };
 }
 
+export async function moveFavorite(token: string, trackId: number, beforeTrackId: number | null) {
+  return apiFetch('/favorites/reorder', {
+    method: 'POST', body: JSON.stringify({ trackId, beforeTrackId }),
+  }, token);
+}
+
 export type SocialUser = {
   id: string;
   email: string;

@@ -23,7 +23,7 @@ type LibraryUpdate = {
 };
 
 type FavoriteUpdate = {
-  type: 'favorite:added' | 'favorite:removed';
+  type: 'favorite:added' | 'favorite:removed' | 'favorite:reordered';
   data: {
     trackId: number;
   };
@@ -558,6 +558,8 @@ export function useWebSocket(authIdentity: string | null) {
               lastUpdate: Date.now(),
               lastEvent: msg.data,
             });
+          } else if (msg.type === 'favorite:reordered') {
+            useFavorites.setState({ lastChange: Date.now() });
           } else if (msg.type === 'favorite:added') {
             useFavorites.getState().addToSet(msg.data.trackId);
           } else if (msg.type === 'favorite:removed') {
