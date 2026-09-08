@@ -5,9 +5,23 @@ import {
   isPrivateNetworkAddress,
   normalizeCatalogText,
   normalizeLocalAlbumTitle,
+  songIsPresent,
+  songMatchKey,
+  songSearchQuery,
   sameProviderOrigin,
   validateMissingMusicConfig,
 } from '../dist/pluginSystem/missingMusic.js';
+
+test('song matching handles tags, accents, non-Latin names and different performers', () => {
+  assert.equal(songMatchKey('Beyoncé!'), 'beyonce');
+  assert.equal(songMatchKey('世界'), '世界');
+  const song = { recordingId: 'recording', title: 'Song', artistNames: ['Artist'] };
+  assert.equal(songIsPresent(song, [{ title: 'Different', artist: null, musicbrainz_track_id: 'recording' }]), true);
+  assert.equal(songIsPresent(song, [{ title: 'SONG!', artist: 'Artist', musicbrainz_track_id: null }]), true);
+  assert.equal(songIsPresent(song, [{ title: 'Song', artist: 'Cover artist', musicbrainz_track_id: null }]), false);
+  assert.match(songSearchQuery('Song Artist'), /recording:"Song" OR artist:"Song"/);
+  assert.match(songSearchQuery('" OR *'), /\\"/);
+});
 import { parsePluginPackage } from '../dist/pluginSystem/package.js';
 import {
   getBundledPluginPackage,

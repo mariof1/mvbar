@@ -4,6 +4,7 @@ import { useDialogFocus } from './useDialogFocus';
 import { useLatestRequest } from './useLatestRequest';
 
 import { useEffect, useState, useRef, useCallback } from 'react';
+import { MissingSongSearch } from './MissingSongSearch';
 import { useAuth } from './store';
 import {
   apiFetch,
@@ -1203,6 +1204,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
             )}
 
             {/* Spotify-style recently selected results */}
+            {isOpen && <MissingSongSearch query={q} />}
             {!hasQuery && recentError && (
               <p role="alert" className="px-5 pt-3 text-sm text-red-400">{recentError}</p>
             )}

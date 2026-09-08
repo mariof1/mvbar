@@ -180,6 +180,25 @@ libraries, presents missing albums or tracks to users, and stores an approval
 queue in plugin-owned database rows. Local artists without MusicBrainz tags are
 included and can be matched once through MusicBrainz; the saved match is reused.
 
+When Missing Music is installed and enabled, normal library search also checks
+MusicBrainz for songs after typing at least three characters. Enter a song title,
+optionally with its artist. Catalog matches show **In library**, **Requested**, or
+**Request song**. Library results remain usable while the catalog loads or if it
+is unavailable. Both the search dialog and full search page support this flow.
+Matching uses recording IDs or title/performer metadata within the user's permitted
+libraries. Track requests do not require an album/release-group ID, so standalone
+recordings can be requested too. This adds a request for administrator review;
+it does not directly download a song.
+
+Song requests appear in the existing Missing Music request queue and notify
+connected administrators through the existing realtime alerts, including the
+artist and title. Repeated active requests by the same user are prevented, including
+simultaneous submissions. An existing enabled Missing Music package works with
+this updated host; reinstalling the package is unnecessary.
+
+The search uses MusicBrainz's documented
+[recording and artist fields](https://musicbrainz.org/doc/MusicBrainz_API/Search/RecordingSearch).
+
 The plugin works without external configuration as a managed wanted list.
 Administrators can approve, reject, and manually mark requests fulfilled.
 Optionally, approved requests can be handed to an administrator-configured

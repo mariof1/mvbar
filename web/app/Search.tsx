@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, useRef } from 'react';
+import { MissingSongSearch } from './MissingSongSearch';
 import { useAuth } from './store';
 import { apiFetch, browseAlbum, browseArtistTracks } from './apiClient';
 import { useFavorites } from './favoritesStore';
@@ -468,6 +469,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
         </div>
 
         {/* Empty state */}
+        <MissingSongSearch query={q} />
         {!loading && q && hits.length === 0 && artistHits.length === 0 && albumHits.length === 0 && playlistHits.length === 0 && podcastHits.length === 0 && podcastEpisodeHits.length === 0 && (
           <div className="text-center py-12 text-slate-400">
             <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">

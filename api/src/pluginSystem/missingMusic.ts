@@ -281,6 +281,45 @@ function libraryFilter(allowed: number[] | null, startParameter: number) {
     : { sql: ` and track.library_id = any($${startParameter}::bigint[])`, params: [allowed] as unknown[] };
 }
 
+export function songMatchKey(value: string) {
+  return value.normalize('NFKD').toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+export function songSearchQuery(value: string) {
+  return value.trim().split(/\s+/).map(term => {
+    const literal = `"${term.replace(/[\\"]/g, '\\$&')}"`;
+    return `(recording:${literal} OR artist:${literal})`;
+  }).join(' AND ');
+}
+
+type SongCandidate = {
+  recordingId: string; title: string; artist: string; artistNames: string[];
+  version?: string | null;
+  musicBrainzArtistId: string; album: string | null;
+  musicBrainzReleaseGroupId: string | null; musicBrainzReleaseId: string | null;
+};
+
+export function songIsPresent(song: Pick<SongCandidate, 'recordingId' | 'title' | 'artistNames'>, local: Array<{
+  title: string | null; artist: string | null; musicbrainz_track_id: string | null;
+}>) {
+  return local.some(track => track.musicbrainz_track_id === song.recordingId || (
+    songMatchKey(track.title ?? '') === songMatchKey(song.title) &&
+    (track.artist ?? '').split(/\s*(?:;|•|\|)\s*/).some(artist => song.artistNames.some(name => songMatchKey(name) === songMatchKey(artist)))
+  ));
+}
+
+async function songPresence(req: FastifyRequest, songs: SongCandidate[]) {
+  if (!songs.length) return [];
+  const filter = libraryFilter(await allowedLibrariesForUser(req.user!.userId, req.user!.role), 4);
+  const local = await db().query<{ title: string | null; artist: string | null; musicbrainz_track_id: string | null }>(
+    `select track.title, track.artist, track.musicbrainz_track_id from active_tracks track
+      where (track.musicbrainz_track_id=any($1::text[]) or lower(track.title)=any($3::text[]) or
+        regexp_replace(lower(normalize(coalesce(track.title,''), NFKD)), '[^[:alnum:]]', '', 'g')=any($2::text[])) ${filter.sql}`,
+    [songs.map(song => song.recordingId), songs.map(song => songMatchKey(song.title)), songs.map(song => song.title.toLocaleLowerCase('en')), ...filter.params]
+  );
+  return songs.map(song => songIsPresent(song, local.rows));
+}
+
 let musicBrainzQueue = Promise.resolve();
 let lastMusicBrainzRequestAt = 0;
 
@@ -443,7 +482,7 @@ async function notifyRequest(row: MediaRequestRow, event: string, message?: stri
     status: row.status,
     artist: row.artist,
     title: row.title,
-    message,
+    message: message ? `${row.artist} — ${row.title}: ${message}` : undefined,
     at: new Date().toISOString(),
   };
   broadcastToUser(row.user_id, 'missing-music:update', data);
@@ -577,6 +616,48 @@ export function startMissingMusicScheduler() {
 }
 
 export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
+  app.get('/api/plugins/missing-music/songs/search', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ ok: false });
+    const plugin = await getMissingMusicPlugin(true);
+    if (!plugin) return { ok: true, enabled: false, songs: [] };
+    const q = (req.query as { q?: unknown }).q;
+    if (typeof q !== 'string' || q.trim().length < 3 || q.length > 200) {
+      return reply.code(400).send({ ok: false, error: 'Enter between 3 and 200 characters' });
+    }
+    try {
+      // Treat user text as literal terms, not MusicBrainz/Lucene operators.
+      const query = songSearchQuery(q);
+      const result = await musicBrainzFetch<{ recordings?: Array<{
+        id?: string; title?: string; disambiguation?: string;
+        'artist-credit'?: Array<{ name?: string; joinphrase?: string; artist?: { id?: string; name?: string } }>;
+        releases?: Array<{ id?: string; title?: string; 'release-group'?: { id?: string } }>;
+      }> }>(plugin, `song-search:${query}`, 'recording', { query, limit: '20' });
+      const songs: SongCandidate[] = [];
+      for (const recording of result.recordings ?? []) {
+        const credits = recording['artist-credit'] ?? [];
+        const artistId = credits.find(credit => validMbid(credit.artist?.id))?.artist?.id;
+        if (!validMbid(recording.id) || !recording.title || !artistId || songs.some(song => song.recordingId === recording.id)) continue;
+        const release = recording.releases?.[0];
+        songs.push({ recordingId: recording.id, title: recording.title, version: recording.disambiguation ?? null,
+          artist: credits.map(credit => `${credit.name ?? credit.artist?.name ?? ''}${credit.joinphrase ?? ''}`).join(''),
+          artistNames: credits.flatMap(credit => [credit.name, credit.artist?.name].filter((name): name is string => Boolean(name))),
+          musicBrainzArtistId: artistId, album: release?.title ?? null,
+          musicBrainzReleaseGroupId: validMbid(release?.['release-group']?.id) ? release!['release-group']!.id! : null,
+          musicBrainzReleaseId: validMbid(release?.id) ? release!.id! : null });
+      }
+      const present = await songPresence(req, songs);
+      const requested = await db().query<{ musicbrainz_recording_id: string }>(
+        `select musicbrainz_recording_id from plugin_media_requests where plugin_id=$1 and user_id=$2
+          and item_type='track' and musicbrainz_recording_id=any($3::text[]) and status not in ('failed','rejected','cancelled')`,
+        [plugin.id, req.user.userId, songs.map(song => song.recordingId)]);
+      const requestedIds = new Set(requested.rows.map(row => row.musicbrainz_recording_id));
+      return { ok: true, enabled: true, songs: songs.map((song, index) => ({ ...song, present: present[index], requested: requestedIds.has(song.recordingId) })) };
+    } catch (error) {
+      logger.warn('missing-music', `Song search failed: ${errorMessage(error)}`);
+      return reply.code(502).send({ ok: false, error: 'Could not check the song catalog. Please try again.' });
+    }
+  });
+
   app.get('/api/plugins/missing-music/status', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false, error: 'Authentication required' });
     const installed = await getMissingMusicPlugin(false);
@@ -846,34 +927,54 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       const recordingMbid = validMbid(body.musicBrainzRecordingId) ? body.musicBrainzRecordingId : null;
       if (!artistMbid) throw new Error('A MusicBrainz artist id is required');
       if (itemType === 'album' && !releaseGroupMbid) throw new Error('A MusicBrainz release-group id is required');
-      if (itemType === 'track' && (!recordingMbid || !releaseGroupMbid)) {
-        throw new Error('MusicBrainz recording and release-group ids are required');
+      if (itemType === 'track' && !recordingMbid) {
+        throw new Error('A MusicBrainz recording id is required');
+      }
+      if (itemType === 'track' && (await songPresence(req, [{ recordingId: recordingMbid!, title, artist,
+        artistNames: [artist], musicBrainzArtistId: artistMbid, album,
+        musicBrainzReleaseGroupId: releaseGroupMbid, musicBrainzReleaseId: releaseMbid }]))[0]) {
+        return reply.code(409).send({ ok: false, error: 'This song is already in your library', present: true });
       }
       const keyColumn = itemType === 'album' ? 'musicbrainz_release_group_id' : 'musicbrainz_recording_id';
       const keyValue = itemType === 'album' ? releaseGroupMbid : recordingMbid;
-      const duplicate = await db().query<{ id: string }>(
-        `select id from plugin_media_requests
-          where plugin_id=$1 and user_id=$2 and item_type=$3 and ${keyColumn}=$4
-            and status not in ('failed','rejected','cancelled') limit 1`,
-        [plugin.id, req.user!.userId, itemType, keyValue]
-      );
-      if (duplicate.rows[0]) return reply.code(409).send({ ok: false, error: 'This item is already requested' });
       const status = plugin.config.requireAdminApproval === false ? 'approved' : 'requested';
       const id = crypto.randomUUID();
-      const result = await db().query<MediaRequestRow>(
-        `insert into plugin_media_requests(
-           id,plugin_id,user_id,item_type,artist,title,album,musicbrainz_artist_id,
-           musicbrainz_release_group_id,musicbrainz_release_id,musicbrainz_recording_id,status,
-           approved_by,approved_at,metadata
-         ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
-        [
-          id, plugin.id, req.user!.userId, itemType, artist, title, album, artistMbid,
-          releaseGroupMbid, releaseMbid, recordingMbid, status,
-          status === 'approved' ? req.user!.userId : null, status === 'approved' ? new Date() : null,
-          { source: 'musicbrainz' },
-        ]
-      );
-      const row = result.rows[0];
+      const client = await db().connect();
+      let row: MediaRequestRow;
+      try {
+        await client.query('begin');
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`${plugin.id}:${req.user!.userId}:${itemType}:${keyValue}`]);
+        const duplicate = await client.query<{ id: string }>(
+          `select id from plugin_media_requests
+            where plugin_id=$1 and user_id=$2 and item_type=$3 and ${keyColumn}=$4
+              and status not in ('failed','rejected','cancelled') limit 1`,
+          [plugin.id, req.user!.userId, itemType, keyValue]
+        );
+        if (duplicate.rows[0]) {
+          await client.query('rollback');
+          return reply.code(409).send({ ok: false, error: 'This item is already requested' });
+        }
+        const result = await client.query<MediaRequestRow>(
+          `insert into plugin_media_requests(
+             id,plugin_id,user_id,item_type,artist,title,album,musicbrainz_artist_id,
+             musicbrainz_release_group_id,musicbrainz_release_id,musicbrainz_recording_id,status,
+             approved_by,approved_at,metadata
+           ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
+          [
+            id, plugin.id, req.user!.userId, itemType, artist, title, album, artistMbid,
+            releaseGroupMbid, releaseMbid, recordingMbid, status,
+            status === 'approved' ? req.user!.userId : null, status === 'approved' ? new Date() : null,
+            { source: 'musicbrainz' },
+          ]
+        );
+        row = result.rows[0];
+        await client.query('commit');
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      } finally {
+        client.release();
+      }
       await audit('plugin_media_requested', { pluginId: plugin.id, requestId: id, userId: req.user!.userId, itemType, keyValue });
       await notifyRequest(row, status, status === 'requested' ? 'Request is waiting for administrator approval' : 'Request approved automatically');
       if (status === 'approved') void runMissingMusicJobs().catch(() => undefined);
