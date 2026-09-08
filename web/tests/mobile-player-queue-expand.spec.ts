@@ -1,5 +1,5 @@
 import {test,expect} from '@playwright/test';
-test('one vertical gesture expands queue, returns after selection, then minimizes',async({page})=>{
+for (const input of ['touch', 'mouse']) test(input + ': one vertical gesture expands queue, returns after selection, then minimizes',async({page})=>{
  await page.setViewportSize({width:390,height:844});
  await page.routeWebSocket('**/*',()=>{});
  const tracks=Array.from({length:30},(_,i)=>({id:i+1,title:`Queue test ${i+1}`,artist:'Fixture',duration_ms:180000}));
@@ -11,6 +11,7 @@ test('one vertical gesture expands queue, returns after selection, then minimize
 
  const touch=await page.context().newCDPSession(page);
  async function swipe(x:number,y:number,dy:number) {
+  if (input === 'mouse') { await page.mouse.move(x,y); await page.mouse.down(); await page.mouse.move(x,y+dy,{steps:10}); await page.mouse.up(); return; }
   await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
   for(let step=1;step<=10;step++) await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:y+dy*step/10}]});
   await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});

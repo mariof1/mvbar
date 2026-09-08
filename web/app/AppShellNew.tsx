@@ -549,19 +549,18 @@ function PlayerBar(props: {
   useEffect(() => {
     const surface = mobilePlayerSurfaceRef.current;
     if (!expanded || !surface) return;
-    const start = (event: TouchEvent) => {
-      if (event.touches.length !== 1 || (event.target as Element).closest('[role="slider"], input[type="range"]')) { surfaceGestureRef.current = null; return; }
-      const point = event.touches[0];
-      surfaceGestureRef.current = { x: point.clientX, y: point.clientY,
-        inQueue: !!mobileQueueListRef.current?.contains(event.target as Node),
+    const startPoint = (x: number, y: number, target: EventTarget | null) => {
+      if ((target as Element)?.closest('[role="slider"], input[type="range"]')) { surfaceGestureRef.current = null; return; }
+      surfaceGestureRef.current = { x, y,
+        inQueue: !!mobileQueueListRef.current?.contains(target as Node),
         queueAtTop: (mobileQueueListRef.current?.scrollTop ?? 0) <= 0, handled: false };
     };
-    const move = (event: TouchEvent) => {
+    const movePoint = (x: number, y: number, event: Event) => {
       const gesture = surfaceGestureRef.current;
-      if (!gesture || event.touches.length !== 1 || queueTouchGestureRef.current?.active) return;
+      if (!gesture || queueTouchGestureRef.current?.active) return;
       if (gesture.handled) { if (event.cancelable) event.preventDefault(); return; }
-      const dy = event.touches[0].clientY - gesture.y;
-      const dx = event.touches[0].clientX - gesture.x;
+      const dy = y - gesture.y;
+      const dx = x - gesture.x;
       if (Math.abs(dy) < 16 || Math.abs(dy) <= Math.abs(dx)) return;
       const expanding = !queueExpanded && dy < 0 && (props.queue?.length ?? 0) > 1;
       const collapsing = queueExpanded && dy > 0 && (!gesture.inQueue || (gesture.queueAtTop && (mobileQueueListRef.current?.scrollTop ?? 0) <= 0));
@@ -580,11 +579,23 @@ function PlayerBar(props: {
       }
     };
     const end = () => { surfaceGestureRef.current = null; };
+    const start = (event: TouchEvent) => { if (event.touches.length === 1) startPoint(event.touches[0].clientX, event.touches[0].clientY, event.target); else end(); };
+    const move = (event: TouchEvent) => { if (event.touches.length === 1) movePoint(event.touches[0].clientX, event.touches[0].clientY, event); };
+    const mouseStart = (event: MouseEvent) => { if (event.button === 0) startPoint(event.clientX, event.clientY, event.target); };
+    const mouseMove = (event: MouseEvent) => { if (event.buttons === 1) movePoint(event.clientX, event.clientY, event); };
+    surface.addEventListener('mousedown', mouseStart);
+    window.addEventListener('mousemove', mouseMove);
+    window.addEventListener('mouseup', end);
+    window.addEventListener('blur', end);
     surface.addEventListener('touchstart', start, { passive: true });
     surface.addEventListener('touchmove', move, { passive: false });
     surface.addEventListener('touchend', end);
     surface.addEventListener('touchcancel', end);
     return () => {
+      surface.removeEventListener('mousedown', mouseStart);
+      window.removeEventListener('mousemove', mouseMove);
+      window.removeEventListener('mouseup', end);
+      window.removeEventListener('blur', end);
       surface.removeEventListener('touchstart', start);
       surface.removeEventListener('touchmove', move);
       surface.removeEventListener('touchend', end);
@@ -1258,7 +1269,7 @@ function PlayerBar(props: {
         <div 
           ref={mobilePlayerSurfaceRef}
           onClickCapture={event => { if (Date.now() < suppressSurfaceClickUntil.current) { event.preventDefault(); event.stopPropagation(); } }}
-          className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl lg:hidden animate-fade-in"
+          className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl lg:hidden animate-fade-in select-none"
           onClick={() => minimizeExpandedPlayer()}
         >
           <div ref={mobilePlayerScrollRef}
