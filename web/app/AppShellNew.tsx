@@ -502,6 +502,20 @@ function PlayerBar(props: {
   const [showRecommendationMenu, setShowRecommendationMenu] = useState(false);
   const [showExpandedOptions, setShowExpandedOptions] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [queueExpanded, setQueueExpanded] = useState(false);
+  const mobilePlayerScrollRef = useRef<HTMLDivElement>(null);
+  const mobileQueueSectionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!expanded) { setQueueExpanded(false); return; }
+    const frame = requestAnimationFrame(() => {
+      const container = mobilePlayerScrollRef.current;
+      const queue = mobileQueueSectionRef.current;
+      if (!container) return;
+      const top = queueExpanded && queue ? queue.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - container.clientHeight * 0.25 : 0;
+      container.scrollTo({ top: Math.max(0, top), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [queueExpanded, expanded]);
   useBodyScrollLock(expanded);
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
   const [playerDragY, setPlayerDragY] = useState(0);
@@ -1184,7 +1198,7 @@ function PlayerBar(props: {
     const gesture = playerDragRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     const distance = Math.max(0, event.clientY - gesture.startY);
-    if (distance > 6) suppressPlayerHandleClickRef.current = true;
+    if (Math.abs(event.clientY - gesture.startY) > 6) suppressPlayerHandleClickRef.current = true;
     setPlayerDragY(distance);
   };
 
@@ -1199,7 +1213,9 @@ function PlayerBar(props: {
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
     playerDragRef.current = null;
     setIsPlayerDragging(false);
-    if (shouldMinimize) minimizeExpandedPlayer(true);
+    if (event.clientY - gesture.startY < -45 && (props.queue?.length ?? 0) > 1) { setQueueExpanded(true); setPlayerDragY(0); }
+    else if (queueExpanded && distance > 45) { setQueueExpanded(false); setPlayerDragY(0); }
+    else if (shouldMinimize) minimizeExpandedPlayer(true);
     else setPlayerDragY(0);
     if (suppressPlayerHandleClickRef.current) {
       setTimeout(() => { suppressPlayerHandleClickRef.current = false; }, 0);
@@ -1241,8 +1257,16 @@ function PlayerBar(props: {
           className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl lg:hidden animate-fade-in"
           onClick={() => minimizeExpandedPlayer()}
         >
-          <div 
-            className={`h-full flex flex-col overflow-y-auto ${
+          {queueExpanded && <div className="absolute inset-x-0 top-0 z-20 flex h-[25dvh] items-end gap-4 overflow-hidden bg-slate-950 px-5 pb-4 pt-[env(safe-area-inset-top)]" onClick={event => event.stopPropagation()}>
+            <div className="pointer-events-none absolute -top-12 left-5 h-36 w-36 overflow-hidden rounded-2xl opacity-35" aria-hidden="true">
+              {artOk && <img src={`/api/art/${props.nowPlaying.id}`} alt="" className="h-full w-full object-cover" />}
+            </div>
+            <div className="relative min-w-0 flex-1"><p className="truncate font-semibold text-white">{props.nowPlaying.title ?? 'Untitled'}</p><p className="truncate text-sm text-white/60">{props.nowPlaying.artist ?? 'Unknown Artist'}</p></div>
+            <button type="button" aria-label={isPlaying ? 'Pause' : 'Play'} onClick={togglePlay} className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-cyan-400 text-black">{isPlaying ? <Icons.Pause /> : <Icons.Play />}</button>
+          </div>}
+          <div ref={mobilePlayerScrollRef}
+            data-mobile-full-player
+            className={`h-full flex flex-col overflow-y-auto overscroll-contain [&>*]:shrink-0 ${
               isPlayerDragging ? '' : 'transition-[transform,opacity] duration-200 ease-out'
             }`}
             onClick={(e) => e.stopPropagation()}
@@ -1466,14 +1490,14 @@ function PlayerBar(props: {
 
             {/* Queue Section */}
             {props.queue && props.queue.length > 1 && (
-              <div className="flex-1 px-4 pb-8">
-                <div className="mb-3 flex items-center justify-between gap-3 px-4">
+              <div ref={mobileQueueSectionRef} data-mobile-queue-expanded={queueExpanded} className={`flex flex-col px-4 pb-[max(16px,env(safe-area-inset-bottom))] ${queueExpanded ? "h-[75dvh]" : "pb-8"}`}>
+                <div className="mb-3 flex shrink-0 items-center justify-between gap-3 px-4 touch-none" onPointerDown={handlePlayerDragStart} onPointerMove={handlePlayerDragMove} onPointerUp={handlePlayerDragEnd} onPointerCancel={handlePlayerDragCancel}>
                   <h3 className="text-sm font-semibold uppercase tracking-wide text-white/70">
                     Queue <span className="text-white/40">{props.queue.length}</span>
                   </h3>
-                  <span className="text-[11px] text-white/40">Hold to reorder</span>
+                  <button type="button" onPointerDown={event => event.stopPropagation()} aria-expanded={queueExpanded} aria-label={queueExpanded ? "Collapse queue" : "Expand queue"} className="min-h-11 px-3 text-xs text-cyan-300" onClick={() => { if (!suppressPlayerHandleClickRef.current) setQueueExpanded(value => !value); }}>{queueExpanded ? "Show player ↓" : "Expand ↑"}</button>
                 </div>
-                <div ref={mobileQueueListRef} className="space-y-1 max-h-[300px] overflow-y-auto overscroll-contain">
+                <div ref={mobileQueueListRef} aria-label="Track queue" className={`space-y-1 overflow-y-auto overscroll-contain ${queueExpanded ? "min-h-0 flex-1" : "max-h-[300px]"}`}>
                   {props.queue.map((track, idx) => (
                     <button
                       key={`${track.id}-${idx}`}
