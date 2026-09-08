@@ -504,6 +504,9 @@ function PlayerBar(props: {
   const [expanded, setExpanded] = useState(false);
   const [queueExpanded, setQueueExpanded] = useState(false);
   const mobilePlayerScrollRef = useRef<HTMLDivElement>(null);
+  const mobilePlayerSurfaceRef = useRef<HTMLDivElement>(null);
+  const surfaceGestureRef = useRef<{ x: number; y: number; inQueue: boolean; queueAtTop: boolean; handled: boolean } | null>(null);
+  const suppressSurfaceClickUntil = useRef(0);
   const mobileQueueSectionRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!expanded) { setQueueExpanded(false); return; }
@@ -543,6 +546,49 @@ function PlayerBar(props: {
     startY: number;
   } | null>(null);
   const suppressQueueClickUntilRef = useRef(0);
+  useEffect(() => {
+    const surface = mobilePlayerSurfaceRef.current;
+    if (!expanded || !surface) return;
+    const start = (event: TouchEvent) => {
+      if (event.touches.length !== 1 || (event.target as Element).closest('[role="slider"], input[type="range"]')) { surfaceGestureRef.current = null; return; }
+      const point = event.touches[0];
+      surfaceGestureRef.current = { x: point.clientX, y: point.clientY,
+        inQueue: !!mobileQueueListRef.current?.contains(event.target as Node),
+        queueAtTop: (mobileQueueListRef.current?.scrollTop ?? 0) <= 0, handled: false };
+    };
+    const move = (event: TouchEvent) => {
+      const gesture = surfaceGestureRef.current;
+      if (!gesture || event.touches.length !== 1 || queueTouchGestureRef.current?.active) return;
+      if (gesture.handled) { if (event.cancelable) event.preventDefault(); return; }
+      const dy = event.touches[0].clientY - gesture.y;
+      const dx = event.touches[0].clientX - gesture.x;
+      if (Math.abs(dy) < 16 || Math.abs(dy) <= Math.abs(dx)) return;
+      const expanding = !queueExpanded && dy < 0 && (props.queue?.length ?? 0) > 1;
+      const collapsing = queueExpanded && dy > 0 && (!gesture.inQueue || (gesture.queueAtTop && (mobileQueueListRef.current?.scrollTop ?? 0) <= 0));
+      if (!expanding && !collapsing) return;
+      if (event.cancelable) event.preventDefault();
+      suppressSurfaceClickUntil.current = Date.now() + 500;
+      if (Math.abs(dy) >= 48) {
+        gesture.handled = true;
+        // The surface swipe owns this gesture; don't also dismiss via the artwork/header drag.
+        playerDragRef.current = null;
+        setIsPlayerDragging(false);
+        setPlayerDragY(0);
+        setQueueExpanded(expanding);
+      }
+    };
+    const end = () => { surfaceGestureRef.current = null; };
+    surface.addEventListener('touchstart', start, { passive: true });
+    surface.addEventListener('touchmove', move, { passive: false });
+    surface.addEventListener('touchend', end);
+    surface.addEventListener('touchcancel', end);
+    return () => {
+      surface.removeEventListener('touchstart', start);
+      surface.removeEventListener('touchmove', move);
+      surface.removeEventListener('touchend', end);
+      surface.removeEventListener('touchcancel', end);
+    };
+  }, [expanded, queueExpanded, props.queue?.length]);
   const playedSentRef = useRef(false);
   const playbackMetricsRef = useRef({
     trackId: props.nowPlaying.id,
@@ -1254,6 +1300,8 @@ function PlayerBar(props: {
       {/* Expanded Player Overlay */}
       {expanded && (
         <div 
+          ref={mobilePlayerSurfaceRef}
+          onClickCapture={event => { if (Date.now() < suppressSurfaceClickUntil.current) { event.preventDefault(); event.stopPropagation(); } }}
           className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl lg:hidden animate-fade-in"
           onClick={() => minimizeExpandedPlayer()}
         >
@@ -1495,7 +1543,6 @@ function PlayerBar(props: {
                   <h3 className="text-sm font-semibold uppercase tracking-wide text-white/70">
                     Queue <span className="text-white/40">{props.queue.length}</span>
                   </h3>
-                  <button type="button" onPointerDown={event => event.stopPropagation()} aria-expanded={queueExpanded} aria-label={queueExpanded ? "Collapse queue" : "Expand queue"} className="min-h-11 px-3 text-xs text-cyan-300" onClick={() => { if (!suppressPlayerHandleClickRef.current) setQueueExpanded(value => !value); }}>{queueExpanded ? "Show player ↓" : "Expand ↑"}</button>
                 </div>
                 <div ref={mobileQueueListRef} aria-label="Track queue" className={`space-y-1 overflow-y-auto overscroll-contain ${queueExpanded ? "min-h-0 flex-1" : "max-h-[300px]"}`}>
                   {props.queue.map((track, idx) => (

@@ -8,22 +8,27 @@ test('mobile player expands queue to three quarters and returns without changing
  await page.getByRole('button',{name:'Play all',exact:true}).click();
  await page.locator('.fixed.bottom-0').getByText('Queue test 1',{exact:true}).click();
  const full=page.locator('[data-mobile-full-player]');await expect(full).toBeVisible();
+
  const touch=await page.context().newCDPSession(page);
- await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:190,y:220}]});
- for(let y=207;y>=90;y-=13) await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:190,y}]});
- await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
- const section=page.locator('[data-mobile-queue-expanded="true"]');await expect(section).toBeVisible();
- await expect.poll(async()=>{const b=await section.boundingBox();return Math.abs(b!.y-211)<6&&Math.abs(b!.height-633)<6}).toBe(true);
- await page.screenshot({path:'../.local/mobile-expanded-queue.png'});
- const list=page.getByLabel('Track queue');await list.evaluate(el=>{el.scrollTop=el.scrollHeight});await expect(list.getByText('Queue test 30',{exact:true})).toBeInViewport();
- await full.getByRole('button',{name:'Collapse queue',exact:true}).click();
- await expect(page.locator('[data-mobile-queue-expanded="false"]')).toBeVisible();
- await expect.poll(()=>full.evaluate(el=>el.scrollTop)).toBe(0);
- await expect(full.locator('h2')).toHaveText('Queue test 1');
- await full.getByRole('button',{name:'Expand queue',exact:true}).click();
- await expect.poll(async()=>Math.round((await section.boundingBox())!.y)).toBe(211);
- await page.mouse.move(80,230);await page.mouse.down();await page.mouse.move(80,320,{steps:8});await page.mouse.up();
- await expect(page.locator('[data-mobile-queue-expanded="false"]')).toBeVisible();
- await expect.poll(()=>full.evaluate(el=>el.scrollTop)).toBe(0);
+ async function swipe(x:number,y:number,dy:number) {
+  await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+  for(let step=1;step<=10;step++) await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:y+dy*step/10}]});
+  await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ }
+ await expect(page.getByRole('button',{name:'Expand queue',exact:true})).toHaveCount(0);
+ let attempt=0;
+ for (const target of [full.locator('h2'),full.getByRole('button',{name:'Play',exact:true}),full.locator('[data-mobile-queue-index="0"]')]) {
+  await target.scrollIntoViewIfNeeded();const b=await target.boundingBox();
+  await swipe(b!.x+b!.width/2,b!.y+b!.height/2,-110);
+  const section=page.locator('[data-mobile-queue-expanded="true"]');await expect(section).toBeVisible();
+  await expect.poll(async()=>{const b=await section.boundingBox();return Math.abs(b!.y-211)<6&&Math.abs(b!.height-633)<6}).toBe(true);
+  const list=page.getByLabel('Track queue');await list.evaluate(el=>{el.scrollTop=el.scrollHeight});
+  await expect(list.getByText('Queue test 30',{exact:true})).toBeInViewport();
+  // A downward swipe on the compact player returns to artwork and transport.
+  await swipe(180,attempt++ % 2 === 0 ? 170 : 230,90);
+  await expect(page.locator('[data-mobile-queue-expanded="false"]')).toBeVisible();
+  await expect.poll(()=>full.evaluate(el=>el.scrollTop)).toBe(0);
+  await expect(full.locator('h2')).toHaveText('Queue test 1');
+ }
 });
 
