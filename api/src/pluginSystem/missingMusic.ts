@@ -299,14 +299,14 @@ type SongRelease = {
 };
 
 function alternateVersion(value: string) {
-  return /\b(live|remix|demo|karaoke|instrumental|acoustic|unplugged|alternate|alternative|rehearsal|outtake|bootleg|edit|sped[ -]?up|slowed|nightcore|surround|quadraphonic|medley|excerpt|snippet|extended|re-recording)\b/i.test(value) || /\b[457]\.1\b/.test(value) || (/\bmix\b/i.test(value) && !/\b(original|album|stereo) mix\b/i.test(value));
+  return /\b(live|remix|demo|karaoke|instrumental|acoustic|unplugged|alternate|alternative|rehearsal|outtake|bootleg|edit|sped[ -]?up|slowed|nightcore|surround|quadraphonic|medley|excerpt|snippet|extended|re-recording|cover|tribute|mashup)\b/i.test(value) || /\b[457]\.1\b/.test(value) || (/\bmix\b/i.test(value) && !/\b(original|album|stereo) mix\b/i.test(value));
 }
 
 export function standardSongRelease(recording: { title?: string; disambiguation?: string; video?: boolean | null; releases?: SongRelease[] }) {
   if (recording.video || alternateVersion(recording.disambiguation ?? '')) return undefined;
   // Only inspect version suffixes: titles such as "Live Forever" are ordinary songs.
   const suffix = recording.title?.match(/(?:[([]|\s[–—-]\s)(.*)$/)?.[1] ?? '';
-  if (alternateVersion(suffix)) return undefined;
+  if (alternateVersion(suffix) || /^(?:.*\bmedley\s*:)/i.test(recording.title ?? '')) return undefined;
   return (recording.releases ?? []).filter(release => {
     const group = release['release-group'];
     return (!release.status || release.status.toLowerCase() === 'official') &&
@@ -655,12 +655,13 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       // Treat user text as literal terms, not MusicBrainz/Lucene operators.
       const query = songSearchQuery(q);
       const result = await musicBrainzFetch<{ recordings?: Array<{
-        id?: string; title?: string; disambiguation?: string; video?: boolean | null;
+        id?: string; title?: string; disambiguation?: string; video?: boolean | null; score?: number;
         'artist-credit'?: Array<{ name?: string; joinphrase?: string; artist?: { id?: string; name?: string } }>;
         releases?: SongRelease[];
       }> }>(plugin, `song-search:${query}`, 'recording', { query, limit: '100' });
       const songs: SongCandidate[] = [];
-      const candidates = (result.recordings ?? []).map(recording => ({ recording, release: standardSongRelease(recording) }))
+      const bestScore = Math.max(0, ...(result.recordings ?? []).map(recording => Number(recording.score ?? 0)));
+      const candidates = (result.recordings ?? []).filter(recording => Number(recording.score ?? bestScore) >= bestScore - 10).map(recording => ({ recording, release: standardSongRelease(recording) }))
         .filter(candidate => candidate.release !== undefined)
         .sort((a, b) => songReleaseRank(a.release!) - songReleaseRank(b.release!));
       const seenSongs = new Set<string>();
@@ -671,6 +672,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
         const songKey = `${songMatchKey(recording.title)}:${credits.map(credit => credit.artist?.id ?? '').join(',')}`;
         if (seenSongs.has(songKey)) continue;
         seenSongs.add(songKey);
+        if (songs.length >= 20) break;
         songs.push({ recordingId: recording.id, title: recording.title, version: recording.disambiguation ?? null,
           artist: credits.map(credit => `${credit.name ?? credit.artist?.name ?? ''}${credit.joinphrase ?? ''}`).join(''),
           artistNames: credits.flatMap(credit => [credit.name, credit.artist?.name].filter((name): name is string => Boolean(name))),
