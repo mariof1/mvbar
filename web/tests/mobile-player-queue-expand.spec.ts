@@ -44,7 +44,10 @@ for (const input of ['touch', 'mouse']) test(input + ': one vertical gesture exp
  await expect.poll(()=>full.evaluate(el=>el.scrollTop)).toBe(0);
  await expect(title).toHaveText('Queue test 30');
  const restored=await title.boundingBox();
- await swipe(restored!.x+20,restored!.y+10,450);
+ await swipe(restored!.x+20,restored!.y+10,25);
+ await expect(full).toBeVisible();
+ await expect.poll(()=>full.evaluate(el=>new DOMMatrix(getComputedStyle(el).transform).m42)).toBe(0);
+ await swipe(restored!.x+20,restored!.y+10,110);
  await expect(full).toHaveCount(0);
  await expect(page.locator('.fixed.bottom-0').getByText('Queue test 30',{exact:true})).toBeVisible();
 });

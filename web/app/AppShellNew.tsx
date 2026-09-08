@@ -577,7 +577,8 @@ function PlayerBar(props: {
       if (!gesture?.handled) return;
       setIsPlayerDragging(false);
       suppressSurfaceClickUntil.current = Date.now() + 400;
-      const minimize = !cancel && gesture.position < -window.innerHeight / 2;
+      // Dismiss with a short deliberate pull, while still allowing reversal before release.
+      const minimize = !cancel && gesture.position < -Math.min(96, window.innerHeight * 0.15);
       const up = cancel ? queueExpanded : gesture.upper > 0 && gesture.position > gesture.upper / 2;
       setQueueExpanded(up);
       mobilePlayerScrollRef.current?.scrollTo({ top: up ? gesture.upper : 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
