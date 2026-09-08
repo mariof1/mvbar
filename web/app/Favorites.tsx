@@ -173,7 +173,6 @@ export function Favorites(props: {
           <div>
             <h2 className="text-2xl font-bold text-white">Favorites</h2>
             <p className="text-sm text-slate-400">{tracks.length} liked songs{hasMore ? " loaded" : ""}</p>
-            <p className="text-xs text-slate-400" role="status">{savingOrder ? 'Saving order…' : 'Hold the grip and drag to reorder'}</p>
           </div>
         </div>
         <button
@@ -198,7 +197,7 @@ export function Favorites(props: {
         disabled={!props.onPlayAll || !tracks.length || loading || savingOrder || preparingPlayback || draggingId !== null}
         className="inline-flex min-h-11 items-center gap-2 rounded-full bg-cyan-500 px-5 py-2 font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50">
         <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
-        {preparingPlayback ? 'Loading favorites…' : 'Play all'}
+        {preparingPlayback ? 'Loading favorites…' : savingOrder ? 'Saving order…' : 'Play all'}
       </button>
 
       {/* Track List */}
