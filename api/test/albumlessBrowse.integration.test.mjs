@@ -25,6 +25,10 @@ test('albumless tracks are browseable without changing tags or leaking libraries
   assert.equal(list.json().total,3);
   assert.equal(list.json().albums[0].album,'Unknown Album — Albumless Night');
   assert.equal(list.json().albums[0].track_count,3);
+  const artistCounts=(await app.inject('/api/browse/artists?q=Albumless&sort=albums_desc')).json().artists;
+  assert.equal(artistCounts.find(a=>a.name==='Albumless Night').album_count,2);
+  assert.equal(artistCounts.find(a=>a.name==='Albumless Other').album_count,1);
+  assert.equal(artistCounts[0].name,'Albumless Night');
   const letter=(await app.inject('/api/browse/albums?q=Albumless&letter=u')).json();assert.equal(letter.total,2);
   const detail=await app.inject('/api/browse/album?album='+encodeURIComponent('Unknown Album — Albumless Night'));
   assert.equal(detail.statusCode,200,detail.body);assert.equal(detail.json().tracks.length,3);

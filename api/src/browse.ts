@@ -65,7 +65,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         a.art_path,
         a.art_hash,
         count(distinct t.id)::int as track_count,
-        count(distinct nullif(t.album, ''))::int as album_count
+        count(distinct ${albumNameSql})::int as album_count
       from artists a
       join track_artists ta on ta.artist_id = a.id
       join active_tracks t on t.id = ta.track_id
