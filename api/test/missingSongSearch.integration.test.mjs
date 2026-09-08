@@ -35,7 +35,9 @@ test('song search gates the plugin, checks the permitted library, and sends trac
       [MISSING_MUSIC_PLUGIN_ID, { mvbar: { extension: { type: 'missing-music' } } }]);
     assert.equal((await request('/api/plugins/missing-music/songs/search?q=Wanted')).json().enabled, false);
     await db().query('update plugins set enabled=true where id=$1', [MISSING_MUSIC_PLUGIN_ID]);
-    const recordings = ['Wanted Song', 'Cafe del Mar', '世界', 'Tagged Song'].map((title, i) => ({ id: ids[i], title, 'artist-credit': [{ name: 'Artist', artist: { id: artist, name: 'Artist' } }] }));
+    const recordings = ['Wanted Song', 'Cafe del Mar', '世界', 'Tagged Song'].map((title, i) => ({ id: ids[i], title, releases: [{ title: 'Main Album', status: 'Official', 'release-group': { 'primary-type': 'Album' } }], 'artist-credit': [{ name: 'Artist', artist: { id: artist, name: 'Artist' } }] }));
+    recordings.unshift({ ...recordings[0], id: '33333333-3333-4333-8333-333333333333', releases: [{ title: 'Single', status: 'Official', 'release-group': { 'primary-type': 'Single' } }] });
+    recordings.push({ ...recordings[1], id: '44444444-4444-4444-8444-444444444444', disambiguation: 'live, Wembley' });
     await db().query('insert into plugin_kv(plugin_id,key,value) values($1,$2,$3)', [MISSING_MUSIC_PLUGIN_ID, `musicbrainz:song-search:${songSearchQuery('Wanted Song')}`, Buffer.from(JSON.stringify({ recordings }))]);
     const tracks = await db().query(`insert into tracks(library_id,path,mtime_ms,size_bytes,ext,title,artist,musicbrainz_track_id)
       values($1,'/song-test/cafe',1,1,'mp3','Café del Mar!','Artist',null),
@@ -45,6 +47,8 @@ test('song search gates the plugin, checks the permitted library, and sends trac
     const searchUrl = '/api/plugins/missing-music/songs/search?q=Wanted%20Song';
     const search = await request(searchUrl);
     assert.equal(search.statusCode, 200);
+    assert.equal(search.json().songs[0].recordingId, ids[0]);
+    assert.equal(search.json().songs[0].album, 'Main Album');
     assert.deepEqual(search.json().songs.map(song => song.present), [false, true, true, true]);
     const hidden = await request(searchUrl, { headers: { 'x-user': 'song_other' } });
     assert.deepEqual(hidden.json().songs.map(song => song.present), [false, false, false, false]);

@@ -286,10 +286,37 @@ export function songMatchKey(value: string) {
 }
 
 export function songSearchQuery(value: string) {
-  return value.trim().split(/\s+/).map(term => {
+  const terms = value.trim().split(/\s+/).map(term => {
     const literal = `"${term.replace(/[\\"]/g, '\\$&')}"`;
     return `(recording:${literal} OR artist:${literal})`;
   }).join(' AND ');
+  return `(${terms}) AND status:official AND (primarytype:album OR primarytype:ep OR primarytype:single) AND NOT video:true AND NOT comment:(live OR remix OR demo OR karaoke OR instrumental OR acoustic OR alternate OR rehearsal OR edit)`;
+}
+
+type SongRelease = {
+  id?: string; title?: string; status?: string; date?: string;
+  'release-group'?: { id?: string; title?: string; 'primary-type'?: string; 'secondary-types'?: string[] };
+};
+
+function alternateVersion(value: string) {
+  return /\b(live|remix|demo|karaoke|instrumental|acoustic|unplugged|alternate|alternative|rehearsal|outtake|bootleg|edit|sped[ -]?up|slowed|nightcore|surround|quadraphonic|medley|excerpt|snippet|extended|re-recording)\b/i.test(value) || /\b[457]\.1\b/.test(value) || (/\bmix\b/i.test(value) && !/\b(original|album|stereo) mix\b/i.test(value));
+}
+
+export function standardSongRelease(recording: { title?: string; disambiguation?: string; video?: boolean | null; releases?: SongRelease[] }) {
+  if (recording.video || alternateVersion(recording.disambiguation ?? '')) return undefined;
+  // Only inspect version suffixes: titles such as "Live Forever" are ordinary songs.
+  const suffix = recording.title?.match(/(?:[([]|\s[–—-]\s)(.*)$/)?.[1] ?? '';
+  if (alternateVersion(suffix)) return undefined;
+  return (recording.releases ?? []).filter(release => {
+    const group = release['release-group'];
+    return (!release.status || release.status.toLowerCase() === 'official') &&
+      ['Album', 'EP', 'Single'].includes(group?.['primary-type'] ?? '') &&
+      !(group?.['secondary-types'] ?? []).length;
+  }).sort((a, b) => songReleaseRank(a) - songReleaseRank(b) || (a.date || '9999').localeCompare(b.date || '9999'))[0];
+}
+
+function songReleaseRank(release: SongRelease) {
+  return ['Album', 'EP', 'Single'].indexOf(release['release-group']?.['primary-type'] ?? '');
 }
 
 type SongCandidate = {
@@ -628,16 +655,22 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       // Treat user text as literal terms, not MusicBrainz/Lucene operators.
       const query = songSearchQuery(q);
       const result = await musicBrainzFetch<{ recordings?: Array<{
-        id?: string; title?: string; disambiguation?: string;
+        id?: string; title?: string; disambiguation?: string; video?: boolean | null;
         'artist-credit'?: Array<{ name?: string; joinphrase?: string; artist?: { id?: string; name?: string } }>;
-        releases?: Array<{ id?: string; title?: string; 'release-group'?: { id?: string } }>;
-      }> }>(plugin, `song-search:${query}`, 'recording', { query, limit: '20' });
+        releases?: SongRelease[];
+      }> }>(plugin, `song-search:${query}`, 'recording', { query, limit: '100' });
       const songs: SongCandidate[] = [];
-      for (const recording of result.recordings ?? []) {
+      const candidates = (result.recordings ?? []).map(recording => ({ recording, release: standardSongRelease(recording) }))
+        .filter(candidate => candidate.release !== undefined)
+        .sort((a, b) => songReleaseRank(a.release!) - songReleaseRank(b.release!));
+      const seenSongs = new Set<string>();
+      for (const { recording, release } of candidates) {
         const credits = recording['artist-credit'] ?? [];
         const artistId = credits.find(credit => validMbid(credit.artist?.id))?.artist?.id;
         if (!validMbid(recording.id) || !recording.title || !artistId || songs.some(song => song.recordingId === recording.id)) continue;
-        const release = recording.releases?.[0];
+        const songKey = `${songMatchKey(recording.title)}:${credits.map(credit => credit.artist?.id ?? '').join(',')}`;
+        if (seenSongs.has(songKey)) continue;
+        seenSongs.add(songKey);
         songs.push({ recordingId: recording.id, title: recording.title, version: recording.disambiguation ?? null,
           artist: credits.map(credit => `${credit.name ?? credit.artist?.name ?? ''}${credit.joinphrase ?? ''}`).join(''),
           artistNames: credits.flatMap(credit => [credit.name, credit.artist?.name].filter((name): name is string => Boolean(name))),

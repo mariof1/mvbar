@@ -196,6 +196,8 @@ artist and title. Repeated active requests by the same user are prevented, inclu
 simultaneous submissions. An existing enabled Missing Music package works with
 this updated host; reinstalling the package is unnecessary.
 
+Song search prefers main album recordings, falling back to EPs and then singles for the same song and artist. Live, remix, demo, acoustic, karaoke, edited, surround, and other alternate recordings are excluded, as are compilations and other secondary release types. Results are deduplicated by song and artist. Recordings without an identifiable album, EP, or single are omitted from search. This filtering requires an updated MVBar host; the package alone cannot change an older host.
+
 The search uses MusicBrainz's documented
 [recording and artist fields](https://musicbrainz.org/doc/MusicBrainz_API/Search/RecordingSearch).
 

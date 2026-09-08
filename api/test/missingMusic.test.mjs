@@ -8,9 +8,30 @@ import {
   songIsPresent,
   songMatchKey,
   songSearchQuery,
+  standardSongRelease,
   sameProviderOrigin,
   validateMissingMusicConfig,
 } from '../dist/pluginSystem/missingMusic.js';
+
+test('song search prefers main albums, then EPs and singles, excluding alternate recordings', () => {
+  const release = (type, secondary = [], status = 'Official') => ({ title: type, status, 'release-group': { 'primary-type': type, 'secondary-types': secondary } });
+  const album = release('Album');
+  const ep = release('EP');
+  const single = release('Single');
+  const releases = [single, release('Album', ['Compilation']), ep, album];
+  assert.equal(standardSongRelease({ title: 'Live Forever', releases }), album);
+  assert.equal(standardSongRelease({ releases: [single, ep] }), ep);
+  assert.equal(standardSongRelease({ releases: [single] }), single);
+  for (const disambiguation of ['live, 1985 Wembley', 'demo', 'radio edit', 'acoustic version', 'club remix', 'karaoke']) {
+    assert.equal(standardSongRelease({ disambiguation, releases }), undefined);
+  }
+  assert.equal(standardSongRelease({ title: 'Song (Live at Wembley)', releases }), undefined);
+  assert.equal(standardSongRelease({ title: 'Song - Extended Remix', releases }), undefined);
+  assert.equal(standardSongRelease({ video: true, releases }), undefined);
+  assert.equal(standardSongRelease({ releases: [release('Album', ['Live']), release('Album', [], 'Bootleg')] }), undefined);
+  assert.equal(standardSongRelease({ releases: [] }), undefined);
+  assert.match(songSearchQuery('Song'), /status:official/);
+});
 
 test('song matching handles tags, accents, non-Latin names and different performers', () => {
   assert.equal(songMatchKey('Beyoncé!'), 'beyonce');
