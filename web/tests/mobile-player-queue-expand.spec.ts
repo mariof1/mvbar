@@ -49,8 +49,9 @@ for (const input of ['touch', 'mouse']) test(input + ': one vertical gesture exp
  const alpha=()=>backdrop.evaluate(el=>Number(getComputedStyle(el).backgroundColor.split(',').pop()!.replace(')','')));
  if(input==='mouse') { await page.mouse.move(startX,startY);await page.mouse.down();await page.mouse.move(startX,startY+80,{steps:8}); }
  else { await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:startX,y:startY}]});await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:startX,y:startY+80}]}); }
- await expect.poll(alpha).toBeLessThan(0.7);
- await expect.poll(()=>backdrop.evaluate(el=>parseFloat(getComputedStyle(el).backdropFilter.replace('blur(','')))).toBeLessThan(20);
+ await expect.poll(alpha).toBeLessThan(0.9);
+ await expect.poll(alpha).toBeGreaterThan(0.75);
+ await expect.poll(()=>backdrop.evaluate(el=>parseFloat(getComputedStyle(el).backdropFilter.replace('blur(','')))).toBeGreaterThan(30);
  if(input==='mouse') await page.mouse.move(startX,startY+20,{steps:6});
  else await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:startX,y:startY+20}]});
  await expect.poll(alpha).toBeGreaterThan(0.85);

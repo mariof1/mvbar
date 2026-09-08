@@ -1282,9 +1282,9 @@ function PlayerBar(props: {
           data-mobile-player-backdrop
           className={`fixed inset-0 z-[100] lg:hidden animate-fade-in select-none motion-reduce:transition-none ${isPlayerDragging ? '' : 'transition-[background-color,backdrop-filter] duration-200 ease-out'}`}
           style={{
-            backgroundColor: `rgba(0, 0, 0, ${0.95 * (1 - Math.min(playerDragY / 240, 1))})`,
-            backdropFilter: `blur(${24 * (1 - Math.min(playerDragY / 240, 1))}px)`,
-            WebkitBackdropFilter: `blur(${24 * (1 - Math.min(playerDragY / 240, 1))}px)`,
+            backgroundColor: `rgba(0, 0, 0, ${0.95 * (1 - Math.min(playerDragY / 480, 1))})`,
+            backdropFilter: `blur(${40 * (1 - Math.min(playerDragY / 600, 1))}px)`,
+            WebkitBackdropFilter: `blur(${40 * (1 - Math.min(playerDragY / 600, 1))}px)`,
           }}
           onClick={() => minimizeExpandedPlayer()}
         >
