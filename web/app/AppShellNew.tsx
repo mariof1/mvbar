@@ -505,20 +505,12 @@ function PlayerBar(props: {
   const [queueExpanded, setQueueExpanded] = useState(false);
   const mobilePlayerScrollRef = useRef<HTMLDivElement>(null);
   const mobilePlayerSurfaceRef = useRef<HTMLDivElement>(null);
-  const surfaceGestureRef = useRef<{ x: number; y: number; inQueue: boolean; queueAtTop: boolean; handled: boolean } | null>(null);
+  const surfaceGestureRef = useRef<{ x: number; y: number; inQueue: boolean; queueAtTop: boolean; handled: boolean; start: number; position: number; upper: number } | null>(null);
   const suppressSurfaceClickUntil = useRef(0);
   const mobileQueueSectionRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!expanded) { setQueueExpanded(false); return; }
-    const frame = requestAnimationFrame(() => {
-      const container = mobilePlayerScrollRef.current;
-      const queue = mobileQueueSectionRef.current;
-      if (!container) return;
-      const top = queueExpanded && queue ? queue.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - container.clientHeight * 0.25 : 0;
-      container.scrollTo({ top: Math.max(0, top), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [queueExpanded, expanded]);
+  }, [expanded]);
   useBodyScrollLock(expanded);
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
   const [playerDragY, setPlayerDragY] = useState(0);
@@ -551,34 +543,51 @@ function PlayerBar(props: {
     if (!expanded || !surface) return;
     const startPoint = (x: number, y: number, target: EventTarget | null) => {
       if ((target as Element)?.closest('[role="slider"], input[type="range"]')) { surfaceGestureRef.current = null; return; }
-      surfaceGestureRef.current = { x, y,
+      const container = mobilePlayerScrollRef.current;
+      const section = mobileQueueSectionRef.current;
+      const current = container?.scrollTop ?? 0;
+      const upper = container && section ? Math.max(0, section.getBoundingClientRect().top - container.getBoundingClientRect().top + current - container.clientHeight * 0.25) : 0;
+      surfaceGestureRef.current = { x, y, start: current, position: current, upper,
         inQueue: !!mobileQueueListRef.current?.contains(target as Node),
         queueAtTop: (mobileQueueListRef.current?.scrollTop ?? 0) <= 0, handled: false };
     };
     const movePoint = (x: number, y: number, event: Event) => {
       const gesture = surfaceGestureRef.current;
       if (!gesture || queueTouchGestureRef.current?.active) return;
-      if (gesture.handled) { if (event.cancelable) event.preventDefault(); return; }
       const dy = y - gesture.y;
       const dx = x - gesture.x;
-      if (Math.abs(dy) < 16 || Math.abs(dy) <= Math.abs(dx)) return;
+      if (!gesture.handled && (Math.abs(dy) < 8 || Math.abs(dy) <= Math.abs(dx))) return;
       const expanding = !queueExpanded && dy < 0 && (props.queue?.length ?? 0) > 1;
       const collapsing = queueExpanded && dy > 0 && (!gesture.inQueue || (gesture.queueAtTop && (mobileQueueListRef.current?.scrollTop ?? 0) <= 0));
       const minimizing = !queueExpanded && dy > 0 && (!gesture.inQueue || gesture.queueAtTop);
-      if (!expanding && !collapsing && !minimizing) return;
+      if (!gesture.handled && !expanding && !collapsing && !minimizing) return;
       if (event.cancelable) event.preventDefault();
       suppressSurfaceClickUntil.current = Date.now() + 500;
-      if (Math.abs(dy) >= 48) {
-        gesture.handled = true;
-        // The surface swipe owns this gesture; don't also dismiss via the artwork/header drag.
-        playerDragRef.current = null;
-        setIsPlayerDragging(false);
-        setPlayerDragY(0);
-        if (minimizing) { setExpanded(false); setShowExpandedOptions(false); }
-        else setQueueExpanded(expanding);
+      gesture.handled = true;
+      playerDragRef.current = null;
+      setIsPlayerDragging(true);
+      // Keep tracking the same drag, including reversals, until release.
+      gesture.position = Math.max(queueExpanded ? 0 : -window.innerHeight, Math.min(gesture.upper, gesture.start - dy));
+      mobilePlayerScrollRef.current?.scrollTo({ top: Math.max(0, gesture.position), behavior: 'instant' });
+      setPlayerDragY(Math.max(0, -gesture.position));
+    };
+    const finish = (cancel = false) => {
+      const gesture = surfaceGestureRef.current;
+      surfaceGestureRef.current = null;
+      if (!gesture?.handled) return;
+      setIsPlayerDragging(false);
+      suppressSurfaceClickUntil.current = Date.now() + 400;
+      const minimize = !cancel && gesture.position < -window.innerHeight / 2;
+      const up = cancel ? queueExpanded : gesture.upper > 0 && gesture.position > gesture.upper / 2;
+      setQueueExpanded(up);
+      mobilePlayerScrollRef.current?.scrollTo({ top: up ? gesture.upper : 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+      setPlayerDragY(minimize ? window.innerHeight : 0);
+      if (minimize) {
+        playerDismissTimerRef.current = setTimeout(() => { setExpanded(false); setShowExpandedOptions(false); setPlayerDragY(0); }, 180);
       }
     };
-    const end = () => { surfaceGestureRef.current = null; };
+    const end = () => finish();
+    const cancel = () => finish(true);
     const start = (event: TouchEvent) => { if (event.touches.length === 1) startPoint(event.touches[0].clientX, event.touches[0].clientY, event.target); else end(); };
     const move = (event: TouchEvent) => { if (event.touches.length === 1) movePoint(event.touches[0].clientX, event.touches[0].clientY, event); };
     const mouseStart = (event: MouseEvent) => { if (event.button === 0) startPoint(event.clientX, event.clientY, event.target); };
@@ -586,20 +595,20 @@ function PlayerBar(props: {
     surface.addEventListener('mousedown', mouseStart);
     window.addEventListener('mousemove', mouseMove);
     window.addEventListener('mouseup', end);
-    window.addEventListener('blur', end);
+    window.addEventListener('blur', cancel);
     surface.addEventListener('touchstart', start, { passive: true });
     surface.addEventListener('touchmove', move, { passive: false });
     surface.addEventListener('touchend', end);
-    surface.addEventListener('touchcancel', end);
+    surface.addEventListener('touchcancel', cancel);
     return () => {
       surface.removeEventListener('mousedown', mouseStart);
       window.removeEventListener('mousemove', mouseMove);
       window.removeEventListener('mouseup', end);
-      window.removeEventListener('blur', end);
+      window.removeEventListener('blur', cancel);
       surface.removeEventListener('touchstart', start);
       surface.removeEventListener('touchmove', move);
       surface.removeEventListener('touchend', end);
-      surface.removeEventListener('touchcancel', end);
+      surface.removeEventListener('touchcancel', cancel);
     };
   }, [expanded, queueExpanded, props.queue?.length]);
   const playedSentRef = useRef(false);
@@ -1479,13 +1488,13 @@ function PlayerBar(props: {
 
             {/* Queue Section */}
             {props.queue && props.queue.length > 1 && (
-              <div ref={mobileQueueSectionRef} data-mobile-queue-expanded={queueExpanded} className={`flex flex-col px-4 pb-[max(16px,env(safe-area-inset-bottom))] ${queueExpanded ? "h-[75dvh]" : "pb-8"}`}>
+              <div ref={mobileQueueSectionRef} data-mobile-queue-expanded={queueExpanded} className={`flex flex-col px-4 pb-[max(16px,env(safe-area-inset-bottom))] h-[75dvh]`}>
                 <div className="mb-3 flex shrink-0 items-center justify-between gap-3 px-4 touch-none">
                   <h3 className="text-sm font-semibold uppercase tracking-wide text-white/70">
                     Queue <span className="text-white/40">{props.queue.length}</span>
                   </h3>
                 </div>
-                <div ref={mobileQueueListRef} aria-label="Track queue" className={`space-y-1 overflow-y-auto overscroll-contain ${queueExpanded ? "min-h-0 flex-1" : "max-h-[300px]"}`}>
+                <div ref={mobileQueueListRef} aria-label="Track queue" className={`space-y-1 overflow-y-auto overscroll-contain min-h-0 flex-1`}>
                   {props.queue.map((track, idx) => (
                     <button
                       key={`${track.id}-${idx}`}

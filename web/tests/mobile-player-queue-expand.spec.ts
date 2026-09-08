@@ -20,7 +20,18 @@ for (const input of ['touch', 'mouse']) test(input + ': one vertical gesture exp
  await expect(page.getByRole('button',{name:'Expand queue',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Minimize player',exact:true})).toHaveCount(0);
  const title=full.locator('h2');const b=await title.boundingBox();
- await swipe(b!.x+b!.width/2,b!.y+b!.height/2,-110);
+ const x=b!.x+b!.width/2, y=b!.y+b!.height/2;
+ // Hold, reverse direction, then release close to the original player position.
+ if(input==='mouse') { await page.mouse.move(x,y); await page.mouse.down(); await page.mouse.move(x,y-200,{steps:10}); }
+ else { await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]}); await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:y-200}]}); }
+ await expect.poll(()=>full.evaluate(el=>Math.round(el.scrollTop))).toBe(200);
+ await expect(page.locator('[data-mobile-queue-expanded="false"]')).toBeVisible();
+ if(input==='mouse') await page.mouse.move(x,y-40,{steps:8});
+ else await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:y-40}]});
+ await expect.poll(()=>full.evaluate(el=>Math.round(el.scrollTop))).toBe(40);
+ if(input==='mouse') await page.mouse.up(); else await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ await expect.poll(()=>full.evaluate(el=>el.scrollTop)).toBe(0);
+ await swipe(x,y,-300);
  const section=page.locator('[data-mobile-queue-expanded="true"]');await expect(section).toBeVisible();
  await expect.poll(async()=>Math.round((await section.boundingBox())!.y)).toBe(211);
  const list=page.getByLabel('Track queue');await list.evaluate(el=>{el.scrollTop=el.scrollHeight});
@@ -28,12 +39,12 @@ for (const input of ['touch', 'mouse']) test(input + ': one vertical gesture exp
  await page.waitForTimeout(550); // A swipe must not accidentally activate a queue row on release.
  await list.getByText('Queue test 30',{exact:true}).click();
  await expect(title).toHaveText('Queue test 30');
- await swipe(180,230,90);
+ await swipe(180,230,500);
  await expect(page.locator('[data-mobile-queue-expanded="false"]')).toBeVisible();
  await expect.poll(()=>full.evaluate(el=>el.scrollTop)).toBe(0);
  await expect(title).toHaveText('Queue test 30');
  const restored=await title.boundingBox();
- await swipe(restored!.x+20,restored!.y+10,100);
+ await swipe(restored!.x+20,restored!.y+10,450);
  await expect(full).toHaveCount(0);
  await expect(page.locator('.fixed.bottom-0').getByText('Queue test 30',{exact:true})).toBeVisible();
 });
