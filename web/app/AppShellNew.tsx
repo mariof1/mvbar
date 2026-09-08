@@ -2960,6 +2960,7 @@ export function AppShellNew() {
 
             {tab === 'favorites' && (
               <Favorites
+                onPlayAll={(tracks) => setQueueAndPlay(tracks, 0)}
                 onPlay={(t) => playTrackNow({ id: t.id, title: t.title, artist: t.artist })}
                 onAddToQueue={(t) => addToQueue({ id: t.id, title: t.title, artist: t.artist })}
               />

@@ -3,17 +3,18 @@
 import { useEffect, useRef, useState } from 'react';
 
 /** A dedicated handle leaves the rest of the row available for normal touch scrolling. */
-export function FavoriteDragHandle({ label, disabled, onHover, onDrop, onCancel, onStep }: {
+export function FavoriteDragHandle({ label, disabled, onHover, onDrop, onCancel, onStep, onActiveChange }: {
   label: string; disabled: boolean;
   onHover: (id: number, after: boolean) => void;
   onDrop: () => void; onCancel: () => void;
   onStep: (direction: -1 | 1) => void;
+  onActiveChange: (active: boolean) => void;
 }) {
   const [active, setActive] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const drag = useRef<{ timer: ReturnType<typeof setTimeout>; active: boolean; x: number; y: number; startX: number; startY: number; frame: number; cleanup: () => void } | null>(null);
-  const callbacks = useRef({ onHover, onDrop, onCancel });
-  callbacks.current = { onHover, onDrop, onCancel };
+  const callbacks = useRef({ onHover, onDrop, onCancel, onActiveChange });
+  callbacks.current = { onHover, onDrop, onCancel, onActiveChange };
   function finish(cancel: boolean) {
     const state = drag.current;
     if (!state) return;
@@ -22,6 +23,7 @@ export function FavoriteDragHandle({ label, disabled, onHover, onDrop, onCancel,
     drag.current = null;
     state.cleanup();
     setActive(false);
+    callbacks.current.onActiveChange(false);
     if (state.active) callbacks.current[cancel ? 'onCancel' : 'onDrop']();
   }
   useEffect(() => () => {
@@ -77,6 +79,7 @@ export function FavoriteDragHandle({ label, disabled, onHover, onDrop, onCancel,
       clearTimeout(state.timer);
       state.timer = setTimeout(() => {
         state.active = true; setActive(true);
+        callbacks.current.onActiveChange(true);
         const tick = () => {
           if (drag.current !== state) return;
           const element = document.elementFromPoint(state.x, state.y);

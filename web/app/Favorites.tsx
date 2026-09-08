@@ -13,6 +13,7 @@ import { trackArtistLabel } from './artistDisplay';
 export function Favorites(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
   onAddToQueue?: (t: { id: number; title: string | null; artist: string | null }) => void;
+  onPlayAll?: (tracks: Array<{ id: number; title: string | null; artist: string | null }>) => void;
 }) {
   const token = useAuth((s) => s.token);
   const clear = useAuth((s) => s.clear);
@@ -33,6 +34,35 @@ export function Favorites(props: {
   const lastRefreshRef = useRef<number>(0);
   const previousChange = useRef(lastChange);
   const [savingOrder, setSavingOrder] = useState(false);
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [preparingPlayback, setPreparingPlayback] = useState(false);
+  const playbackRequest = useRef(0);
+  const playbackBusy = useRef(false);
+  useEffect(() => () => { playbackRequest.current++; }, []);
+
+  async function playAll() {
+    if (!token || !props.onPlayAll || playbackBusy.current) return;
+    playbackBusy.current = true;
+    setPreparingPlayback(true);
+    const request = ++playbackRequest.current;
+    try {
+      const all: any[] = [];
+      for (let offset = 0; ; offset += 200) {
+        const result = await listFavorites(token, 200, offset);
+        if (request !== playbackRequest.current) return;
+        all.push(...result.tracks);
+        if (result.tracks.length < 200) break;
+      }
+      const unique = Array.from(new Map(all.map(track => [track.id, track])).values());
+      if (unique.length) props.onPlayAll(unique.map(track => ({ ...track, artist: trackArtistLabel(track) })));
+    } catch (e: any) {
+      if (request !== playbackRequest.current) return;
+      if (e?.status === 401) clear();
+      showToast('Could not load favorites for playback. Please try again.', 'error');
+    } finally {
+      if (request === playbackRequest.current) { playbackBusy.current = false; setPreparingPlayback(false); }
+    }
+  }
   const reorderBusy = useRef(false);
   const orderDraft = useRef<any[] | null>(null);
   const orderOriginal = useRef<any[] | null>(null);
@@ -164,15 +194,24 @@ export function Favorites(props: {
         </div>
       )}
 
+      <button type="button" onClick={() => void playAll()}
+        disabled={!props.onPlayAll || !tracks.length || loading || savingOrder || preparingPlayback || draggingId !== null}
+        className="inline-flex min-h-11 items-center gap-2 rounded-full bg-cyan-500 px-5 py-2 font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50">
+        <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+        {preparingPlayback ? 'Loading favorites…' : 'Play all'}
+      </button>
+
       {/* Track List */}
       <div className="space-y-1" data-favorites-list>
         {tracks.map((t, idx) => (
           <div
             key={t.id}
             data-favorite-id={t.id}
-            className="group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 rounded-xl hover:bg-slate-800/50 transition-colors"
+            data-dragging={draggingId === t.id ? 'true' : undefined}
+            className={`group flex items-center gap-2 sm:gap-4 p-2 sm:p-3 rounded-xl transition-colors ${draggingId === t.id ? 'relative z-10 bg-cyan-500/25 ring-2 ring-inset ring-cyan-400 shadow-lg shadow-cyan-500/20' : 'hover:bg-slate-800/50'}`}
           >
-            <FavoriteDragHandle label={t.title ?? t.path} disabled={savingOrder || loading || removing.size > 0}
+            <FavoriteDragHandle label={t.title ?? t.path} disabled={savingOrder || loading || preparingPlayback || removing.size > 0}
+              onActiveChange={active => setDraggingId(active ? t.id : null)}
               onHover={(target, after) => hoverTrack(t.id, target, after)}
               onDrop={() => void saveOrder(t.id)} onCancel={cancelOrder}
               onStep={direction => {
