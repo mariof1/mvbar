@@ -44,6 +44,18 @@ for (const input of ['touch', 'mouse']) test(input + ': one vertical gesture exp
  await expect.poll(()=>full.evaluate(el=>el.scrollTop)).toBe(0);
  await expect(title).toHaveText('Queue test 30');
  const restored=await title.boundingBox();
+ const backdrop=page.locator('[data-mobile-player-backdrop]');
+ const startX=restored!.x+20,startY=restored!.y+10;
+ const alpha=()=>backdrop.evaluate(el=>Number(getComputedStyle(el).backgroundColor.split(',').pop()!.replace(')','')));
+ if(input==='mouse') { await page.mouse.move(startX,startY);await page.mouse.down();await page.mouse.move(startX,startY+80,{steps:8}); }
+ else { await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:startX,y:startY}]});await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:startX,y:startY+80}]}); }
+ await expect.poll(alpha).toBeLessThan(0.7);
+ await expect.poll(()=>backdrop.evaluate(el=>parseFloat(getComputedStyle(el).backdropFilter.replace('blur(','')))).toBeLessThan(20);
+ if(input==='mouse') await page.mouse.move(startX,startY+20,{steps:6});
+ else await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:startX,y:startY+20}]});
+ await expect.poll(alpha).toBeGreaterThan(0.85);
+ if(input==='mouse') await page.mouse.up();else await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ await expect.poll(alpha).toBe(0.95);
  await swipe(restored!.x+20,restored!.y+10,25);
  await expect(full).toBeVisible();
  await expect.poll(()=>full.evaluate(el=>new DOMMatrix(getComputedStyle(el).transform).m42)).toBe(0);
