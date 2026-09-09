@@ -3,7 +3,7 @@ import fp from 'fastify-plugin';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
 import fs from 'fs';
-import { mkdir, stat, readdir, unlink, writeFile } from 'fs/promises';
+import { mkdir, stat, unlink, writeFile } from 'fs/promises';
 import path from 'path';
 import https from 'https';
 import { db } from './db.js';
@@ -18,6 +18,15 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 const GOOGLE_CALLBACK_URL = process.env.GOOGLE_CALLBACK_URL || '';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 const AVATARS_DIR = process.env.AVATARS_DIR || '/data/cache/avatars';
+
+function avatarContentType(filename: string): string {
+  switch (path.extname(filename).toLowerCase()) {
+    case '.png': return 'image/png';
+    case '.gif': return 'image/gif';
+    case '.webp': return 'image/webp';
+    default: return 'image/jpeg';
+  }
+}
 
 // Check if Google OAuth is configured
 export function isGoogleOAuthEnabled(): boolean {
@@ -306,7 +315,7 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
       }
 
       const stream = fs.createReadStream(filepath);
-      reply.header('Content-Type', 'image/jpeg');
+      reply.header('Content-Type', avatarContentType(filename));
       reply.header('Cache-Control', 'public, max-age=86400');
       return reply.send(stream);
     }
@@ -452,29 +461,37 @@ const googleAuthPlugin: FastifyPluginCallback = (fastify: FastifyInstance, _opts
         await mkdir(AVATARS_DIR, { recursive: true });
       }
 
-      // Save file
+      // Give every upload a new URL. Avatar responses are cached by browsers, so
+      // overwriting the same filename can leave the previous image visible.
       const ext = data.mimetype.split('/')[1] === 'jpeg' ? 'jpg' : data.mimetype.split('/')[1];
-      const filename = `${user.userId}.${ext}`;
+      const filename = `${user.userId}.${crypto.randomUUID()}.${ext}`;
       const filepath = path.join(AVATARS_DIR, filename);
 
-      // Delete old avatar if exists with different extension
-      try {
-        const existingFiles = (await readdir(AVATARS_DIR)).filter(f => f.startsWith(user.userId + '.'));
-        for (const f of existingFiles) {
-          await unlink(path.join(AVATARS_DIR, f));
-        }
-      } catch { /* ignore if dir doesn't exist */ }
+      const pool = db();
+      const current = await pool.query<{ avatar_path: string | null }>(
+        'SELECT avatar_path FROM users WHERE id = $1',
+        [user.userId]
+      );
+      const oldFilename = current.rows[0]?.avatar_path;
 
       // Write new file
       const buffer = await data.toBuffer();
       await writeFile(filepath, buffer);
 
       // Update database
-      const pool = db();
-      await pool.query(
-        'UPDATE users SET avatar_path = $1 WHERE id = $2',
-        [filename, user.userId]
-      );
+      try {
+        await pool.query(
+          'UPDATE users SET avatar_path = $1 WHERE id = $2',
+          [filename, user.userId]
+        );
+      } catch (error) {
+        await unlink(filepath).catch(() => {});
+        throw error;
+      }
+
+      if (oldFilename && path.basename(oldFilename) === oldFilename && oldFilename !== filename) {
+        await unlink(path.join(AVATARS_DIR, oldFilename)).catch(() => {});
+      }
 
       return { success: true, avatar_path: filename };
     } catch (err) {

@@ -43,6 +43,7 @@ export function Settings() {
   const token = useAuth((s) => s.token);
   const user = useAuth((s) => s.user);
   const setAuth = useAuth((s) => s.setAuth);
+  const updateAvatar = useAuth((s) => s.updateAvatar);
   const clear = useAuth((s) => s.clear);
   const resetPlayer = usePlayer((s) => s.reset);
   const preferences = usePreferences((s) => s.preferences);
@@ -106,6 +107,7 @@ export function Settings() {
     try {
       const r = await apiFetch('/users/profile', { method: 'GET' }, token);
       setProfile(r);
+      updateAvatar(r.avatar_path);
     } catch {}
   };
 
@@ -169,7 +171,8 @@ export function Settings() {
 
   // Avatar upload
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.currentTarget;
+    const file = input.files?.[0];
     if (!file || !token) return;
 
     const formData = new FormData();
@@ -187,11 +190,14 @@ export function Settings() {
         const data = await res.json();
         throw new Error(data.error || 'Upload failed');
       }
+      const result = await res.json() as { avatar_path: string };
+      setProfile((current) => current ? { ...current, avatar_path: result.avatar_path } : current);
+      updateAvatar(result.avatar_path);
       setNotice('Avatar updated');
-      loadProfile();
     } catch (err: any) {
       setError(err.message || 'Failed to upload avatar');
     } finally {
+      input.value = '';
       setLoading(false);
     }
   };
@@ -202,8 +208,10 @@ export function Settings() {
     setLoading(true);
     try {
       await apiFetch('/users/avatar', { method: 'DELETE' }, token);
+      setProfile((current) => current ? { ...current, avatar_path: null } : current);
+      updateAvatar(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       setNotice('Avatar removed');
-      loadProfile();
     } catch (err: any) {
       setError(err.message || 'Failed to remove avatar');
     } finally {
