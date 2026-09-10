@@ -685,26 +685,90 @@ export function BrowseNew(props: {
 
   // Keep existing cards stationary while pages are appended or refreshed.
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollViewportSizeRef = useRef('');
+  const [scrollViewportRevision, setScrollViewportRevision] = useState(0);
+  const autoFillSignatureRef = useRef('');
   const wsRefreshingRef = useRef(false);
   useEffect(() => {
     wsRefreshingRef.current = wsRefreshing;
   }, [wsRefreshing]);
+
+  const loadNextListPage = useCallback(() => {
+    if (tab === 'artists' && artists.length < artistsTotal) {
+      void loadArtists();
+      return true;
+    } else if (tab === 'albums' && albums.length < albumsTotal) {
+      void loadAlbums();
+      return true;
+    } else if (tab === 'genres' && genres.length < genresTotal) {
+      void loadGenres();
+      return true;
+    }
+    return false;
+  }, [tab, artists.length, artistsTotal, albums.length, albumsTotal, genres.length, genresTotal, loadArtists, loadAlbums, loadGenres]);
 
   const handleScroll = useCallback(() => {
     if (loading || wsRefreshingRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
-    if (!nearBottom) return;
+    if (nearBottom) loadNextListPage();
+  }, [loading, loadNextListPage]);
 
-    if (tab === 'artists' && artists.length < artistsTotal) {
-      loadArtists();
-    } else if (tab === 'albums' && albums.length < albumsTotal) {
-      loadAlbums();
-    } else if (tab === 'genres' && genres.length < genresTotal) {
-      loadGenres();
+  // A wide viewport can fit the entire first page without creating a scrollbar.
+  // Keep measuring it so resizing to a larger window also fills the new space.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+
+    let frame = 0;
+    const recordSize = () => {
+      const size = `${el.clientWidth}:${el.clientHeight}`;
+      if (scrollViewportSizeRef.current === size) return;
+      scrollViewportSizeRef.current = size;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setScrollViewportRevision(revision => revision + 1));
+    };
+
+    recordSize();
+    const observer = new ResizeObserver(recordSize);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [tab, selectedArtistKey, selectedAlbumKey, selectedGenre, selectedCountry, selectedLanguage]);
+
+  useEffect(() => {
+    if (loading || wsRefreshing || listError) return;
+    const el = scrollRef.current;
+    if (!el) return;
+
+    let count = 0;
+    let total = 0;
+    if (tab === 'artists') {
+      count = artists.length;
+      total = artistsTotal;
+    } else if (tab === 'albums') {
+      count = albums.length;
+      total = albumsTotal;
+    } else if (tab === 'genres') {
+      count = genres.length;
+      total = genresTotal;
+    } else {
+      return;
     }
-  }, [loading, tab, artists.length, artistsTotal, albums.length, albumsTotal, genres.length, genresTotal, loadArtists, loadAlbums, loadGenres]);
+    if (count >= total) return;
+
+    const frame = requestAnimationFrame(() => {
+      if (el.scrollHeight - el.clientHeight >= 200) return;
+      const signature = `${tab}:${debouncedFilter}:${count}:${total}:${el.clientWidth}:${el.clientHeight}`;
+      if (autoFillSignatureRef.current === signature) return;
+      autoFillSignatureRef.current = signature;
+      loadNextListPage();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [loading, wsRefreshing, listError, tab, debouncedFilter, artists.length, artistsTotal, albums.length, albumsTotal, genres.length, genresTotal, scrollViewportRevision, loadNextListPage]);
 
   // Switch tab using router
   const switchTab = useCallback((newTab: Tab) => {
