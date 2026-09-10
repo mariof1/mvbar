@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   adminLibraryWritable,
   adminUpdateTrackMetadata,
@@ -187,7 +187,14 @@ export function BrowseNew(props: {
   const back = useRouter((s) => s.back);
 
   // Derive state from route - memoized to avoid unnecessary effect reruns
-  const tab = (route.type === 'browse' && route.sub ? route.sub : 'artists') as Tab;
+  const tab = (
+    route.type === 'browse' && route.sub ? route.sub
+      : route.type === 'browse-album' ? 'albums'
+        : route.type === 'browse-genre' ? 'genres'
+          : route.type === 'browse-country' ? 'countries'
+            : route.type === 'browse-language' ? 'languages'
+              : 'artists'
+  ) as Tab;
   
   // Create a stable key for album selection to use in effects
   const selectedAlbumKey = route.type === 'browse-album' 
@@ -761,6 +768,7 @@ export function BrowseNew(props: {
     if (count >= total) return;
 
     const frame = requestAnimationFrame(() => {
+      if (el.clientWidth === 0 || el.clientHeight === 0) return;
       if (el.scrollHeight - el.clientHeight >= 200) return;
       const signature = `${tab}:${debouncedFilter}:${count}:${total}:${el.clientWidth}:${el.clientHeight}`;
       if (autoFillSignatureRef.current === signature) return;
@@ -784,11 +792,15 @@ export function BrowseNew(props: {
   // Wrapper for selecting artist
   const selectArtist = useCallback((artist: { id: number; name: string }) => {
     setAlbumDetail(null);
+    setArtistAlbums([]);
+    setArtistAppearsOn([]);
+    setArtistArt(null);
     navigate({ type: 'browse-artist', artistId: artist.id, artistName: artist.name });
   }, [navigate]);
 
   // Wrapper for selecting album
   const selectAlbum = useCallback((album: { artist: string; album: string; artistId?: number }) => {
+    setAlbumDetail(null);
     navigate({ type: 'browse-album', artist: album.artist, album: album.album, artistId: album.artistId });
   }, [navigate]);
 
@@ -812,6 +824,23 @@ export function BrowseNew(props: {
   if (!token) return null;
 
   // ============ Detail Views ============
+
+  if (selectedAlbum && !albumDetail) {
+    return renderDetailView(
+      <div className="space-y-6">
+        <button onClick={goBack} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors min-[2200px]:hidden">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+          Back
+        </button>
+        <div className="flex min-h-48 items-center justify-center gap-3 text-slate-400" role="status">
+          <div className="h-7 w-7 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+          Loading album…
+        </div>
+      </div>
+    );
+  }
 
   // Album Detail View
   if (albumDetail) {
@@ -862,9 +891,9 @@ export function BrowseNew(props: {
       setEditOpen(true);
     };
 
-    return (
+    return renderDetailView(
       <div className="space-y-6">
-        <button onClick={goBack} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors">
+        <button onClick={goBack} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors min-[2200px]:hidden">
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
@@ -874,8 +903,8 @@ export function BrowseNew(props: {
         <div className="flex items-end gap-4 sm:gap-6">
           <ArtworkImage src={albumDetail.art_path ? `/api/art/${albumDetail.art_path}` : null} alt={albumDetail.name} kind="album" className="w-24 h-24 sm:w-48 sm:h-48 rounded-xl shadow-2xl flex-shrink-0" />
           <div className="min-w-0">
-            <h1 className="text-lg sm:text-3xl font-bold text-white truncate leading-tight">{albumDetail.name}</h1>
-            <p className="text-sm sm:text-xl text-slate-400 mt-1 truncate">{albumDetail.artist}</p>
+            <h1 className="truncate text-lg font-bold leading-tight text-white sm:text-3xl min-[2200px]:overflow-visible min-[2200px]:whitespace-normal min-[2200px]:text-clip min-[2200px]:[overflow-wrap:anywhere]">{albumDetail.name}</h1>
+            <p className="mt-1 truncate text-sm text-slate-400 sm:text-xl min-[2200px]:overflow-visible min-[2200px]:whitespace-normal min-[2200px]:text-clip min-[2200px]:[overflow-wrap:anywhere]">{albumDetail.artist}</p>
             <p className="text-sm text-slate-500 mt-2">
               {formatCount(albumDetail.tracks.length, 'track')}
               {albumDetail.totalDiscs > 1 && ` · ${albumDetail.totalDiscs} discs`}
@@ -1295,9 +1324,9 @@ export function BrowseNew(props: {
 
   // Artist Detail View
   if (selectedArtist) {
-    return (
+    return renderDetailView(
       <div className="space-y-6">
-        <button onClick={goBack} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors">
+        <button onClick={goBack} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors min-[2200px]:hidden">
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
@@ -1668,8 +1697,42 @@ export function BrowseNew(props: {
   }
 
   // ============ Main Browse View ============
-  return (
-    <div className="space-y-6">
+  return renderMainBrowseView();
+
+  function renderDetailView(detail: ReactNode) {
+    return (
+      <div className="min-[2200px]:grid min-[2200px]:grid-cols-[minmax(0,1fr)_minmax(34rem,42rem)] min-[2200px]:items-start min-[2200px]:gap-6">
+        <section className="hidden min-w-0 min-[2200px]:block" aria-label={`${tab} browse results`}>
+          {renderMainBrowseView()}
+        </section>
+        <aside
+          data-testid="browse-detail-panel"
+          aria-label="Browse details"
+          className="min-w-0 min-[2200px]:sticky min-[2200px]:top-6 min-[2200px]:max-h-[calc(100dvh-10rem)] min-[2200px]:overflow-y-auto min-[2200px]:rounded-2xl min-[2200px]:border min-[2200px]:border-slate-700/70 min-[2200px]:bg-slate-900/80 min-[2200px]:p-6 min-[2200px]:shadow-2xl min-[2200px]:backdrop-blur-xl"
+        >
+          <div className="mb-5 hidden items-center justify-between border-b border-slate-700/70 pb-4 min-[2200px]:flex">
+            <span className="text-sm font-medium uppercase tracking-[0.16em] text-slate-500">Details</span>
+            <button
+              type="button"
+              onClick={() => navigate({ type: 'browse', sub: tab })}
+              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+              aria-label="Close details"
+            >
+              Close
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          {detail}
+        </aside>
+      </div>
+    );
+  }
+
+  function renderMainBrowseView() {
+    return (
+      <div className="space-y-6">
       {/* Tabs + Filter */}
       <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-4">
         {/* Scrollable tabs container for mobile */}
@@ -1757,7 +1820,11 @@ export function BrowseNew(props: {
                 <button
                   data-flip-id={`artist:${a.id}`}
                   onClick={() => selectArtist({ id: a.id, name: a.name })}
-                  className="w-full text-center p-4 rounded-xl hover:bg-slate-800/50 transition-colors"
+                  className={`w-full rounded-xl p-4 text-center transition-colors ${
+                    selectedArtist?.id === a.id
+                      ? 'bg-cyan-500/10 ring-2 ring-cyan-400/80'
+                      : 'hover:bg-slate-800/50'
+                  }`}
                 >
                   <div className="w-24 h-24 mx-auto rounded-full overflow-hidden bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center text-2xl font-bold text-white group-hover:from-cyan-500 group-hover:to-blue-600 transition-all shadow-lg">
                     <ArtworkImage src={a.art_path ? `/api/art/${a.art_path}` : null} alt={a.name} kind="artist" className="w-full h-full" />
@@ -1795,7 +1862,11 @@ export function BrowseNew(props: {
                 <button
                   data-flip-id={`album:${a.display_artist}||${a.album}`}
                   onClick={() => selectAlbum({ artist: a.display_artist, album: a.album })}
-                  className="w-full text-left"
+                  className={`w-full rounded-xl text-left transition-shadow ${
+                    selectedAlbum?.album === a.album && selectedAlbum.artist === a.display_artist
+                      ? 'ring-2 ring-cyan-400/80 ring-offset-4 ring-offset-slate-950'
+                      : ''
+                  }`}
                 >
                   <div className="aspect-square rounded-lg overflow-hidden bg-slate-800 mb-2 shadow-lg group-hover:shadow-xl transition-shadow">
                     <ArtworkImage src={a.art_path ? `/api/art/${a.art_path}` : null} alt={a.album} kind="album" className="w-full h-full group-hover:scale-105 transition-transform" />
@@ -1908,6 +1979,7 @@ export function BrowseNew(props: {
           </div>
         )}
       </div>
-    </div>
-  );
+      </div>
+    );
+  }
 }
