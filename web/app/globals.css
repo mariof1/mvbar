@@ -112,6 +112,27 @@ audio {
   }
 }
 
+/* Wide displays keep media tiles near their familiar desktop size and add
+   columns as space becomes available. This avoids both empty side gutters
+   and oversized cards on full-HD, 4K, and ultrawide screens. */
+@media (min-width: 1536px) {
+  .media-card-grid {
+    grid-template-columns: repeat(auto-fill, minmax(10.75rem, 1fr));
+  }
+
+  .browse-category-grid {
+    grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  }
+
+  .wide-panel-grid {
+    grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  }
+
+  .recommendation-card-grid {
+    grid-template-columns: repeat(auto-fill, minmax(12rem, 15rem));
+  }
+}
+
 /* Seek controls use a large invisible hit area around the visible track so
    they remain comfortable to drag on phones without making the bar bulky. */
 .seek-slider {

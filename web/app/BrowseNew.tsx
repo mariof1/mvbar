@@ -1264,7 +1264,7 @@ export function BrowseNew(props: {
         {artistAlbums.length > 0 && (
           <div>
             <h2 className="text-xl font-semibold text-white mb-4">Albums</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            <div className="media-card-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
               {artistAlbums.map((a) => (
                 <div key={a.album} className="relative group">
                   <button
@@ -1298,7 +1298,7 @@ export function BrowseNew(props: {
         {artistAppearsOn.length > 0 && (
           <div>
             <h2 className="text-xl font-semibold text-white mb-4">Appears On</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            <div className="media-card-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
               {artistAppearsOn.map((a) => (
                 <div key={`${a.album_artist}-${a.album}`} className="relative group">
                   <button
@@ -1687,7 +1687,7 @@ export function BrowseNew(props: {
       <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto no-scrollbar" style={{ maxHeight: 'calc(100vh - 280px)' }}>
         {/* Artists Grid */}
         {tab === 'artists' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+          <div className="media-card-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
             {artists.map((a) => (
               <div key={a.id} className="relative group">
                 <button
@@ -1725,7 +1725,7 @@ export function BrowseNew(props: {
 
         {/* Albums Grid */}
         {tab === 'albums' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+          <div className="media-card-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
             {albums.map((a) => (
               <div key={`${a.display_artist}||${a.album}`} className="relative group">
                 <button
@@ -1763,7 +1763,7 @@ export function BrowseNew(props: {
 
         {/* Genres Grid */}
         {tab === 'genres' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div className="browse-category-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {genres.map((g) => (
               <button
                 key={g.genre}
@@ -1788,7 +1788,7 @@ export function BrowseNew(props: {
 
         {/* Countries Grid */}
         {tab === 'countries' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div className="browse-category-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {countries.map((c) => (
               <button
                 key={c.country}
@@ -1816,7 +1816,7 @@ export function BrowseNew(props: {
 
         {/* Languages Grid */}
         {tab === 'languages' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div className="browse-category-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {languages.map((l) => (
               <button
                 key={l.language}

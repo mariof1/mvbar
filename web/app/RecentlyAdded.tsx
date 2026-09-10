@@ -261,7 +261,7 @@ export function RecentlyAdded({
         <button type="button" onClick={() => { setLoading(true); void loadAlbums(); }} className="mt-2 rounded px-3 py-2 text-cyan-400 hover:bg-white/10">Retry</button>
       </div>
     )}
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+    <div className="media-card-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
       {albums.map((album) => (
         <div
           key={`${album.album}-${album.display_artist}`}

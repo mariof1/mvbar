@@ -1157,7 +1157,7 @@ export function Audiobooks() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+      <div className="media-card-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
         {filtered.map((book) => {
           const coverUrl = book.cover_path ? `/api/audiobook-art/${book.id}` : null;
           const progress = book.progress;

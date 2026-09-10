@@ -1644,7 +1644,7 @@ function PlayerBar(props: {
           />
         </div>
 
-        <div className="max-w-screen-2xl mx-auto px-3 sm:px-4 py-2 sm:py-3">
+        <div className="mx-auto w-full max-w-[192rem] px-3 py-2 sm:px-4 sm:py-3 2xl:px-8">
           <div className="flex items-center gap-3 sm:gap-4">
             {/* Track Info - tappable on mobile to expand */}
             <div 
@@ -2972,7 +2972,7 @@ export function AppShellNew() {
 
       {/* Main Content */}
       <main className={`lg:ml-64 pt-16 lg:pt-0 pb-24 lg:pb-28 ${nowPlaying || selectedConnectDevice?.state.track ? 'pb-28' : ''}`}>
-        <div className="max-w-6xl mx-auto px-4 py-6">
+        <div className="mx-auto w-full max-w-[192rem] px-4 py-6 sm:px-6 lg:px-8 2xl:px-10">
           {/* Header - Desktop only with navigation controls */}
           <header className="hidden lg:flex items-center justify-between mb-8">
             <div className="flex items-center gap-4">

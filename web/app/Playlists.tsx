@@ -717,7 +717,7 @@ export function Playlists(props: {
 
           {/* Playlists Grid */}
           {pls.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="wide-panel-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {pls.map((p) => (
                 <div key={p.id} className="flex items-center gap-2 p-3 rounded-xl bg-slate-800/30 border border-slate-700/30 hover:bg-slate-800/50 hover:border-slate-600/50 transition-all">
                   {renamingId === p.id ? (

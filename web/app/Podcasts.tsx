@@ -2231,7 +2231,7 @@ export function Podcasts() {
                 onAction={() => setShowSubscribe(true)}
               />
             ) : (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-7">
+              <div className="media-card-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-7">
                 {podcasts.map((p) => (
                   <PodcastGridItem key={p.id} podcast={p} onClick={() => selectPodcast(p)} />
                 ))}

@@ -371,7 +371,7 @@ export function Recommendations() {
             </div>
             {(backgroundRefreshing || serverRefreshing) && <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" title="Refreshing recommendations" />}
           </div>
-          <div ref={bucketsRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div ref={bucketsRef} className="recommendation-card-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {buckets.map((bucket) => (
               <BucketCard
                 key={bucket.key}
