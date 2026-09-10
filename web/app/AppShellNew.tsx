@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, type CSSProperties } from 'react';
 import { useDialogFocus } from './useDialogFocus';
 import Hls from 'hls.js';
 import { AutoLogin } from './AutoLogin';
@@ -450,6 +450,66 @@ function GlobalAudiobookPlayer() {
       chapter={audiobookChapter}
       onClose={() => setAudiobookChapter(null)}
     />
+  );
+}
+
+function ScrollingTrackTitle({
+  text,
+  className = '',
+  align = 'left',
+}: {
+  text: string;
+  className?: string;
+  align?: 'left' | 'center';
+}) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLSpanElement>(null);
+  const [overflow, setOverflow] = useState(0);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) return;
+
+    let frame = 0;
+    const measure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const nextOverflow = Math.max(0, Math.ceil(content.scrollWidth - viewport.clientWidth));
+        setOverflow((current) => current === nextOverflow ? current : nextOverflow);
+      });
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    observer.observe(content);
+    document.fonts?.ready.then(measure).catch(() => {});
+
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [text]);
+
+  const isOverflowing = overflow > 2;
+  const animationSeconds = Math.min(18, Math.max(8, 7 + overflow / 24));
+  const animationStyle = {
+    '--track-title-distance': `${overflow}px`,
+    '--track-title-duration': `${animationSeconds}s`,
+  } as CSSProperties;
+
+  return (
+    <div
+      ref={viewportRef}
+      data-scrolling-track-title={isOverflowing ? 'active' : 'inactive'}
+      className={`player-scrolling-title player-scrolling-title--${align} ${isOverflowing ? 'player-scrolling-title--active' : ''} ${className}`}
+      title={isOverflowing ? text : undefined}
+    >
+      <span ref={contentRef} className="player-scrolling-title__content" style={animationStyle}>
+        {text}
+      </span>
+    </div>
   );
 }
 
@@ -1321,28 +1381,28 @@ function PlayerBar(props: {
               </div>
             </div>
 
-            {/* Track Info */}
-            <div className="mb-4 px-8 text-center">
-              <h2 className="text-xl font-bold text-white truncate">
-                {props.nowPlaying.title ?? `Track #${props.nowPlaying.id}`}
-              </h2>
-              <p className="text-white/60 truncate mt-1">
+            {/* Track identity and timeline stay together at every phone width. */}
+            <div className="mobile-player-track-panel mx-5 mb-3 rounded-2xl border border-white/[0.06] bg-white/[0.035] px-4 py-3 text-center">
+              <ScrollingTrackTitle
+                text={props.nowPlaying.title ?? `Track #${props.nowPlaying.id}`}
+                align="center"
+                className="text-xl font-bold leading-tight text-white"
+              />
+              <p className="mt-1 truncate text-sm text-white/60">
                 {props.nowPlaying.artist ?? 'Unknown Artist'}
               </p>
-            </div>
-
-            {/* Progress bar */}
-            <div className="mb-3 px-8">
-              <SeekSlider
-                currentTime={currentTime}
-                duration={duration}
-                onSeek={seekTo}
-                accent="#06b6d4"
-                label="Seek through track"
-              />
-              <div className="flex justify-between text-xs text-white/50 mt-1">
-                <span>{formatTime(currentTime)}</span>
-                <span>{formatTime(duration)}</span>
+              <div className="mt-3">
+                <SeekSlider
+                  currentTime={currentTime}
+                  duration={duration}
+                  onSeek={seekTo}
+                  accent="#06b6d4"
+                  label="Seek through track"
+                />
+                <div className="mt-1 flex justify-between text-xs text-white/50">
+                  <span>{formatTime(currentTime)}</span>
+                  <span>{formatTime(duration)}</span>
+                </div>
               </div>
             </div>
 
@@ -1588,6 +1648,7 @@ function PlayerBar(props: {
           <div className="flex items-center gap-3 sm:gap-4">
             {/* Track Info - tappable on mobile to expand */}
             <div 
+              data-mobile-player-opener
               className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer lg:cursor-default"
               onClick={() => { if (window.innerWidth < 1024) setExpanded(true); }}
             >
@@ -1604,9 +1665,10 @@ function PlayerBar(props: {
                 </div>
               )}
               <div className="min-w-0 flex-1">
-                <div className="font-semibold text-white truncate text-sm sm:text-base">
-                  {props.nowPlaying.title ?? `Track #${props.nowPlaying.id}`}
-                </div>
+                <ScrollingTrackTitle
+                  text={props.nowPlaying.title ?? `Track #${props.nowPlaying.id}`}
+                  className="text-sm font-semibold text-white sm:text-base"
+                />
                 <div className="text-xs sm:text-sm text-white/60 truncate">
                   {props.nowPlaying.artist ?? 'Unknown Artist'}
                 </div>

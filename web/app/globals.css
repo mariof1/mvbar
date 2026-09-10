@@ -59,6 +59,59 @@ audio {
   display: none;
 }
 
+/* Track titles only move when their measured text is wider than its viewport.
+   The pauses at each end keep the start and end readable on narrow phones. */
+.player-scrolling-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.player-scrolling-title--left {
+  text-align: left;
+}
+
+.player-scrolling-title--center {
+  text-align: center;
+}
+
+.player-scrolling-title__content {
+  display: inline-block;
+  width: max-content;
+  min-width: 100%;
+  white-space: nowrap;
+  will-change: auto;
+}
+
+.player-scrolling-title--active {
+  text-align: left;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+}
+
+.player-scrolling-title--active .player-scrolling-title__content {
+  animation: playerTrackTitleScroll var(--track-title-duration) ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes playerTrackTitleScroll {
+  0%, 14% { transform: translate3d(0, 0, 0); }
+  44%, 56% { transform: translate3d(calc(-1 * var(--track-title-distance)), 0, 0); }
+  86%, 100% { transform: translate3d(0, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-scrolling-title--active .player-scrolling-title__content {
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    animation: none;
+    transform: none;
+    will-change: auto;
+  }
+}
+
 /* Seek controls use a large invisible hit area around the visible track so
    they remain comfortable to drag on phones without making the bar bulky. */
 .seek-slider {
