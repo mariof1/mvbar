@@ -7,6 +7,10 @@ import {
   getListenBrainzSettings,
   connectListenBrainz,
   disconnectListenBrainz,
+  getLastfmSettings,
+  beginLastfmConnection,
+  disconnectLastfm,
+  syncLastfmLovedTracks,
   getSubsonicSettings,
   setSubsonicPassword,
   clearSubsonicPassword,
@@ -16,6 +20,7 @@ import {
 import { useAuth } from './store';
 import { usePlayer } from './playerStore';
 import { usePreferences } from './preferencesStore';
+import { useFavorites } from './favoritesStore';
 import { showConfirm } from './ConfirmModal';
 import { PushNotificationSettings } from './PushNotificationSettings';
 import { unsubscribeCurrentPushDevice } from './pushNotifications';
@@ -52,6 +57,7 @@ export function Settings() {
   const updatePreferences = usePreferences((s) => s.update);
   const preferencesBusy = usePreferences((s) => s.loading || s.saving);
   const preferencesError = usePreferences((s) => s.error);
+  const refreshFavorites = useFavorites((s) => s.refresh);
 
   const [activeTab, setActiveTab] = useState<Tab>('account');
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -78,6 +84,15 @@ export function Settings() {
   const [lbLoading, setLbLoading] = useState(false);
   const [lbError, setLbError] = useState<string | null>(null);
 
+  // Personal Last.fm account
+  const [lastfmAvailable, setLastfmAvailable] = useState(false);
+  const [lastfmConnected, setLastfmConnected] = useState(false);
+  const [lastfmUsername, setLastfmUsername] = useState<string | null>(null);
+  const [lastfmLoading, setLastfmLoading] = useState(false);
+  const [lastfmSyncing, setLastfmSyncing] = useState(false);
+  const [lastfmError, setLastfmError] = useState<string | null>(null);
+  const [lastfmSyncNotice, setLastfmSyncNotice] = useState<string | null>(null);
+
   // Subsonic/OpenSubsonic settings
   const [subsonicUsername, setSubsonicUsername] = useState('');
   const [subsonicConfigured, setSubsonicConfigured] = useState(false);
@@ -99,6 +114,16 @@ export function Settings() {
       setActiveTab(requestedTab);
     }
     window.sessionStorage.removeItem('mvbar_settings_tab');
+
+    const url = new URL(window.location.href);
+    const lastfmResult = url.searchParams.get('lastfm');
+    if (lastfmResult) {
+      setActiveTab('integrations');
+      if (lastfmResult === 'connected') setNotice('Last.fm account connected.');
+      else setLastfmError('Last.fm could not complete the connection. Please try again.');
+      url.searchParams.delete('lastfm');
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    }
   }, []);
 
   // Load profile
@@ -124,11 +149,18 @@ export function Settings() {
   useEffect(() => {
     if (token) {
       loadProfile();
-      loadPreferences(token);
+      loadPreferences(token, true);
       getListenBrainzSettings(token)
         .then(r => {
           setLbConnected(r.connected);
           setLbUsername(r.username);
+        })
+        .catch(() => {});
+      getLastfmSettings(token)
+        .then(r => {
+          setLastfmAvailable(r.available);
+          setLastfmConnected(r.connected);
+          setLastfmUsername(r.username);
         })
         .catch(() => {});
       getSubsonicSettings(token)
@@ -309,6 +341,65 @@ export function Settings() {
     } catch {
     } finally {
       setLbLoading(false);
+    }
+  }
+
+  async function handleConnectLastfm() {
+    setLastfmLoading(true);
+    setLastfmError(null);
+    try {
+      const result = await beginLastfmConnection(token);
+      if (!result.authorizationUrl) throw new Error('Last.fm did not provide an authorization address.');
+      window.location.assign(result.authorizationUrl);
+    } catch (e: any) {
+      setLastfmError(e?.data?.error ?? e?.message ?? 'Could not start the Last.fm connection.');
+      setLastfmLoading(false);
+    }
+  }
+
+  async function handleDisconnectLastfm() {
+    setLastfmLoading(true);
+    setLastfmError(null);
+    try {
+      await disconnectLastfm(token);
+      setLastfmConnected(false);
+      setLastfmUsername(null);
+      setNotice('Last.fm account disconnected.');
+    } catch (e: any) {
+      setLastfmError(e?.data?.error ?? e?.message ?? 'Could not disconnect Last.fm.');
+    } finally {
+      setLastfmLoading(false);
+    }
+  }
+
+  async function handleSyncLastfmLovedTracks() {
+    setLastfmSyncing(true);
+    setLastfmError(null);
+    setLastfmSyncNotice(null);
+    try {
+      const result = await syncLastfmLovedTracks(token);
+      await refreshFavorites(token);
+      if (result.total === 0) {
+        setLastfmSyncNotice('No loved tracks were found in this Last.fm account.');
+      } else if (result.imported > 0) {
+        setLastfmSyncNotice(
+          `Added ${result.imported} ${result.imported === 1 ? 'track' : 'tracks'} to favourites. ${result.matched} of ${result.total} Last.fm loved tracks matched your libraries.${result.deferred > 0 ? ` Kept ${result.deferred} recent local unfavourite ${result.deferred === 1 ? 'change' : 'changes'} while Last.fm catches up.` : ''}${result.truncated ? ' The import reached the 20,000-track safety limit.' : ''}`,
+        );
+      } else if (result.deferred > 0) {
+        setLastfmSyncNotice(
+          `No new tracks were added. ${result.matched} of ${result.total} Last.fm loved tracks matched your libraries. Kept ${result.deferred} recent local unfavourite ${result.deferred === 1 ? 'change' : 'changes'} while Last.fm catches up.${result.unmatched > 0 ? ` ${result.unmatched} could not be matched in your libraries.` : ''}${result.truncated ? ' The import reached the 20,000-track safety limit.' : ''}`,
+        );
+      } else if (result.matched > 0) {
+        setLastfmSyncNotice(
+          `All ${result.matched} matching ${result.matched === 1 ? 'track is' : 'tracks are'} already in your favourites.${result.unmatched > 0 ? ` ${result.unmatched} could not be matched in your libraries.` : ''}${result.truncated ? ' The import reached the 20,000-track safety limit.' : ''}`,
+        );
+      } else {
+        setLastfmSyncNotice(`None of the ${result.total} loved tracks matched music in your libraries.${result.truncated ? ' The import reached the 20,000-track safety limit.' : ''}`);
+      }
+    } catch (e: any) {
+      setLastfmError(e?.data?.error ?? e?.message ?? 'Could not sync Last.fm loved tracks.');
+    } finally {
+      setLastfmSyncing(false);
     }
   }
 
@@ -650,7 +741,7 @@ export function Settings() {
                 label="Continue Playback After Queue Ends"
                 description={lastfmEnabled
                   ? "When the queue ends, automatically add similar tracks based on the last played song. Uses Last.fm to find related music from your library."
-                  : "Requires Last.fm integration. Ask your server administrator to configure the LASTFM_API_KEY environment variable."}
+                  : "Requires the server Last.fm integration. An administrator can configure it in Admin settings."}
                 enabled={preferences.auto_continue}
                 onChange={(v) => updatePreferences(token, { auto_continue: v })}
                 disabled={!lastfmEnabled || preferencesBusy}
@@ -907,10 +998,10 @@ export function Settings() {
               )}
             </section>
 
-            {/* Last.fm Info */}
+            {/* Personal Last.fm account */}
             <section className="bg-slate-800/50 rounded-xl p-6 space-y-4">
               <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                {lastfmEnabled ? (
+                {lastfmConnected ? (
                   <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                   </svg>
@@ -923,17 +1014,59 @@ export function Settings() {
               </h2>
 
               <p className="text-sm text-slate-400">
-                Last.fm integration is used for discovering similar artists and tracks. This powers the &quot;Continue Playback&quot; feature and artist recommendations.
+                Connect your Last.fm account to scrobble listening, keep new favourite changes in sync, and import loved tracks that exist in your mvbar libraries.
               </p>
 
-              <div className="flex items-center gap-3 p-3 bg-slate-700/50 rounded-lg">
-                <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <div className="text-sm text-slate-400">
-                  Last.fm is configured by your server administrator via the <code className="bg-slate-800 px-1 rounded">LASTFM_API_KEY</code> environment variable.
+              {lastfmConnected ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
+                    <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <div>
+                      <div className="text-green-400 font-medium">Connected</div>
+                      <div className="text-sm text-slate-400">
+                        Scrobbling and syncing favourites as <span className="text-white">{lastfmUsername || 'your Last.fm account'}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={handleSyncLastfmLovedTracks}
+                      disabled={lastfmSyncing || lastfmLoading}
+                      className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors"
+                    >
+                      {lastfmSyncing ? 'Syncing loved tracks...' : 'Sync loved tracks'}
+                    </button>
+                    <button
+                      onClick={handleDisconnectLastfm}
+                      disabled={lastfmLoading || lastfmSyncing}
+                      className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 text-red-400 rounded-lg transition-colors"
+                    >
+                      {lastfmLoading ? 'Disconnecting...' : 'Disconnect Last.fm'}
+                    </button>
+                  </div>
+                  {lastfmSyncNotice && <div className="text-sm text-green-300">{lastfmSyncNotice}</div>}
                 </div>
-              </div>
+              ) : lastfmAvailable ? (
+                <button
+                  onClick={handleConnectLastfm}
+                  disabled={lastfmLoading}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors"
+                >
+                  {lastfmLoading ? 'Opening Last.fm...' : 'Connect Last.fm account'}
+                </button>
+              ) : (
+                <div className="flex items-start gap-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                  <svg className="w-5 h-5 mt-0.5 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5.07 19h13.86a2 2 0 001.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16a2 2 0 001.73 3z" />
+                  </svg>
+                  <div className="text-sm text-amber-200">
+                    Last.fm account connections are not available yet. Ask an administrator to add the server API key and shared secret.
+                  </div>
+                </div>
+              )}
+              {lastfmError && <div className="text-red-400 text-sm">{lastfmError}</div>}
             </section>
           </>
         )}

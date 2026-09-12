@@ -803,7 +803,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     // BUCKET: BECAUSE YOU LISTEN TO X (Last.fm similar artists)
     // ========================================================================
 
-    if (isLastfmEnabled() && topArtistsR.rows.length >= 3) {
+    if ((await isLastfmEnabled()) && topArtistsR.rows.length >= 3) {
       // Rotate through top artists daily — pick 2-3 different artists each day
       const artistPool = topArtistsR.rows.slice(0, 8);
       const artistSeed = dailySeed(userId, 'similar_artists');
@@ -1505,7 +1505,7 @@ export const recommendationsPlugin: FastifyPluginAsync = fp(async (app) => {
     const result = {
       ok: true,
       generatedAt: new Date().toISOString(),
-      lastfmEnabled: isLastfmEnabled(),
+      lastfmEnabled: await isLastfmEnabled(),
       recommendationProfile,
       buckets: hydratedBuckets,
       slateId: recommendationSlateId(userId, hydratedBuckets),

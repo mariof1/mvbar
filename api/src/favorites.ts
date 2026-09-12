@@ -8,6 +8,7 @@ import { broadcastToUser } from './websocket.js';
 import logger from './logger.js';
 import { artistDisplay } from './artistDisplay.js';
 import { invalidateRecommendationCache } from './recommendationCache.js';
+import { syncUserTrackLoved } from './lastfmIntegration.js';
 
 // Get user's ListenBrainz token
 async function getUserLBToken(userId: string): Promise<string | null> {
@@ -63,8 +64,9 @@ export const favoritesPlugin: FastifyPluginAsync = fp(async (app) => {
     if (lbToken) {
       submitFeedback(lbToken, { title: row.title, artist: row.artist }, 1).catch((e) => logger.debug('listenbrainz', `feedback failed: ${e instanceof Error ? e.message : String(e)}`));
     }
+    const lastfm = await syncUserTrackLoved(req.user.userId, trackId, row, true);
 
-    return { ok: true };
+    return { ok: true, lastfm };
   });
 
   app.delete('/api/favorites/:trackId', async (req, reply) => {
@@ -87,8 +89,11 @@ export const favoritesPlugin: FastifyPluginAsync = fp(async (app) => {
     if (lbToken && trackRow.rows[0]) {
       submitFeedback(lbToken, { title: trackRow.rows[0].title, artist: trackRow.rows[0].artist }, 0).catch((e) => logger.debug('listenbrainz', `feedback failed: ${e instanceof Error ? e.message : String(e)}`));
     }
+    const lastfm = trackRow.rows[0]
+      ? await syncUserTrackLoved(req.user.userId, trackId, trackRow.rows[0], false)
+      : { submitted: false, reason: 'missing_metadata' };
 
-    return { ok: true };
+    return { ok: true, lastfm };
   });
 
   app.get('/api/favorites', async (req, reply) => {

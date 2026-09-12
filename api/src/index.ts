@@ -20,6 +20,7 @@ import { hlsPlugin } from './hls.js';
 import { websocketPlugin } from './websocket.js';
 import { smartPlaylistsPlugin } from './smartPlaylists.js';
 import { listenbrainzPlugin } from './listenbrainz.js';
+import { lastfmIntegrationPlugin } from './lastfmIntegration.js';
 import { subsonicPlugin } from './subsonic.js';
 import { podcastsPlugin } from './podcasts.js';
 import { audiobooksPlugin } from './audiobooks.js';
@@ -73,7 +74,7 @@ function colorStatus(statusCode: number) {
   return `${ansi.green}${statusCode}${ansi.reset}`;
 }
 
-const sensitiveQueryParams = new Set(['u', 'p', 't', 's', 'sig', 'token', 'password', 'access_token', 'refresh_token', 'code']);
+const sensitiveQueryParams = new Set(['u', 'p', 't', 's', 'sig', 'token', 'state', 'password', 'access_token', 'refresh_token', 'code']);
 
 function sanitizeUrlForLog(url: string) {
   const queryStart = url.indexOf('?');
@@ -148,6 +149,7 @@ await app.register(websocketPlugin);
 await app.register(pluginsAdminPlugin);
 await app.register(missingMusicPlugin);
 await app.register(smartPlaylistsPlugin);
+await app.register(lastfmIntegrationPlugin);
 await app.register(listenbrainzPlugin);
 await app.register(subsonicPlugin);
 await app.register(podcastsPlugin);

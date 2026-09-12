@@ -1,9 +1,15 @@
 import { db } from './db.js';
 import logger from './logger.js';
 
-const LASTFM_API_KEY = process.env.LASTFM_API_KEY || '';
 const LASTFM_BASE = 'https://ws.audioscrobbler.com/2.0/';
 const CACHE_TTL_HOURS = 168; // 7 days
+
+export interface LastfmServerConfig {
+  apiKey: string | null;
+  sharedSecret: string | null;
+  apiKeySource: 'database' | 'environment' | null;
+  sharedSecretSource: 'database' | 'environment' | null;
+}
 
 interface SimilarArtist {
   name: string;
@@ -25,9 +31,26 @@ interface TrackInfo {
   tags: string[];
 }
 
-// Check if Last.fm is configured
-export function isLastfmEnabled(): boolean {
-  return LASTFM_API_KEY.length > 10;
+export async function getLastfmServerConfig(): Promise<LastfmServerConfig> {
+  const result = await db().query<{ api_key: string | null; shared_secret: string | null }>(
+    'select api_key, shared_secret from lastfm_settings where id = 1'
+  );
+  const storedApiKey = result.rows[0]?.api_key?.trim() || '';
+  const storedSecret = result.rows[0]?.shared_secret?.trim() || '';
+  const environmentApiKey = process.env.LASTFM_API_KEY?.trim() || '';
+  const environmentSecret = process.env.LASTFM_API_SECRET?.trim() || '';
+
+  return {
+    apiKey: storedApiKey || environmentApiKey || null,
+    sharedSecret: storedSecret || environmentSecret || null,
+    apiKeySource: storedApiKey ? 'database' : environmentApiKey ? 'environment' : null,
+    sharedSecretSource: storedSecret ? 'database' : environmentSecret ? 'environment' : null,
+  };
+}
+
+// Public Last.fm metadata only needs the server API key.
+export async function isLastfmEnabled(): Promise<boolean> {
+  return Boolean((await getLastfmServerConfig()).apiKey);
 }
 
 // Get cached data or null
@@ -38,11 +61,11 @@ async function getCache<T>(key: string): Promise<T | null> {
       [key]
     );
     if (r.rows.length === 0) return null;
-    
+
     const row = r.rows[0];
     const age = (Date.now() - new Date(row.fetched_at).getTime()) / 3600000;
     if (age > CACHE_TTL_HOURS) return null;
-    
+
     return row.data;
   } catch {
     return null;
@@ -64,11 +87,12 @@ async function setCache(key: string, data: unknown): Promise<void> {
 
 // Fetch from Last.fm API
 async function fetchLastfm(method: string, params: Record<string, string>): Promise<any> {
-  if (!isLastfmEnabled()) return null;
+  const config = await getLastfmServerConfig();
+  if (!config.apiKey) return null;
 
   const url = new URL(LASTFM_BASE);
   url.searchParams.set('method', method);
-  url.searchParams.set('api_key', LASTFM_API_KEY);
+  url.searchParams.set('api_key', config.apiKey);
   url.searchParams.set('format', 'json');
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, v);
@@ -77,7 +101,7 @@ async function fetchLastfm(method: string, params: Record<string, string>): Prom
   try {
     const res = await fetch(url.toString(), {
       headers: { 'User-Agent': 'mvbar/1.0' },
-      signal: AbortSignal.timeout(5000)
+      signal: AbortSignal.timeout(5000),
     });
 
     if (!res.ok) {
@@ -96,8 +120,11 @@ async function fetchLastfm(method: string, params: Record<string, string>): Prom
  * Get similar artists for a given artist name
  * Returns artists sorted by similarity score
  */
-export async function getSimilarArtists(artistName: string, limit = 20): Promise<SimilarArtist[]> {
-  if (!artistName || !isLastfmEnabled()) return [];
+export async function getSimilarArtists(
+  artistName: string,
+  limit = 20
+): Promise<SimilarArtist[]> {
+  if (!artistName || !(await isLastfmEnabled())) return [];
 
   const cacheKey = `similar:${artistName.toLowerCase()}`;
   const cached = await getCache<SimilarArtist[]>(cacheKey);
@@ -109,7 +136,7 @@ export async function getSimilarArtists(artistName: string, limit = 20): Promise
   const similar: SimilarArtist[] = data.similarartists.artist.map((a: any) => ({
     name: a.name,
     match: parseFloat(a.match) || 0,
-    mbid: a.mbid || undefined
+    mbid: a.mbid || undefined,
   }));
 
   await setCache(cacheKey, similar);
@@ -122,7 +149,7 @@ export async function getSimilarArtists(artistName: string, limit = 20): Promise
  * Get artist info including tags and similar artists
  */
 export async function getArtistInfo(artistName: string): Promise<ArtistInfo | null> {
-  if (!artistName || !isLastfmEnabled()) return null;
+  if (!artistName || !(await isLastfmEnabled())) return null;
 
   const cacheKey = `artist:${artistName.toLowerCase()}`;
   const cached = await getCache<ArtistInfo>(cacheKey);
@@ -139,8 +166,8 @@ export async function getArtistInfo(artistName: string): Promise<ArtistInfo | nu
     similar: (artist.similar?.artist || []).map((a: any) => ({
       name: a.name,
       match: 1, // Top similar from getinfo don't have match scores
-      mbid: a.mbid || undefined
-    }))
+      mbid: a.mbid || undefined,
+    })),
   };
 
   await setCache(cacheKey, info);
@@ -159,7 +186,7 @@ export async function getArtistTags(artistName: string): Promise<string[]> {
  * Get track info including tags
  */
 export async function getTrackInfo(artist: string, track: string): Promise<TrackInfo | null> {
-  if (!artist || !track || !isLastfmEnabled()) return null;
+  if (!artist || !track || !(await isLastfmEnabled())) return null;
 
   const cacheKey = `track:${artist.toLowerCase()}:${track.toLowerCase()}`;
   const cached = await getCache<TrackInfo>(cacheKey);
@@ -173,7 +200,7 @@ export async function getTrackInfo(artist: string, track: string): Promise<Track
     name: t.name,
     artist: t.artist?.name || artist,
     duration: t.duration ? parseInt(t.duration) : undefined,
-    tags: (t.toptags?.tag || []).map((tag: any) => tag.name)
+    tags: (t.toptags?.tag || []).map((tag: any) => tag.name),
   };
 
   await setCache(cacheKey, info);
@@ -203,7 +230,7 @@ export async function findSimilarLocalArtists(
   );
 
   const localSet = new Set(localR.rows.map(r => r.artist));
-  
+
   return similar
     .filter(s => localSet.has(s.name.toLowerCase()))
     .slice(0, limit);
@@ -220,8 +247,12 @@ interface SimilarTrack {
  * Get similar tracks for a given track
  * Returns tracks sorted by similarity score
  */
-export async function getSimilarTracks(artistName: string, trackName: string, limit = 20): Promise<SimilarTrack[]> {
-  if (!artistName || !trackName || !isLastfmEnabled()) return [];
+export async function getSimilarTracks(
+  artistName: string,
+  trackName: string,
+  limit = 20
+): Promise<SimilarTrack[]> {
+  if (!artistName || !trackName || !(await isLastfmEnabled())) return [];
 
   const cacheKey = `similar_track:${artistName.toLowerCase()}:${trackName.toLowerCase()}`;
   const cached = await getCache<SimilarTrack[]>(cacheKey);
@@ -234,7 +265,7 @@ export async function getSimilarTracks(artistName: string, trackName: string, li
     name: t.name,
     artist: t.artist?.name || '',
     match: parseFloat(t.match) || 0,
-    mbid: t.mbid || undefined
+    mbid: t.mbid || undefined,
   }));
 
   await setCache(cacheKey, similar);
@@ -315,16 +346,10 @@ export async function findSimilarLocalTracks(
   const seenIds = new Set<number>();
   const results: { id: number; title: string; artist: string; album: string | null; art_path: string | null; art_hash: string | null; duration_ms: number | null; match: number }[] = [];
 
-  // Create lookup for match scores
-  const matchScoreLookup = new Map<string, number>();
-  for (const s of pairs) {
-    matchScoreLookup.set(`${s.name.toLowerCase()}::${s.artist.toLowerCase()}`, s.match);
-  }
-
   for (const row of allRows) {
     if (seenIds.has(row.id) || results.length >= limit) continue;
     seenIds.add(row.id);
-    
+
     // Find best match score
     let matchScore = 0;
     for (const s of pairs) {
@@ -334,9 +359,26 @@ export async function findSimilarLocalTracks(
         break;
       }
     }
-    
+
     results.push({ id: row.id, title: row.title, artist: row.artist, album: row.album, art_path: row.art_path, art_hash: row.art_hash, duration_ms: row.duration_ms, match: matchScore });
   }
-  
+
   return results.sort((a, b) => b.match - a.match);
+}
+
+export interface LastfmAdminStatus {
+  metadataConfigured: boolean;
+  userAuthenticationConfigured: boolean;
+  apiKeySource: 'database' | 'environment' | null;
+  sharedSecretSource: 'database' | 'environment' | null;
+}
+
+export async function getAdminLastfmStatus(): Promise<LastfmAdminStatus> {
+  const config = await getLastfmServerConfig();
+  return {
+    metadataConfigured: Boolean(config.apiKey),
+    userAuthenticationConfigured: Boolean(config.apiKey && config.sharedSecret),
+    apiKeySource: config.apiKeySource,
+    sharedSecretSource: config.sharedSecretSource,
+  };
 }

@@ -22,12 +22,9 @@ type LibraryUpdate = {
   };
 };
 
-type FavoriteUpdate = {
-  type: 'favorite:added' | 'favorite:removed' | 'favorite:reordered';
-  data: {
-    trackId: number;
-  };
-};
+type FavoriteUpdate =
+  | { type: 'favorite:added' | 'favorite:removed' | 'favorite:reordered'; data: { trackId: number } }
+  | { type: 'favorite:synced'; data: { trackIds: number[] } };
 
 type PodcastProgressUpdate = {
   type: 'podcast:progress';
@@ -564,6 +561,8 @@ export function useWebSocket(authIdentity: string | null) {
             useFavorites.getState().addToSet(msg.data.trackId);
           } else if (msg.type === 'favorite:removed') {
             useFavorites.getState().removeFromSet(msg.data.trackId);
+          } else if (msg.type === 'favorite:synced') {
+            useFavorites.getState().addManyToSet(msg.data.trackIds);
           } else if (msg.type === 'podcast:progress') {
             // Podcast progress update from another device
             usePodcastProgress.getState().setProgress(msg.data);

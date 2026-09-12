@@ -17,7 +17,7 @@ interface PreferencesState {
   loading: boolean;
   saving: boolean;
   error: string | null;
-  load: (token: string) => Promise<void>;
+  load: (token: string, force?: boolean) => Promise<void>;
   update: (token: string, updates: Partial<UserPreferences> & { openrouter_api_key?: string }) => Promise<boolean>;
   reset: () => void;
 }
@@ -39,8 +39,8 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
   saving: false,
   error: null,
 
-  load: async (token: string) => {
-    if (get().loaded || get().loading || get().saving) return;
+  load: async (token: string, force = false) => {
+    if ((!force && get().loaded) || get().loading || get().saving) return;
     const session = sessionGeneration;
     set({ loading: true });
     try {

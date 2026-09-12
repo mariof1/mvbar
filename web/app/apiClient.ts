@@ -743,12 +743,17 @@ export async function removePlaylistCollaborator(token: string, playlistId: stri
   )) as { ok: true };
 }
 
+export type FavoriteMutationResponse = {
+  ok: boolean;
+  lastfm?: { submitted: boolean; reason?: string };
+};
+
 export async function addFavorite(token: string, trackId: number) {
-  return (await apiFetch(`/favorites/${trackId}`, { method: 'POST' }, token)) as { ok: boolean };
+  return (await apiFetch(`/favorites/${trackId}`, { method: 'POST' }, token)) as FavoriteMutationResponse;
 }
 
 export async function removeFavorite(token: string, trackId: number) {
-  return (await apiFetch(`/favorites/${trackId}`, { method: 'DELETE' }, token)) as { ok: boolean };
+  return (await apiFetch(`/favorites/${trackId}`, { method: 'DELETE' }, token)) as FavoriteMutationResponse;
 }
 
 export async function listFavorites(token: string, limit = 100, offset = 0) {
@@ -1403,6 +1408,75 @@ export async function nowPlayingListenBrainz(token: string, trackId: number) {
     method: 'POST',
     body: JSON.stringify({ trackId })
   }, token)) as { ok: boolean; submitted: boolean };
+}
+
+// Last.fm server and user integrations
+export type AdminLastfmSettings = {
+  ok: boolean;
+  metadataConfigured: boolean;
+  userAuthenticationConfigured: boolean;
+  apiKeySource: 'database' | 'environment' | null;
+  sharedSecretSource: 'database' | 'environment' | null;
+};
+
+export async function getAdminLastfmSettings(token: string) {
+  return (await apiFetch('/admin/lastfm/settings', { method: 'GET' }, token)) as AdminLastfmSettings;
+}
+
+export async function saveAdminLastfmSettings(
+  token: string,
+  settings: { apiKey?: string; sharedSecret?: string; clearApiKey?: boolean; clearSharedSecret?: boolean },
+) {
+  return (await apiFetch('/admin/lastfm/settings', {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  }, token)) as AdminLastfmSettings;
+}
+
+export async function getLastfmSettings(token: string) {
+  return (await apiFetch('/lastfm/settings', { method: 'GET' }, token)) as {
+    ok: boolean;
+    available: boolean;
+    connected: boolean;
+    username: string | null;
+  };
+}
+
+export async function beginLastfmConnection(token: string) {
+  return (await apiFetch('/lastfm/connect', { method: 'POST' }, token)) as {
+    ok: boolean;
+    authorizationUrl: string;
+  };
+}
+
+export async function disconnectLastfm(token: string) {
+  return (await apiFetch('/lastfm/disconnect', { method: 'POST' }, token)) as { ok: boolean };
+}
+
+export async function syncLastfmLovedTracks(token: string) {
+  return (await apiFetch('/lastfm/loved/sync', { method: 'POST' }, token)) as {
+    ok: boolean;
+    total: number;
+    matched: number;
+    imported: number;
+    deferred: number;
+    unmatched: number;
+    truncated: boolean;
+  };
+}
+
+export async function scrobbleToLastfm(token: string, trackId: number, listenedAt?: number) {
+  return (await apiFetch('/lastfm/scrobble', {
+    method: 'POST',
+    body: JSON.stringify({ trackId, listenedAt }),
+  }, token)) as { ok: boolean; scrobbled: boolean; reason?: string };
+}
+
+export async function nowPlayingLastfm(token: string, trackId: number) {
+  return (await apiFetch('/lastfm/now-playing', {
+    method: 'POST',
+    body: JSON.stringify({ trackId }),
+  }, token)) as { ok: boolean; submitted: boolean; reason?: string };
 }
 
 // Prefetch lyrics for a track (fire and forget)

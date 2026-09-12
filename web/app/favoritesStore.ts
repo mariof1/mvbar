@@ -1,7 +1,8 @@
 'use client';
 
 import { create } from 'zustand';
-import { addFavorite, listFavorites, removeFavorite } from './apiClient';
+import { addFavorite, listFavorites, removeFavorite, type FavoriteMutationResponse } from './apiClient';
+import { useToastStore } from './Toast';
 
 type FavoritesState = {
   ids: Set<number>;
@@ -10,6 +11,7 @@ type FavoritesState = {
   isFavorite: (trackId: number) => boolean;
   toggle: (token: string, trackId: number) => Promise<void>;
   addToSet: (trackId: number) => void;
+  addManyToSet: (trackIds: number[]) => void;
   removeFromSet: (trackId: number) => void;
   clear: () => void;
 };
@@ -19,6 +21,17 @@ type FavoritesState = {
 let refreshGeneration = 0;
 let sessionGeneration = 0;
 const changesDuringRefresh = new Map<number, boolean>();
+
+function reportLastfmFailure(result: FavoriteMutationResponse) {
+  const reason = result.lastfm?.reason;
+  if (!result.lastfm || result.lastfm.submitted || reason === 'not_connected') return;
+  const message = reason === 'session_expired'
+    ? 'Favourite saved in mvbar, but your Last.fm connection expired. Reconnect it in Settings.'
+    : reason === 'missing_metadata'
+      ? 'Favourite saved in mvbar, but Last.fm needs both a song title and artist.'
+      : 'Favourite saved in mvbar, but Last.fm could not be updated. Please try again.';
+  useToastStore.getState().show(message, 'error', 'top-right');
+}
 
 export const useFavorites = create<FavoritesState>((set, get) => ({
   ids: new Set<number>(),
@@ -44,10 +57,12 @@ export const useFavorites = create<FavoritesState>((set, get) => ({
   toggle: async (token: string, trackId: number) => {
     const session = sessionGeneration;
     if (get().ids.has(trackId)) {
-      await removeFavorite(token, trackId);
+      const result = await removeFavorite(token, trackId);
+      reportLastfmFailure(result);
       if (session === sessionGeneration) get().removeFromSet(trackId);
     } else {
-      await addFavorite(token, trackId);
+      const result = await addFavorite(token, trackId);
+      reportLastfmFailure(result);
       if (session === sessionGeneration) get().addToSet(trackId);
     }
   },
@@ -55,6 +70,15 @@ export const useFavorites = create<FavoritesState>((set, get) => ({
     changesDuringRefresh.set(trackId, true);
     const ids = new Set(get().ids);
     ids.add(trackId);
+    set({ ids, lastChange: Date.now() });
+  },
+  addManyToSet: (trackIds: number[]) => {
+    const ids = new Set(get().ids);
+    for (const trackId of trackIds) {
+      if (!Number.isSafeInteger(trackId) || trackId <= 0) continue;
+      changesDuringRefresh.set(trackId, true);
+      ids.add(trackId);
+    }
     set({ ids, lastChange: Date.now() });
   },
   removeFromSet: (trackId: number) => {

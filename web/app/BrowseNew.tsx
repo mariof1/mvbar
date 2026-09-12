@@ -54,6 +54,16 @@ type Track = {
   trackNumber?: number | null;
 };
 
+type AlbumDetail = {
+  name: string;
+  artist: string;
+  art_path: string | null;
+  tracks: Track[];
+  totalDiscs: number;
+};
+
+type AlbumSelection = { artist: string; album: string; artistId?: number };
+
 // Genre color palette
 const GENRE_COLORS = [
   'from-rose-500 to-pink-600',
@@ -196,15 +206,15 @@ export function BrowseNew(props: {
               : 'artists'
   ) as Tab;
   
-  // Create a stable key for album selection to use in effects
-  const selectedAlbumKey = route.type === 'browse-album' 
-    ? `${route.artist}|${route.album}|${route.artistId}` 
+  // Create a stable key for album route selection to use in effects
+  const routeAlbumKey = route.type === 'browse-album'
+    ? `${route.artist}|${route.album}|${route.artistId}`
     : null;
   
   const selectedAlbum = useMemo(() => 
     route.type === 'browse-album' ? { artist: route.artist, album: route.album, artistId: route.artistId } : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedAlbumKey]
+    [routeAlbumKey]
   );
   
   // Create a stable key for artist selection
@@ -219,6 +229,17 @@ export function BrowseNew(props: {
   const selectedGenre = route.type === 'browse-genre' ? route.genre : null;
   const selectedCountry = route.type === 'browse-country' ? route.country : null;
   const selectedLanguage = route.type === 'browse-language' ? route.language : null;
+  const [artistBackTarget, setArtistBackTarget] = useState<{ id: number; name: string } | null>(null);
+  const [isWideBrowseLayout, setIsWideBrowseLayout] = useState(false);
+  const [sidePanelAlbum, setSidePanelAlbum] = useState<AlbumSelection | null>(null);
+
+  const isWideArtistPanel = selectedArtist !== null && isWideBrowseLayout;
+  const activeAlbum = useMemo<AlbumSelection | null>(() => (
+    isWideArtistPanel && sidePanelAlbum ? sidePanelAlbum : selectedAlbum
+  ), [isWideArtistPanel, selectedAlbum, sidePanelAlbum]);
+  const selectedAlbumKey = activeAlbum
+    ? `${activeAlbum.artist}|${activeAlbum.album}|${activeAlbum.artistId}`
+    : null;
 
   const [loading, setLoading] = useState(false);
   const [wsRefreshing, setWsRefreshing] = useState(false);
@@ -260,7 +281,7 @@ export function BrowseNew(props: {
   const [artistAppearsOn, setArtistAppearsOn] = useState<Array<{ album: string; album_artist: string; track_count: number; art_path: string | null }>>([]);
   const [artistArt, setArtistArt] = useState<{ art_path: string | null; art_hash: string | null } | null>(null);
 
-  const [albumDetail, setAlbumDetail] = useState<{ name: string; artist: string; art_path: string | null; tracks: Track[]; totalDiscs: number } | null>(null);
+  const [albumDetail, setAlbumDetail] = useState<AlbumDetail | null>(null);
 
   const [anyWritable, setAnyWritable] = useState(false);
   const [canEditMeta, setCanEditMeta] = useState(false);
@@ -305,6 +326,18 @@ export function BrowseNew(props: {
 
   const beginListRequest = useLatestRequest(`${tab}:${debouncedFilter}`, token);
   const pendingListRequest = useRef<(() => boolean) | null>(null);
+
+  // Keep a cheap media query flag to keep artist->album drill-down in-side on large displays.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const query = window.matchMedia('(min-width: 2200px)');
+    const onChange = (event: MediaQueryListEvent) => {
+      setIsWideBrowseLayout(event.matches);
+    };
+    setIsWideBrowseLayout(query.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
 
   // Load artists
   const loadArtists = useCallback(async (reset = false, opts?: { silent?: boolean }) => {
@@ -528,15 +561,15 @@ export function BrowseNew(props: {
   }, [token, user?.role, clear]);
 
   // Helper to refresh album detail
-  const currentAlbum = useRef({ album: selectedAlbum, token });
-  currentAlbum.current = { album: selectedAlbum, token };
+  const currentAlbum = useRef({ album: activeAlbum, token });
+  currentAlbum.current = { album: activeAlbum, token };
   const albumRequest = useRef(0);
   const refreshAlbumDetail = useCallback(async () => {
-    if (!token || !selectedAlbum || currentAlbum.current.album !== selectedAlbum || currentAlbum.current.token !== token) return;
+    if (!token || !activeAlbum || currentAlbum.current.album !== activeAlbum || currentAlbum.current.token !== token) return;
     const request = ++albumRequest.current;
-    const isCurrent = () => request === albumRequest.current && currentAlbum.current.album === selectedAlbum && currentAlbum.current.token === token;
+    const isCurrent = () => request === albumRequest.current && currentAlbum.current.album === activeAlbum && currentAlbum.current.token === token;
     try {
-      const r = await browseAlbum(token, selectedAlbum.artist, selectedAlbum.album, selectedAlbum.artistId);
+      const r = await browseAlbum(token, activeAlbum.artist, activeAlbum.album, activeAlbum.artistId);
       if (!isCurrent()) return;
       setAlbumDetail({
         name: r.album.name,
@@ -549,7 +582,7 @@ export function BrowseNew(props: {
       if (!isCurrent()) return;
       if (e?.status === 401) clear();
     }
-  }, [token, selectedAlbum, clear]);
+  }, [token, activeAlbum, clear]);
 
   // Helper to refresh artist detail
   const beginArtistRequest = useLatestRequest(selectedArtist, token);
@@ -639,7 +672,7 @@ export function BrowseNew(props: {
       else if (tab === 'languages') loadLanguages({ silent: true });
 
       // Also refresh detail views if open (these don't show spinners)
-      if (selectedAlbum) refreshAlbumDetail();
+      if (activeAlbum) refreshAlbumDetail();
       if (selectedArtist) refreshArtistDetail();
       if (selectedGenre) refreshGenreTracks();
       if (selectedCountry) refreshCountryTracks();
@@ -664,10 +697,10 @@ export function BrowseNew(props: {
   // Load album detail
   useEffect(() => {
     setAlbumDetail(null);
-    if (selectedAlbum) refreshAlbumDetail();
+    if (activeAlbum) refreshAlbumDetail();
     const counter = albumRequest;
     return () => { ++counter.current; };
-  }, [selectedAlbum, refreshAlbumDetail]);
+  }, [activeAlbum, refreshAlbumDetail]);
 
   // Load genre tracks
   useEffect(() => {
@@ -795,19 +828,51 @@ export function BrowseNew(props: {
     setArtistAlbums([]);
     setArtistAppearsOn([]);
     setArtistArt(null);
+    setArtistBackTarget(null);
+    setSidePanelAlbum(null);
     navigate({ type: 'browse-artist', artistId: artist.id, artistName: artist.name });
   }, [navigate]);
 
   // Wrapper for selecting album
   const selectAlbum = useCallback((album: { artist: string; album: string; artistId?: number }) => {
     setAlbumDetail(null);
+    setArtistBackTarget(selectedArtist ? { id: selectedArtist.id, name: selectedArtist.name } : null);
+    if (isWideArtistPanel && selectedArtist) {
+      setSidePanelAlbum({ artist: album.artist, album: album.album, artistId: album.artistId });
+      return;
+    }
+    setSidePanelAlbum(null);
     navigate({ type: 'browse-album', artist: album.artist, album: album.album, artistId: album.artistId });
-  }, [navigate]);
+  }, [navigate, selectedArtist, isWideArtistPanel]);
 
   // Wrapper for selecting genre
   const selectGenre = useCallback((genre: string) => {
     navigate({ type: 'browse-genre', genre });
   }, [navigate]);
+
+  // If we leave album detail, remove stale back target from previous navigation.
+  useEffect(() => {
+    if (route.type !== 'browse-artist') {
+      setArtistBackTarget(null);
+    }
+    if (!isWideArtistPanel) {
+      setSidePanelAlbum(null);
+    }
+  }, [route.type, isWideArtistPanel]);
+
+  const goBackFromAlbum = useCallback(() => {
+    if (isWideArtistPanel && sidePanelAlbum) {
+      setSidePanelAlbum(null);
+      setAlbumDetail(null);
+      return;
+    }
+    if (!artistBackTarget) {
+      goBack();
+      return;
+    }
+
+    navigate({ type: 'browse-artist', artistId: artistBackTarget.id, artistName: artistBackTarget.name });
+  }, [artistBackTarget, goBack, isWideArtistPanel, sidePanelAlbum, navigate]);
 
   // Wrapper for selecting country
   const selectCountry = useCallback((country: string) => {
@@ -819,20 +884,28 @@ export function BrowseNew(props: {
     navigate({ type: 'browse-language', language });
   }, [navigate]);
 
-  const isDetailView = Boolean(selectedArtist || albumDetail || selectedGenre || selectedCountry || selectedLanguage);
+  const isWidePanelAlbum = isWideArtistPanel && Boolean(sidePanelAlbum);
+  const albumBackLabel = isWidePanelAlbum
+    ? `Back to ${artistBackTarget?.name ? `${artistBackTarget.name} albums` : 'artist'}`
+    : 'Back';
+  const albumBackAction = isWidePanelAlbum ? goBackFromAlbum : goBack;
+  const albumBackClass = isWidePanelAlbum && !artistBackTarget ? 'min-[2200px]:hidden' : '';
 
   if (!token) return null;
 
   // ============ Detail Views ============
 
-  if (selectedAlbum && !albumDetail) {
+  if (activeAlbum && !albumDetail) {
     return renderDetailView(
       <div className="space-y-6">
-        <button onClick={goBack} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors min-[2200px]:hidden">
+        <button
+          onClick={albumBackAction}
+          className={`flex items-center gap-2 text-slate-400 hover:text-white transition-colors ${albumBackClass}`}
+        >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
-          Back
+          {albumBackLabel}
         </button>
         <div className="flex min-h-48 items-center justify-center gap-3 text-slate-400" role="status">
           <div className="h-7 w-7 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
@@ -893,11 +966,14 @@ export function BrowseNew(props: {
 
     return renderDetailView(
       <div className="space-y-6">
-        <button onClick={goBack} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors min-[2200px]:hidden">
+        <button
+          onClick={albumBackAction}
+          className={`flex items-center gap-2 text-slate-400 hover:text-white transition-colors ${albumBackClass}`}
+        >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
-          Back
+          {albumBackLabel}
         </button>
 
         <div className="flex items-end gap-4 sm:gap-6">
@@ -1290,8 +1366,8 @@ export function BrowseNew(props: {
 
                       // Best-effort refresh (rescan can take a moment)
                       await new Promise((r) => setTimeout(r, 1500));
-                      if (selectedAlbum) {
-                        const r = await browseAlbum(token, selectedAlbum.artist, selectedAlbum.album, selectedAlbum.artistId);
+                      if (activeAlbum) {
+                        const r = await browseAlbum(token, activeAlbum.artist, activeAlbum.album, activeAlbum.artistId);
                         setAlbumDetail({
                           name: r.album.name,
                           artist: r.album.artist,

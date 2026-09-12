@@ -49,6 +49,8 @@ import {
   requestHlsTranscode,
   scrobbleToListenBrainz,
   nowPlayingListenBrainz,
+  scrobbleToLastfm,
+  nowPlayingLastfm,
   prefetchLyrics,
   listPlaylists,
   addTrackToPlaylist,
@@ -1119,9 +1121,10 @@ function PlayerBar(props: {
     (async () => {
       if (cancelled) return;
       await setStream();
-      // Submit "now playing" to ListenBrainz and prefetch lyrics
+      // Submit "now playing" to connected services and prefetch lyrics
       if (props.token) {
         nowPlayingListenBrainz(props.token, props.nowPlaying.id).catch(() => {});
+        nowPlayingLastfm(props.token, props.nowPlaying.id).catch(() => {});
         prefetchLyrics(props.token, props.nowPlaying.id).catch(() => {});
       }
       
@@ -3126,8 +3129,9 @@ export function AppShellNew() {
               slateId: nowPlaying.recommendation_slate_id,
               bucketKey: nowPlaying.recommendation_bucket_key,
             }).catch((e: any) => { if (e?.status === 401) clearAuth(); });
-            // Scrobble to ListenBrainz
+            // Scrobble to connected services
             scrobbleToListenBrainz(token, nowPlaying.id).catch(() => {});
+            scrobbleToLastfm(token, nowPlaying.id).catch(() => {});
           }}
           onPlaybackStopped={handlePlaybackStopped}
           onClose={close}

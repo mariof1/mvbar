@@ -92,6 +92,7 @@ export function Playlists(props: {
   const [name, setName] = useState('');
   const [addTrackId, setAddTrackId] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renamePending = useRef(false);
@@ -100,6 +101,37 @@ export function Playlists(props: {
   const [collaboration, setCollaboration] = useState<PlaylistCollaboration | null>(null);
   const [showCollaborators, setShowCollaborators] = useState(false);
   const [collaboratorBusy, setCollaboratorBusy] = useState<string | null>(null);
+
+  function showTimedError(message: string | null, ms = 2500) {
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
+    }
+
+    setError(message);
+
+    if (message && ms > 0) {
+      errorTimeoutRef.current = setTimeout(() => {
+        setError(null);
+        errorTimeoutRef.current = null;
+      }, ms);
+    }
+  }
+
+  function parsePlaylistError(e: any, fallback: string) {
+    if (e?.status === 409 || e?.data?.error === 'conflict') {
+      return 'Playlist already exists';
+    }
+    return e?.data?.error ?? e?.message ?? fallback;
+  }
+
+  useEffect(() => {
+    return () => {
+      if (errorTimeoutRef.current) {
+        clearTimeout(errorTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Live updates
   const playlistLastUpdate = usePlaylistUpdates((s) => s.lastUpdate);
@@ -129,7 +161,7 @@ export function Playlists(props: {
       setPls(r.playlists ?? []);
     } catch (e: any) {
       if (e?.status === 401) clear();
-      setError(e?.message ?? 'error');
+      showTimedError(parsePlaylistError(e, 'Could not load playlists.'));
     } finally {
       setPlaylistsLoaded(true);
     }
@@ -146,7 +178,7 @@ export function Playlists(props: {
     } catch (e: any) {
       if (!isCurrent()) return;
       if (e?.status === 401) clear();
-      setError(e?.message ?? 'error');
+      showTimedError(parsePlaylistError(e, 'Could not load playlist tracks.'));
     }
   }
 
@@ -173,7 +205,7 @@ export function Playlists(props: {
   useEffect(() => {
     setItems([]);
     setCollaboration(null);
-    setError(null);
+    showTimedError(null, 0);
     if (selectedId) {
       refreshItems(selectedId);
       refreshCollaboration(selectedId);
@@ -225,7 +257,7 @@ export function Playlists(props: {
 
   async function handleCreate() {
     if (!token || createPending.current) return;
-    setError(null);
+    showTimedError(null, 0);
     const n = name.trim();
     if (!n) return;
     createPending.current = true;
@@ -236,7 +268,7 @@ export function Playlists(props: {
       await refreshPlaylists();
     } catch (e: any) {
       if (e?.status === 401) clear();
-      setError(e?.data?.error ?? e?.message ?? 'error');
+      showTimedError(parsePlaylistError(e, 'Could not create playlist.'));
     } finally {
       createPending.current = false;
       setCreating(false);
@@ -247,13 +279,13 @@ export function Playlists(props: {
     if (!token) return;
     const ok = await showConfirm({ title: 'Delete Playlist', message: 'Delete this playlist? This cannot be undone.', confirmLabel: 'Delete', danger: true });
     if (!ok) return;
-    setError(null);
+    showTimedError(null, 0);
     try {
       await deletePlaylist(token, Number(id));
       await refreshPlaylists();
     } catch (e: any) {
       if (e?.status === 401) clear();
-      setError('Could not delete playlist. Please try again.');
+      showTimedError('Could not delete playlist. Please try again.');
       showToast('Could not delete playlist. Please try again.', 'error');
     }
   }
@@ -275,7 +307,7 @@ export function Playlists(props: {
     if (!n) { cancelRename(); return; }
     renamePending.current = true;
     setRenameSaving(true);
-    setError(null);
+    showTimedError(null, 0);
     try {
       await renamePlaylist(token, Number(id), n);
       setRenamingId(null);
@@ -283,7 +315,7 @@ export function Playlists(props: {
       await refreshPlaylists();
     } catch (e: any) {
       if (e?.status === 401) clear();
-      setError(e?.data?.error ?? e?.message ?? 'error');
+      showTimedError(parsePlaylistError(e, 'Could not rename playlist.'));
     } finally {
       renamePending.current = false;
       setRenameSaving(false);
@@ -292,7 +324,7 @@ export function Playlists(props: {
 
   async function handleAddTrack() {
     if (!token || !selectedId) return;
-    setError(null);
+    showTimedError(null, 0);
     const tid = Number(addTrackId);
     if (!Number.isFinite(tid)) return;
     try {
@@ -301,19 +333,19 @@ export function Playlists(props: {
       await refreshItems(selectedId);
     } catch (e: any) {
       if (e?.status === 401) clear();
-      setError(e?.data?.error ?? e?.message ?? 'error');
+      showTimedError(parsePlaylistError(e, 'Could not add track.'));
     }
   }
 
   async function handleRemove(trackId: number) {
     if (!token || !selectedId) return;
-    setError(null);
+    showTimedError(null, 0);
     try {
       await removeTrackFromPlaylist(token, selectedId, trackId);
       await refreshItems(selectedId);
     } catch (e: any) {
       if (e?.status === 401) clear();
-      setError(e?.data?.error ?? e?.message ?? 'error');
+      showTimedError(parsePlaylistError(e, 'Could not remove track.'));
     }
   }
 
@@ -334,7 +366,7 @@ export function Playlists(props: {
       await refreshItems(selectedId);
     } catch (e: any) {
       if (e?.status === 401) clear();
-      setError(e?.data?.error ?? e?.message ?? 'error');
+      showTimedError(parsePlaylistError(e, 'Could not reorder tracks.'));
       await refreshItems(selectedId);
     }
   }

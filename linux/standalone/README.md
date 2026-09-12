@@ -72,7 +72,7 @@ They are grouped as follows:
 - account and network: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `LISTEN_HOST`, `PORT`;
 - security and sessions: `JWT_SECRET`, `COOKIE_NAME`, `COOKIE_SECURE`,
   `TRUST_PROXY`;
-- integrations: `LASTFM_API_KEY`, `GOOGLE_CLIENT_ID`,
+- integrations: `LASTFM_API_KEY`, `LASTFM_API_SECRET`, `GOOGLE_CLIENT_ID`,
   `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`;
 - Web Push: `WEB_PUSH_ENABLED`, optional externally managed
   `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, and

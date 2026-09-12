@@ -920,7 +920,7 @@ function patternsForTerms(terms: string[]): string[] {
 }
 
 async function enrichSimilarity(intent: MusicIntent): Promise<MusicIntent> {
-  if (!intent.includeSimilar || !isLastfmEnabled()) return intent;
+  if (!intent.includeSimilar || !(await isLastfmEnabled())) return intent;
 
   const anchors = mergeTerms(intent.similarToArtists, intent.namedArtists, intent.referenceArtists).slice(0, 3);
   if (anchors.length === 0) return intent;

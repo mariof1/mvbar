@@ -24,6 +24,9 @@ import {
   listAdminBackups,
   restoreAdminBackup,
   uploadAdminBackup,
+  getAdminLastfmSettings,
+  saveAdminLastfmSettings,
+  type AdminLastfmSettings,
   type AdminBackup,
   type AdminBackupJob,
   type ScanProgress,
@@ -1662,17 +1665,25 @@ function SettingsTab({ token, clear }: { token: string; clear: () => void }) {
   const [bypassIPs, setBypassIPs] = useState<string[]>([]);
   const [myIP, setMyIP] = useState<string>('');
   const [newIP, setNewIP] = useState('');
+  const [lastfmSettings, setLastfmSettings] = useState<AdminLastfmSettings | null>(null);
+  const [lastfmApiKey, setLastfmApiKey] = useState('');
+  const [lastfmSharedSecret, setLastfmSharedSecret] = useState('');
+  const [lastfmSaving, setLastfmSaving] = useState(false);
+  const [lastfmNotice, setLastfmNotice] = useState<string | null>(null);
+  const [lastfmError, setLastfmError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   async function loadData() {
     setLoading(true);
     try {
-      const [bypassRes, myIPRes] = await Promise.all([
+      const [bypassRes, myIPRes, lastfmRes] = await Promise.all([
         apiFetch('/admin/rate-limit/bypass', { method: 'GET' }, token).catch(() => ({ ips: [] })),
         apiFetch('/admin/rate-limit/my-ip', { method: 'GET' }, token).catch(() => ({ ip: '' })),
+        getAdminLastfmSettings(token).catch(() => null),
       ]);
       setBypassIPs(bypassRes.ips || []);
       setMyIP(myIPRes.ip || '');
+      setLastfmSettings(lastfmRes);
     } catch {
       // ignore
     } finally {
@@ -1699,6 +1710,51 @@ function SettingsTab({ token, clear }: { token: string; clear: () => void }) {
     }
   }
 
+  async function saveLastfm() {
+    if (!lastfmApiKey.trim() && !lastfmSharedSecret.trim()) return;
+    setLastfmSaving(true);
+    setLastfmError(null);
+    setLastfmNotice(null);
+    try {
+      const result = await saveAdminLastfmSettings(token, {
+        ...(lastfmApiKey.trim() ? { apiKey: lastfmApiKey.trim() } : {}),
+        ...(lastfmSharedSecret.trim() ? { sharedSecret: lastfmSharedSecret.trim() } : {}),
+      });
+      setLastfmSettings(result);
+      setLastfmApiKey('');
+      setLastfmSharedSecret('');
+      setLastfmNotice('Last.fm server settings saved.');
+    } catch (error: any) {
+      if (error?.status === 401) clear();
+      setLastfmError(error?.data?.error ?? error?.message ?? 'Could not save Last.fm settings.');
+    } finally {
+      setLastfmSaving(false);
+    }
+  }
+
+  async function clearSavedLastfm() {
+    const confirmed = await showConfirm({
+      title: 'Remove saved Last.fm credentials?',
+      message: 'Environment credentials will still be used if they are configured. Personal Last.fm connections need both credentials to keep scrobbling.',
+      confirmLabel: 'Remove saved credentials',
+      danger: true,
+    });
+    if (!confirmed) return;
+    setLastfmSaving(true);
+    setLastfmError(null);
+    setLastfmNotice(null);
+    try {
+      const result = await saveAdminLastfmSettings(token, { clearApiKey: true, clearSharedSecret: true });
+      setLastfmSettings(result);
+      setLastfmNotice('Saved Last.fm credentials removed.');
+    } catch (error: any) {
+      if (error?.status === 401) clear();
+      setLastfmError(error?.data?.error ?? error?.message ?? 'Could not remove Last.fm settings.');
+    } finally {
+      setLastfmSaving(false);
+    }
+  }
+
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1714,6 +1770,97 @@ function SettingsTab({ token, clear }: { token: string; clear: () => void }) {
 
   return (
     <div className="space-y-6">
+      <div className="p-6 bg-slate-800/30 border border-slate-700/30 rounded-xl space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white">fm</span>
+              Last.fm server integration
+            </h3>
+            <p className="mt-1 text-sm text-slate-400">
+              The API key powers similar artists and tracks. Add the shared secret as well to let users connect their Last.fm accounts and scrobble.
+            </p>
+          </div>
+          <div className={`self-start rounded-full px-3 py-1 text-xs font-medium ${
+            lastfmSettings?.userAuthenticationConfigured
+              ? 'bg-green-500/15 text-green-300'
+              : lastfmSettings?.metadataConfigured
+                ? 'bg-amber-500/15 text-amber-300'
+                : 'bg-slate-700 text-slate-300'
+          }`}>
+            {lastfmSettings?.userAuthenticationConfigured
+              ? 'Recommendations + accounts ready'
+              : lastfmSettings?.metadataConfigured
+                ? 'Recommendations only'
+                : 'Not configured'}
+          </div>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium text-slate-300">
+              API key
+              {lastfmSettings?.apiKeySource && <span className="ml-2 text-xs font-normal text-slate-500">currently from {lastfmSettings.apiKeySource}</span>}
+            </span>
+            <input
+              type="password"
+              name="lastfm-api-key"
+              autoComplete="off"
+              value={lastfmApiKey}
+              onChange={(event) => setLastfmApiKey(event.target.value)}
+              placeholder={lastfmSettings?.metadataConfigured ? 'Configured — enter a replacement' : '32-character API key'}
+              maxLength={32}
+              className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+            />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium text-slate-300">
+              Shared secret
+              {lastfmSettings?.sharedSecretSource && <span className="ml-2 text-xs font-normal text-slate-500">currently from {lastfmSettings.sharedSecretSource}</span>}
+            </span>
+            <input
+              type="password"
+              name="lastfm-shared-secret"
+              autoComplete="off"
+              value={lastfmSharedSecret}
+              onChange={(event) => setLastfmSharedSecret(event.target.value)}
+              placeholder={lastfmSettings?.sharedSecretSource ? 'Configured — enter a replacement' : '32-character shared secret'}
+              maxLength={32}
+              className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={saveLastfm}
+            disabled={lastfmSaving || (!lastfmApiKey.trim() && !lastfmSharedSecret.trim())}
+            className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg font-medium transition-colors"
+          >
+            {lastfmSaving ? 'Saving...' : 'Save Last.fm settings'}
+          </button>
+          {(lastfmSettings?.apiKeySource === 'database' || lastfmSettings?.sharedSecretSource === 'database') && (
+            <button
+              onClick={clearSavedLastfm}
+              disabled={lastfmSaving}
+              className="px-4 py-2 bg-slate-700/60 hover:bg-slate-600/60 disabled:opacity-50 text-slate-300 rounded-lg transition-colors"
+            >
+              Remove saved credentials
+            </button>
+          )}
+          <a
+            href="https://www.last.fm/api/account/create"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-cyan-400 hover:text-cyan-300 hover:underline"
+          >
+            Create a Last.fm API account
+          </a>
+        </div>
+        {lastfmNotice && <p className="text-sm text-green-400">{lastfmNotice}</p>}
+        {lastfmError && <p className="text-sm text-red-400">{lastfmError}</p>}
+      </div>
+
       <BackupSettings token={token} clear={clear} />
 
       {/* Rate Limit Bypass */}

@@ -249,7 +249,10 @@ export function AddMenu({
       );
     } catch (e: any) {
       if (e?.status === 401) clear();
-      showToast('Failed to create playlist', 'error');
+      const message = e?.status === 409 || e?.data?.error === 'conflict'
+        ? 'Playlist already exists'
+        : 'Failed to create playlist';
+      showToast(message, 'error');
     } finally {
       setBusy(false);
       setOpen(false);

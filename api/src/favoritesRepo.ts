@@ -25,6 +25,23 @@ export async function addFavorite(userId: string, trackId: number) {
   ));
 }
 
+export async function addFavorites(userId: string, trackIds: number[]): Promise<number[]> {
+  const uniqueTrackIds = [...new Set(trackIds.filter(id => Number.isSafeInteger(id) && id > 0))];
+  if (uniqueTrackIds.length === 0) return [];
+
+  return mutate(userId, async client => {
+    const result = await client.query<{ track_id: string | number }>(
+      `insert into favorite_tracks(user_id, track_id, added_at)
+       select $1, track_id, statement_timestamp() - ((ordinality - 1) * interval '1 microsecond')
+       from unnest($2::bigint[]) with ordinality as imported(track_id, ordinality)
+       on conflict (user_id, track_id) do nothing
+       returning track_id`,
+      [userId, uniqueTrackIds],
+    );
+    return result.rows.map(row => Number(row.track_id));
+  });
+}
+
 export async function removeFavorite(userId: string, trackId: number) {
   await mutate(userId, client => client.query('delete from favorite_tracks where user_id=$1 and track_id=$2', [userId, trackId]));
 }

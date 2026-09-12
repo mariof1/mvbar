@@ -37,14 +37,14 @@ export const preferencesPlugin: FastifyPluginAsync = fp(async (app) => {
     );
 
     if (r.rows.length === 0) {
-      return { ok: true, preferences: DEFAULT_PREFS, lastfmEnabled: isLastfmEnabled(), ...openRouterState() };
+      return { ok: true, preferences: DEFAULT_PREFS, lastfmEnabled: await isLastfmEnabled(), ...openRouterState() };
     }
 
     const { openrouter_api_key, ...prefs } = r.rows[0];
     return {
       ok: true,
       preferences: prefs,
-      lastfmEnabled: isLastfmEnabled(),
+      lastfmEnabled: await isLastfmEnabled(),
       ...openRouterState(openrouter_api_key),
     };
   });
@@ -114,7 +114,7 @@ export const preferencesPlugin: FastifyPluginAsync = fp(async (app) => {
     const results: { id: number; title: string; artist: string; album: string | null; art_path: string | null; art_hash: string | null; duration_ms: number | null; source: string }[] = [];
     const limit = 20; // Larger batch for continuous playback
 
-    if (!isLastfmEnabled()) {
+    if (!(await isLastfmEnabled())) {
       return { ok: true, tracks: [], message: 'Last.fm not configured' };
     }
 

@@ -591,10 +591,12 @@ export async function initDb() {
   await pool.query('alter table tracks add column if not exists disc_number integer');
   await pool.query('alter table tracks add column if not exists disc_total integer');
 
-  // Add ListenBrainz + Subsonic columns
+  // Add account integration + Subsonic columns
   await pool.query(`
     alter table users add column if not exists listenbrainz_token text;
     alter table users add column if not exists listenbrainz_username text;
+    alter table users add column if not exists lastfm_session_key text;
+    alter table users add column if not exists lastfm_username text;
     alter table users add column if not exists subsonic_password text;
   `);
 
@@ -1144,6 +1146,29 @@ export async function initDb() {
   `);
 
   await pool.query(`ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS openrouter_api_key text`);
+
+  // Server-wide Last.fm credentials. The environment variables remain valid
+  // fallbacks, while values saved by an administrator take precedence.
+  await pool.query(`
+    create table if not exists lastfm_settings (
+      id smallint primary key check (id = 1),
+      api_key text,
+      shared_secret text,
+      updated_by text references users(id) on delete set null,
+      updated_at timestamptz not null default now()
+    );
+  `);
+
+  // Web authorization callbacks need to work after leaving mvbar for Last.fm,
+  // including clients that normally authenticate with a bearer token.
+  await pool.query(`
+    create table if not exists lastfm_auth_requests (
+      state text primary key,
+      user_id text not null references users(id) on delete cascade,
+      created_at timestamptz not null default now()
+    );
+  `);
+  await pool.query('create index if not exists lastfm_auth_requests_created_idx on lastfm_auth_requests(created_at)');
 
   // ========================================================================
   // POPULATE ASCII NAMES FOR ARTISTS (one-time migration - runs in background)

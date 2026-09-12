@@ -115,6 +115,7 @@ append_config_section() {
 ensure_config_schema() {
   append_config_section "Optional integrations" \
     "LASTFM_API_KEY=" \
+    "LASTFM_API_SECRET=" \
     "GOOGLE_CLIENT_ID=" \
     "GOOGLE_CLIENT_SECRET=" \
     "GOOGLE_CALLBACK_URL="
@@ -236,6 +237,8 @@ load_config() {
   GOOGLE_CALLBACK_URL=${configured_google_callback_url:-${GOOGLE_CALLBACK_URL:-}}
   configured_lastfm_api_key=$(config_get LASTFM_API_KEY)
   LASTFM_API_KEY=${configured_lastfm_api_key:-${LASTFM_API_KEY:-}}
+  configured_lastfm_api_secret=$(config_get LASTFM_API_SECRET)
+  LASTFM_API_SECRET=${configured_lastfm_api_secret:-${LASTFM_API_SECRET:-}}
   WEB_PUSH_ENABLED=$(config_get WEB_PUSH_ENABLED)
   WEB_PUSH_VAPID_PUBLIC_KEY=$(config_get WEB_PUSH_VAPID_PUBLIC_KEY)
   WEB_PUSH_VAPID_PRIVATE_KEY=$(config_get WEB_PUSH_VAPID_PRIVATE_KEY)
@@ -418,7 +421,7 @@ export_application_environment() {
   export REDIS_URL="redis://127.0.0.1:$REDIS_PORT"
   export MEILI_HOST="http://127.0.0.1:$MEILI_PORT"
   export MEILI_MASTER_KEY JWT_SECRET ADMIN_EMAIL ADMIN_PASSWORD MUSIC_DIRS AUDIOBOOK_DIRS
-  export LASTFM_API_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_CALLBACK_URL
+  export LASTFM_API_KEY LASTFM_API_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_CALLBACK_URL
   export WEB_PUSH_ENABLED WEB_PUSH_VAPID_PUBLIC_KEY WEB_PUSH_VAPID_PRIVATE_KEY
   export WEB_PUSH_VAPID_SUBJECT
   export COOKIE_NAME COOKIE_SECURE TRUST_PROXY TZ
