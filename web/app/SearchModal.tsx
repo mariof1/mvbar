@@ -292,6 +292,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
   const [error, setError] = useState<string | null>(null);
   const lastRefreshRef = useRef<number>(0);
   const prevLastUpdateRef = useRef(0);
+  const previousQueryRef = useRef('');
   useBodyScrollLock(isOpen);
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef, onClose, isOpen && !!token);
@@ -371,8 +372,14 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
 
   // Search API call (debounced)
   useEffect(() => {
-    if (!isOpen || mode !== 'library' || !token || q.trim().length === 0) {
-      if (q.trim().length === 0) {
+    const query = q.trim().replace(/\s+/g, ' ');
+    const queryChanged = query !== previousQueryRef.current;
+    previousQueryRef.current = query;
+    const isLibraryUpdate = lastUpdate !== prevLastUpdateRef.current;
+    prevLastUpdateRef.current = lastUpdate;
+
+    if (!isOpen || mode !== 'library' || !token || query.length === 0) {
+      if (query.length === 0) {
         setLoading(false);
         setHits([]);
         setArtistHits([]);
@@ -385,50 +392,89 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
       return;
     }
 
-    // Only throttle searches triggered by library updates, not user typing
-    let delay = 200;
-    const isLibraryUpdate = lastUpdate !== prevLastUpdateRef.current;
-    if (isLibraryUpdate) {
-      prevLastUpdateRef.current = lastUpdate;
+    // Typed queries should always respond quickly. Library-update refreshes can
+    // coalesce briefly without delaying a query the user just changed.
+    let delay = 100;
+    if (isLibraryUpdate && !queryChanged) {
       const now = Date.now();
-      delay = Math.max(delay, 3000 - (now - lastRefreshRef.current));
+      delay = Math.max(delay, 1000 - (now - lastRefreshRef.current));
       lastRefreshRef.current = now;
     }
 
     let active = true;
     let controller: AbortController | null = null;
-    const query = q.trim().replace(/\s+/g, ' ');
     setLoading(true);
     setError(null);
+    if (queryChanged) {
+      setArtistHits([]);
+      setAlbumHits([]);
+      setPlaylistHits([]);
+      setAudiobookHits([]);
+      setPodcastHits([]);
+      setPodcastEpisodeHits([]);
+    }
     const id = setTimeout(async () => {
       controller = new AbortController();
-      try {
-        const r = await apiFetch(`/search?q=${encodeURIComponent(query)}&limit=20`, { method: 'GET', signal: controller.signal }, token);
-        if (!active) return;
-        setHits((r.hits ?? []).map((h: any) => ({ ...h, id: Number(h.id) })));
-        setArtistHits(r.artists ?? []);
-        setAlbumHits((r.albums ?? []).map((a: any) => ({
+      const requestOptions = { method: 'GET', signal: controller.signal };
+      const quickRequest = apiFetch(
+        `/search?q=${encodeURIComponent(query)}&limit=20&quick=1`,
+        requestOptions,
+        token
+      ).then(
+        (value) => ({ ok: true as const, value }),
+        (reason) => ({ ok: false as const, reason })
+      );
+
+      const quickResult = await quickRequest;
+      if (!active) return;
+      if (quickResult.ok) {
+        setHits((quickResult.value.hits ?? []).map((hit: any) => ({ ...hit, id: Number(hit.id) })));
+        setSearchedQuery(query);
+        setLoading(false);
+      }
+
+      // Give the fast song lookup priority. Starting the database-heavy entity
+      // enrichment concurrently can make the quick request wait on the same pool.
+      const enrichedResult = await apiFetch(
+        `/search?q=${encodeURIComponent(query)}&limit=20`,
+        requestOptions,
+        token
+      ).then(
+        (value) => ({ ok: true as const, value }),
+        (reason) => ({ ok: false as const, reason })
+      );
+      if (!active) return;
+      if (enrichedResult.ok) {
+        const result = enrichedResult.value;
+        setHits((result.hits ?? []).map((hit: any) => ({ ...hit, id: Number(hit.id) })));
+        setArtistHits(result.artists ?? []);
+        setAlbumHits((result.albums ?? []).map((a: any) => ({
           ...a,
           artist_id: a.artist_id == null ? null : Number(a.artist_id),
           art_track_id: a.art_track_id == null ? null : Number(a.art_track_id),
         })));
-        setAudiobookHits(r.audiobooks ?? []);
-        setPlaylistHits((r.playlists ?? []).map((p: any) => ({ ...p, id: Number(p.id) })));
-        setPodcastHits((r.podcasts ?? []).map((p: any) => ({ ...p, id: Number(p.id), unplayed_count: Number(p.unplayed_count ?? 0) })));
-        setPodcastEpisodeHits((r.podcastEpisodes ?? []).map((e: any) => ({
+        setAudiobookHits(result.audiobooks ?? []);
+        setPlaylistHits((result.playlists ?? []).map((p: any) => ({ ...p, id: Number(p.id) })));
+        setPodcastHits((result.podcasts ?? []).map((p: any) => ({ ...p, id: Number(p.id), unplayed_count: Number(p.unplayed_count ?? 0) })));
+        setPodcastEpisodeHits((result.podcastEpisodes ?? []).map((e: any) => ({
           ...e,
           id: Number(e.id),
           podcast_id: Number(e.podcast_id),
           position_ms: Number(e.position_ms ?? 0),
           played: Boolean(e.played),
         })));
-      } catch (e: any) {
-        if (!active || e?.name === 'AbortError') return;
-        if (e?.status === 401) clear();
-        setError(e?.message ?? 'Search failed');
-      } finally {
-        if (active) { setSearchedQuery(query); setLoading(false); }
+        setError(null);
+      } else {
+        const reason = 'reason' in enrichedResult
+          ? enrichedResult.reason
+          : ('reason' in quickResult ? quickResult.reason : null);
+        if (reason?.name !== 'AbortError') {
+          if (reason?.status === 401) clear();
+          setError(reason?.message ?? 'Some search results could not be loaded');
+        }
       }
+      setSearchedQuery(query);
+      setLoading(false);
     }, delay);
     return () => {
       active = false;

@@ -215,33 +215,42 @@ interface UserData {
   recentSearchAlbums: Set<string>;
 }
 
-async function loadUserData(userId: string): Promise<UserData> {
-  // Play stats
-  const statsR = await db().query<{ track_id: number; play_count: number; skip_count: number; last_played_at: Date | null }>(
-    `SELECT track_id, play_count, skip_count, last_played_at FROM user_track_stats WHERE user_id = $1`,
-    [userId]
-  );
+async function loadUserData(userId: string, candidateTrackIds: number[]): Promise<UserData> {
+  const trackIds = [...new Set(candidateTrackIds.filter(Number.isFinite))];
+  const [statsR, favR, plR, searchR] = await Promise.all([
+    db().query<{ track_id: number; play_count: number; skip_count: number; last_played_at: Date | null }>(
+      `SELECT track_id::int, play_count, skip_count, last_played_at
+       FROM user_track_stats
+       WHERE user_id = $1 AND track_id = ANY($2::bigint[])`,
+      [userId, trackIds]
+    ),
+    db().query<{ track_id: number }>(
+      `SELECT track_id::int FROM favorite_tracks
+       WHERE user_id = $1 AND track_id = ANY($2::bigint[])`,
+      [userId, trackIds]
+    ),
+    db().query<{ track_id: number }>(
+      `SELECT pi.track_id::int
+       FROM playlist_items pi
+       JOIN playlists p ON p.id = pi.playlist_id
+       WHERE p.user_id = $1 AND pi.track_id = ANY($2::bigint[])`,
+      [userId, trackIds]
+    ),
+    db().query<{ query: string }>(
+      `SELECT query FROM search_logs
+       WHERE user_id = $1 AND created_at > now() - interval '1 hour'
+       ORDER BY created_at DESC LIMIT 10`,
+      [userId]
+    )
+  ]);
+
   const playStats = new Map<number, { playCount: number; skipCount: number; lastPlayed: Date | null }>();
   for (const r of statsR.rows) {
     playStats.set(r.track_id, { playCount: r.play_count, skipCount: r.skip_count, lastPlayed: r.last_played_at });
   }
 
-  // Favorites
-  const favR = await db().query<{ track_id: number }>(`SELECT track_id FROM favorite_tracks WHERE user_id = $1`, [userId]);
   const favorites = new Set(favR.rows.map(r => r.track_id));
-
-  // Playlist tracks
-  const plR = await db().query<{ track_id: number }>(
-    `SELECT pi.track_id FROM playlist_items pi JOIN playlists p ON p.id = pi.playlist_id WHERE p.user_id = $1`,
-    [userId]
-  );
   const playlistTrackIds = new Set(plR.rows.map(r => r.track_id));
-
-  // Recent search context (artists/albums searched for in past hour)
-  const searchR = await db().query<{ query: string }>(
-    `SELECT query FROM search_logs WHERE user_id = $1 AND created_at > now() - interval '1 hour' ORDER BY created_at DESC LIMIT 10`,
-    [userId]
-  );
   const recentSearchArtists = new Set<string>();
   const recentSearchAlbums = new Set<string>();
   for (const r of searchR.rows) {
@@ -506,6 +515,45 @@ async function searchPodcastEntities(userId: string, q: string, parsedTextQuery:
 }
 
 export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
+  const pendingSearchLogs = new Map<string, NodeJS.Timeout>();
+
+  const scheduleSearchLog = (userId: string, query: string, resultCount: number) => {
+    const normalized = normalizeQuery(query);
+    if (normalized.length < 3) return;
+
+    const previous = pendingSearchLogs.get(userId);
+    if (previous) clearTimeout(previous);
+
+    const timer = setTimeout(() => {
+      if (pendingSearchLogs.get(userId) === timer) pendingSearchLogs.delete(userId);
+      void (async () => {
+        const recent = await db().query<{ query_normalized: string }>(
+          `SELECT query_normalized FROM search_logs
+           WHERE user_id = $1 AND created_at > now() - interval '5 minutes'
+           ORDER BY created_at DESC LIMIT 5`,
+          [userId]
+        );
+        const isPrefix = recent.rows.some(row =>
+          row.query_normalized.startsWith(normalized) && row.query_normalized.length > normalized.length
+        );
+        if (isPrefix) return;
+
+        await db().query(
+          `INSERT INTO search_logs(user_id, query, query_normalized, result_count) VALUES ($1, $2, $3, $4)`,
+          [userId, query.trim(), normalized, resultCount]
+        );
+        await invalidateRecommendationCache(userId);
+      })().catch(error => app.log.warn({ err: error, userId }, 'Could not record search history'));
+    }, 750);
+    timer.unref();
+    pendingSearchLogs.set(userId, timer);
+  };
+
+  app.addHook('onClose', async () => {
+    for (const timer of pendingSearchLogs.values()) clearTimeout(timer);
+    pendingSearchLogs.clear();
+  });
+
   app.get('/api/search/recent', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
     const requestedLimit = Number((req.query as { limit?: string }).limit ?? 10);
@@ -609,9 +657,11 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/search', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ ok: false });
 
-    const q = (req.query as { q?: string }).q ?? '';
-    const limit = Math.min(100, Math.max(1, Number((req.query as { limit?: string }).limit ?? 30)));
-    const offset = Math.max(0, Number((req.query as { offset?: string }).offset ?? 0));
+    const queryParams = req.query as { q?: string; limit?: string; offset?: string; quick?: string };
+    const q = queryParams.q ?? '';
+    const limit = Math.min(100, Math.max(1, Number(queryParams.limit ?? 30)));
+    const offset = Math.max(0, Number(queryParams.offset ?? 0));
+    const quick = queryParams.quick === '1';
     const userId = req.user.userId;
 
     if (q.trim().length === 0) {
@@ -620,10 +670,11 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
 
     const index = meili().index('tracks');
     const allowed = await allowedLibrariesForUser(userId, req.user.role);
-    const audiobooks = offset === 0 ? await searchAudiobooks(q, allowed) : [];
-
-    // Parse query for smart matching
     const parsed = parseQuery(q);
+    const audiobooksPromise = !quick && offset === 0 ? searchAudiobooks(q, allowed) : Promise.resolve([]);
+    const podcastResultsPromise = !quick && offset === 0
+      ? searchPodcastEntities(userId, q, parsed.textQuery)
+      : Promise.resolve({ podcasts: [], podcastEpisodes: [] });
 
     // If the remaining text is just a genre keyword (e.g. "polish rap" -> country=Poland, genre=hiphop, textQuery="rap"),
     // treat it as filter-only for entity search so we can return top matching artists/albums.
@@ -691,7 +742,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
       }
 
       // Load user data for personalization
-      const userData = await loadUserData(userId);
+      const userData = await loadUserData(userId, res.hits.map((hit: any) => Number(hit.id)));
 
       // Score and re-rank results
       interface ScoredHit {
@@ -731,6 +782,23 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
       // Apply pagination
       const paginatedHits = scoredHits.slice(offset, offset + limit).map(s => s.hit);
 
+      if (quick) {
+        return {
+          ok: true,
+          q,
+          limit,
+          offset,
+          hits: paginatedHits,
+          estimatedTotalHits: res.estimatedTotalHits,
+          artists: [],
+          albums: [],
+          playlists: [],
+          podcasts: [],
+          podcastEpisodes: [],
+          audiobooks: []
+        };
+      }
+
       // Entity search (artists/albums/playlists) - first page only
       const wantEntities = offset === 0 && (entityTextQuery.length > 0 || hasEntityFilters);
       const artists: any[] = [];
@@ -740,6 +808,8 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
       let podcastEpisodes: any[] = [];
 
       if (wantEntities) {
+        const entityTasks: Promise<void>[] = [];
+
         // Artists
         {
           const params: any[] = [];
@@ -802,8 +872,9 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
                track_count desc, a.name asc`
             : 'track_count desc, a.name asc';
 
-          const r = await db().query(
-            `
+          entityTasks.push(
+            db().query(
+              `
             select
               a.id::int,
               a.name,
@@ -820,9 +891,11 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
             order by ${orderBy}
             limit 12
           `,
-            params as any
+              params as any
+            ).then((result) => {
+              artists.push(...result.rows);
+            })
           );
-          artists.push(...r.rows);
         }
 
         // Albums
@@ -879,8 +952,9 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
             where.push(`exists (select 1 from unnest(string_to_array(coalesce(t.genre, ''), ';')) as g where lower(trim(g)) = any($${i++}))`);
           }
 
-          const r = await db().query(
-            `
+          entityTasks.push(
+            db().query(
+              `
             with unique_albums as (
               select distinct on (t.album)
                 t.album,
@@ -936,9 +1010,11 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
             order by ua.match_rank, ua.match_similarity desc, ac.track_count desc, ua.album asc
             limit 12
           `,
-            params as any
+              params as any
+            ).then((result) => {
+              albums.push(...result.rows);
+            })
           );
-          albums.push(...r.rows);
         }
 
         // Playlists (name match only)
@@ -967,46 +1043,36 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
                ${terms.folded.length >= 4 ? `similarity(replace($3, '%', ''), ${playlistFoldExpr}) desc,` : ''}`
             : '';
 
-          const r = await db().query(
-            `select id::int, name, created_at from playlists where user_id = $1 and ${playlistWhere} order by ${playlistOrder} id desc limit 12`,
-            playlistParams
+          entityTasks.push(
+            Promise.all([
+              db().query(
+                `select id::int, name, created_at from playlists where user_id = $1 and ${playlistWhere} order by ${playlistOrder} id desc limit 12`,
+                playlistParams
+              ),
+              db().query(
+                `select id::int, name, updated_at from smart_playlists where user_id = $1 and ${playlistWhere} order by ${playlistOrder} updated_at desc limit 12`,
+                playlistParams
+              )
+            ]).then(([regularResult, smartResult]) => {
+              playlists.push(...regularResult.rows.map((x: any) => ({ ...x, kind: 'playlist' })));
+              playlists.push(...smartResult.rows.map((x: any) => ({ ...x, kind: 'smart' })));
+            })
           );
-          playlists.push(...r.rows.map((x: any) => ({ ...x, kind: 'playlist' })));
-
-          const r2 = await db().query(
-            `select id::int, name, updated_at from smart_playlists where user_id = $1 and ${playlistWhere} order by ${playlistOrder} updated_at desc limit 12`,
-            playlistParams
-          );
-          playlists.push(...r2.rows.map((x: any) => ({ ...x, kind: 'smart' })));
         }
+
+        await Promise.all(entityTasks);
       }
+
+      const [audiobooks, podcastResults] = await Promise.all([audiobooksPromise, podcastResultsPromise]);
+      podcasts = podcastResults.podcasts;
+      podcastEpisodes = podcastResults.podcastEpisodes;
 
       if (offset === 0) {
-        const podcastResults = await searchPodcastEntities(userId, q, parsed.textQuery);
-        podcasts = podcastResults.podcasts;
-        podcastEpisodes = podcastResults.podcastEpisodes;
-      }
-
-      // Log search for recommendations (only meaningful queries)
-      const normalized = normalizeQuery(q);
-      if (normalized.length >= 3 && offset === 0) {
-        const recent = await db().query<{ query_normalized: string }>(
-          `SELECT query_normalized FROM search_logs 
-           WHERE user_id = $1 AND created_at > now() - interval '5 minutes'
-           ORDER BY created_at DESC LIMIT 5`,
-          [userId]
+        scheduleSearchLog(
+          userId,
+          q,
+          (res.estimatedTotalHits || 0) + podcasts.length + podcastEpisodes.length + audiobooks.length
         );
-        const isPrefix = recent.rows.some(r =>
-          r.query_normalized.startsWith(normalized) && r.query_normalized.length > normalized.length
-        );
-
-        if (!isPrefix) {
-          await db().query(
-            `INSERT INTO search_logs(user_id, query, query_normalized, result_count) VALUES ($1, $2, $3, $4)`,
-            [userId, q.trim(), normalized, (res.estimatedTotalHits || 0) + podcasts.length + podcastEpisodes.length + audiobooks.length]
-          );
-          await invalidateRecommendationCache(userId);
-        }
       }
 
       return {
@@ -1032,11 +1098,10 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes('Index `tracks` not found')) {
-        const podcastResults = offset === 0
-          ? await searchPodcastEntities(userId, q, q)
-          : { podcasts: [], podcastEpisodes: [] };
+        const [audiobooks, podcastResults] = await Promise.all([audiobooksPromise, podcastResultsPromise]);
         return { ok: true, q, limit, offset, hits: [], estimatedTotalHits: 0, artists: [], albums: [], playlists: [], audiobooks, ...podcastResults };
       }
+      await Promise.allSettled([audiobooksPromise, podcastResultsPromise]);
       throw e;
     }
   });
