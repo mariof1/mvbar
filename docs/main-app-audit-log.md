@@ -35,3 +35,13 @@ At the repeat boundary, PlayerBar now resets its per-listen state and start time
 After the library scan and player were idle, the updated main web build was deployed to the local npm stack. The repeat-one regression test passed against port 8080 after restart, and the in-app admin page recovered normally.
 
 Next gaps: authenticated web-to-web Connect with isolated live players, real podcast/audiobook resume and seek, and real 4K library browsing.
+
+### Follow-up: long-form player progress
+
+Confirmed audiobook chapter-switch bug: the outgoing audio effect read a mutable chapter ref during cleanup. Switching from chapter 11 at 42 seconds submitted that position for chapter 12, corrupting the new chapter's resume position. A browser fixture reproduced the wrong chapter ID on the previously running local build. Audio lifecycle callbacks now retain their own chapter ID, and a completed async auto-advance is ignored if that chapter was changed or closed while the request was pending. Cleanup also avoids a redundant final progress save after the ended handler has saved it.
+
+Confirmed podcast completion bug: the still-mounted player continued its five-second progress timer after an episode ended. It wrote `played: false` to the local progress store and broadcast, causing the episode to reappear in the In progress list even though the API completion request had marked it played. A browser fixture showed In progress returning after the timer. The timer now updates only during active playback.
+
+Both browser regressions passed against an isolated updated production preview, along with the two mobile queue gestures and repeat-one history/scrobble regression. Web TypeScript and targeted ESLint passed. The preview had the known Windows symlink trace warning but built successfully. Fixture API and websocket requests were intercepted, so no real account or media progress was changed. Next gaps: actual podcast/audiobook resume and seek with isolated playback, authenticated web-to-web Connect, and real 4K side-card browsing.
+
+The updated web build was deployed to the local npm stack after the admin page showed no active scan or playback. Port 8080 returned to ready, and both intercepted browser regressions passed against it.

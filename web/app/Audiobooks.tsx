@@ -153,6 +153,8 @@ export function AudiobookPlayer({
 
   useEffect(() => {
     prepareSystemPlaybackSession();
+    const playingChapter = chapter;
+    let disposed = false;
     const audioEl = new Audio(`/api/audiobook-stream/${chapter.audiobook_id}/chapters/${chapter.id}`);
     audioEl.preload = 'auto';
     audioEl.playbackRate = playbackRate;
@@ -176,19 +178,22 @@ export function AudiobookPlayer({
       // Save progress for the finished chapter
       if (token) {
         await updateProgress(
-          chapterRef.current.audiobook_id,
-          chapterRef.current.id,
+          playingChapter.audiobook_id,
+          playingChapter.id,
           Math.floor(audioEl.currentTime * 1000),
           false,
           token
         ).catch(() => {});
       }
+      // A manual chapter change can happen while the progress request is pending.
+      if (disposed || chapterRef.current.id !== playingChapter.id) return;
       // Fetch audiobook details and auto-advance to next chapter
       if (token) {
         try {
-          const detail = await fetchAudiobook(chapterRef.current.audiobook_id, token);
+          const detail = await fetchAudiobook(playingChapter.audiobook_id, token);
+          if (disposed || chapterRef.current.id !== playingChapter.id) return;
           const sorted = [...detail.chapters].sort((a, b) => a.position - b.position);
-          const currentIdx = sorted.findIndex((c) => c.id === chapterRef.current.id);
+          const currentIdx = sorted.findIndex((c) => c.id === playingChapter.id);
           if (currentIdx >= 0 && currentIdx < sorted.length - 1) {
             const next = sorted[currentIdx + 1];
             useUi.getState().setAudiobookChapter({
@@ -203,11 +208,11 @@ export function AudiobookPlayer({
             });
           } else {
             // Last chapter — mark book as finished
-            await markFinished(chapterRef.current.audiobook_id, token).catch(() => {});
-            onClose();
+            await markFinished(playingChapter.audiobook_id, token).catch(() => {});
+            if (!disposed && chapterRef.current.id === playingChapter.id) onCloseRef.current();
           }
         } catch {
-          onClose();
+          if (!disposed && chapterRef.current.id === playingChapter.id) onCloseRef.current();
         }
       }
     };
@@ -225,8 +230,8 @@ export function AudiobookPlayer({
     const interval = setInterval(() => {
       if (audioEl.currentTime > 0 && token) {
         updateProgress(
-          chapterRef.current.audiobook_id,
-          chapterRef.current.id,
+          playingChapter.audiobook_id,
+          playingChapter.id,
           Math.floor(audioEl.currentTime * 1000),
           false,
           token
@@ -235,6 +240,7 @@ export function AudiobookPlayer({
     }, 10000);
 
     return () => {
+      disposed = true;
       clearInterval(interval);
       audioEl.removeEventListener('timeupdate', onTimeUpdate);
       audioEl.removeEventListener('loadedmetadata', onLoadedMetadata);
@@ -242,10 +248,10 @@ export function AudiobookPlayer({
       audioEl.removeEventListener('play', onPlay);
       audioEl.removeEventListener('pause', onPause);
       // Save final position on unmount
-      if (audioEl.currentTime > 0 && token) {
+      if (audioEl.currentTime > 0 && token && !audioEl.ended) {
         updateProgress(
-          chapterRef.current.audiobook_id,
-          chapterRef.current.id,
+          playingChapter.audiobook_id,
+          playingChapter.id,
           Math.floor(audioEl.currentTime * 1000),
           false,
           token

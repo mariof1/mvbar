@@ -1400,6 +1400,7 @@ export function PodcastPlayer({
     // Save progress periodically and broadcast via WebSocket
     let lastApiSave = 0;
     const interval = setInterval(() => {
+      if (audioEl.paused || audioEl.ended) return;
       if (audioEl.currentTime > 0) {
         const positionMs = Math.floor(audioEl.currentTime * 1000);
         const now = Date.now();
