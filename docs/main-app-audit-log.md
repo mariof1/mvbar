@@ -89,3 +89,9 @@ Search now clears the prior song hits on a query change, alongside the other res
 Next gaps: authenticated web-to-web Connect with real isolated players, actual authenticated 4K browse side-card behavior, and other main-app search/playlist/player edge cases. Keep the Android repos and emulators outside this audit.
 
 The updated web build was deployed to the local npm stack after the admin page showed no active scan or player. Port 8080 returned to ready, and the search regression, missing-song request checks, and smart criteria keyboard test passed against it. The restart began its normal library indexing cycle afterward; no scan action was triggered by the audit.
+
+### Follow-up: favourites, playlist navigation, and browse failures
+
+The next web-only audit pass found the local npm stack ready, `dev` clean and aligned with `origin/dev`, and no new failed Build & Release run. Fourteen isolated browser checks passed on port 8080: mouse and touch favourite reordering, keyboard moves and rollback, playback across paginated favourites, navigation away from delayed playlist requests, playlist menu placement on small viewports, and browse-list retry/pagination after failures. No confirmed product issue arose in those flows. The running app was left untouched during its normal post-restart library indexing cycle.
+
+Continue with actual authenticated wide-screen artist/album side-card navigation or isolated authenticated web-to-web Connect when live player and scan state allow. Check untested unknown-album discovery and Recently Added behavior with read-only library queries; preserve uploaded media and tags.
