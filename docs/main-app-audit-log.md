@@ -22,4 +22,6 @@ Confirmed issue: [Last.fm's scrobble API](https://www.last.fm/api/show/track.scr
 
 The persistent audio element now records the first successful playback attempt's start time across pauses and clears it on a new track, stop or failed attempt. PlayerBar captures that start even when it misses the initial event, and sends it with the Last.fm scrobble. A browser regression test simulates a one-minute pause and a seek before scrobbling: it failed against the pre-fix port 8080 build because no timestamp was sent and passed against an isolated updated production preview. The preview build, web TypeScript, targeted ESLint, two mobile queue-gesture tests, two favourites-refresh tests and ten Connect playback/edge-case tests passed. The isolated preview's Windows symlink trace warning did not prevent a successful build. No real Last.fm submission or library mutation was made.
 
+The updated main web build was deployed to the local npm stack once its scan and playback were idle. The port 8080 health check and the pause/seek scrobble regression test passed after restart.
+
 Next gaps: authenticated web-to-web Connect with isolated live players, real podcast/audiobook resume and seek, 4K library side-card behavior, and repeat-one listen/scrobble boundaries.
