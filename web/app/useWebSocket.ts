@@ -442,7 +442,7 @@ function registerMvbarConnect(ws: WebSocket): void {
       deviceId,
       name: window.localStorage.getItem(CONNECT_DEVICE_NAME_KEY)?.trim().slice(0, 120) || identity.name,
       type: identity.type,
-      appVersion: '0.1.0',
+      appVersion: process.env.NEXT_PUBLIC_MVBAR_WEB_VERSION || 'debug',
       platform: identity.platform,
       capabilities: ['music', 'remote-control', 'transfer', 'command-results-v1', 'play-next'],
       state: localConnectState,

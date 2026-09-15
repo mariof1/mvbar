@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { connectFixture } from './helpers/connect';
+import webPackage from '../package.json';
+
+test('Connect advertises the running web app version', async ({ page }) => {
+  const fixture = await connectFixture(page);
+  const registration = fixture.outgoing.find(message => message.type === 'connect:register');
+  expect(registration.data.appVersion).toBe(webPackage.version);
+});
 
 test('paused transfer stays silent and playing transfer starts only once', async ({ page }) => {
   const fixture = await connectFixture(page);
