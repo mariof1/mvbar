@@ -79,3 +79,13 @@ Confirmed mismatch: every web player registered with MVBar Connect as app versio
 Sixteen existing Connect and browser-console checks passed on the local web build before the fix. The new version regression and thirteen related transfer, remote seek, queue-command and responsive Connect checks passed against an isolated updated production preview. Web TypeScript, targeted ESLint and the preview production build passed. The preview emitted the known Windows symlink trace warning without a build failure. All fixture API and websocket traffic was intercepted. An extra hidden in-app browser tab opened signed out and was closed without logging in; authenticated web-to-web transfer remains a coverage gap because that tab did not share the user's existing session.
 
 The updated web build was deployed to the local npm stack while the admin page showed no scan or playback activity. Port 8080 returned to ready and the intercepted Connect registration-version browser regression passed against it.
+
+### Follow-up: stale songs during a new search
+
+The scheduled audit remains active every ten minutes for the main web app and API only. Eight live-server fixture checks passed for missing-song requests and smart playlist criteria/save behavior. A new search regression then confirmed that changing the search query left the prior song visible and clickable while the new quick lookup was pending. The browser fixture held the new response and still found the old song on the previously running port 8080 build.
+
+Search now clears the prior song hits on a query change, alongside the other result categories already cleared. The regression and nine related missing-song, smart-picker, and AI-search tests passed against an isolated production preview. Web TypeScript, targeted ESLint, and production builds passed. Fixture API and websocket traffic were intercepted, so no account search history or media was changed. The isolated preview emitted the known Windows symlink trace warning without preventing the build.
+
+Next gaps: authenticated web-to-web Connect with real isolated players, actual authenticated 4K browse side-card behavior, and other main-app search/playlist/player edge cases. Keep the Android repos and emulators outside this audit.
+
+The updated web build was deployed to the local npm stack after the admin page showed no active scan or player. Port 8080 returned to ready, and the search regression, missing-song request checks, and smart criteria keyboard test passed against it. The restart began its normal library indexing cycle afterward; no scan action was triggered by the audit.

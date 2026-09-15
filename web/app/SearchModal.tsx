@@ -406,6 +406,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
     setLoading(true);
     setError(null);
     if (queryChanged) {
+      setHits([]);
       setArtistHits([]);
       setAlbumHits([]);
       setPlaylistHits([]);
