@@ -25,3 +25,11 @@ The persistent audio element now records the first successful playback attempt's
 The updated main web build was deployed to the local npm stack once its scan and playback were idle. The port 8080 health check and the pause/seek scrobble regression test passed after restart.
 
 Next gaps: authenticated web-to-web Connect with isolated live players, real podcast/audiobook resume and seek, 4K library side-card behavior, and repeat-one listen/scrobble boundaries.
+
+### Follow-up: repeat-one listen boundaries
+
+Confirmed issue: after a song ended in repeat-one mode, PlayerBar sought to zero and replayed it without resetting its completed-listen latch or playback metrics. The shell also kept the same track ID in its history latch. The next full listen therefore produced neither a new play-history record nor a new Last.fm scrobble. An isolated browser test reproduced one history request and one scrobble across two completed cycles on the pre-fix local build.
+
+At the repeat boundary, PlayerBar now resets its per-listen state and start timestamp, and the shell clears the same-track history latch. The test passed against an isolated updated production preview: two completed cycles yielded two history requests and two scrobbles. Web TypeScript, targeted ESLint, the preview build, and eight related Last.fm, mobile player and Connect tests passed. The preview emitted the same Windows symlink trace warning as prior runs, without a build failure. All API and websocket responses in these browser checks were isolated; no real account, playback history or media was changed.
+
+Next gaps: authenticated web-to-web Connect with isolated live players, real podcast/audiobook resume and seek, and real 4K library browsing.

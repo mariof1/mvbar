@@ -523,6 +523,7 @@ function PlayerBar(props: {
   onPrev: () => void;
   onNext: (p?: { currentTime: number; duration: number }) => void;
   onPlayed: (p: { currentTime: number; duration: number; listenedMs: number; startedAt: number | null }) => void;
+  onRepeatOneCycle: () => void;
   onPlaybackStopped: (p: {
     trackId: number;
     currentTime: number;
@@ -1025,6 +1026,13 @@ function PlayerBar(props: {
         });
       }
       if (currentProps.playMode === 'repeat-one') {
+        currentProps.onRepeatOneCycle();
+        playedSentRef.current = false;
+        metrics.currentTime = 0;
+        metrics.lastPosition = 0;
+        metrics.listenedSeconds = 0;
+        metrics.startedAt = null;
+        delete a.dataset.mvbarPlaybackStartedAt;
         a.currentTime = 0;
         a.play().catch(reportMusicPlaybackFailure);
       } else {
@@ -3155,6 +3163,7 @@ export function AppShellNew() {
             scrobbleToListenBrainz(token, nowPlaying.id).catch(() => {});
             scrobbleToLastfm(token, nowPlaying.id, p.startedAt ?? undefined).catch(() => {});
           }}
+          onRepeatOneCycle={() => { lastRecordedRef.current = null; }}
           onPlaybackStopped={handlePlaybackStopped}
           onClose={close}
           onEnded={handlePlayModeEnded}
