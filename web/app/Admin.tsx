@@ -1340,6 +1340,7 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
   const [deleting, setDeleting] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const backupLastUpdate = useBackupUpdates((state) => state.lastUpdate);
   const beginBackupsRequest = useLatestRequest('admin-backups', token);
 
@@ -1369,9 +1370,13 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
       if (isCurrent()) {
         setBackups(result.backups);
         setCreating(result.creating);
+        setListError(null);
       }
     } catch (err) {
-      if (isCurrent()) setError(err instanceof Error ? err.message : 'Could not load backups');
+      if (isCurrent()) {
+        const apiError = (err as { data?: { error?: string } })?.data?.error;
+        setListError(apiError || (err instanceof Error ? err.message : 'Could not load backups'));
+      }
     } finally {
       if (isCurrent()) setLoading(false);
     }
@@ -1496,6 +1501,9 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
       {error && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>
       )}
+      {listError && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">Could not load backups: {listError}</div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="space-y-4 rounded-xl border border-slate-700/50 bg-slate-900/30 p-5">
@@ -1615,7 +1623,9 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
             Loading backups…
           </div>
         ) : backups.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-slate-500">No server backups yet.</div>
+          <div className="px-4 py-10 text-center text-sm text-slate-500">
+            {listError ? 'Could not load backups. Refresh the list to try again.' : 'No server backups yet.'}
+          </div>
         ) : (
           <div className="divide-y divide-slate-700/50">
             {backups.map((backup) => (

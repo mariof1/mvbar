@@ -129,3 +129,9 @@ The backup panel now accepts list data and errors only from the newest account-s
 Continue with restore and backup status error flows via fixtures without touching real stored archives. Authenticated two-web-player Connect remains a coverage gap.
 
 The updated main web build was deployed after the Admin page showed no active scan or player. Port 8080 returned to ready and all three isolated backup-list/download browser checks passed against it. The restart may initiate the normal background library scan; no scan was manually triggered.
+
+### Follow-up: backup list failure and retry
+
+Confirmed Admin issue: when listing backups failed, the panel still said "No server backups yet." After a successful manual refresh, the previous error remained visible beside the newly loaded archive. An isolated browser fixture reproduced the first misleading state on the prior port 8080 build (API error plus empty-list message). Backup-list errors now have their own state, so a successful list refresh clears only that error and does not erase errors from create/upload/restore operations. The empty state prompts a retry while the list is unavailable, and the API's supplied error is shown when present.
+
+The list-failure/retry fixture and the prior upload-list race, missing download, and streamed attachment fixtures all passed against an isolated production preview and the updated port 8080 web build. Web TypeScript, targeted ESLint, and the production web build passed. The local server was restarted after the Admin page showed no active scan or player, and port 8080 returned to ready. All backup API calls in these browser tests were intercepted; no real archives were created or modified. Continue with restore errors and asynchronous creation failures in fixture state, then broader web flows. Authenticated two-web-player Connect remains a coverage gap.
