@@ -111,3 +111,11 @@ The two regressions and a separate late Last.fm integration-status account-switc
 Next coverage: avatar upload error/retry and same-account concurrent actions, backup downloads, and authenticated two-player Connect when a separate web session can be safely established.
 
 The updated web build was deployed after the local Admin page showed no active scan or player. Port 8080 returned to ready, and all three account-switch checks plus four preference-account checks passed against it. The restart began its normal library discovery scan afterward; the audit did not trigger or interrupt it.
+
+### Follow-up: backup download errors
+
+Confirmed main-app Admin issue: a stored backup missing from the server was downloaded through a direct cookie-authenticated link. The 404 API JSON replaced the entire Admin page, with no inline error. An isolated browser fixture reproduced the navigation on the prior port 8080 build. Cookie-based downloads now make a HEAD availability/access check first, report 404 and 403 in the backup panel, then use the existing browser attachment download for a valid large archive instead of buffering it in memory.
+
+Both missing-backup and successful attachment checks passed against an isolated production preview and then the updated port 8080 build. The successful fixture observed HEAD followed by GET and the expected archive filename, while staying in Admin. Three profile-account regression checks, web TypeScript, targeted ESLint and production builds also passed. The preview emitted the known Windows symlink trace warning without blocking the build. No real backup was created, downloaded, restored or deleted; browser fixture traffic was intercepted. A concurrent deletion between the HEAD and GET requests could still fail after preflight, so this check primarily protects the normal missing/stale-list case.
+
+The web build was deployed when the local Admin page showed no scan or player, and port 8080 returned to ready. Continue with backup upload validation and other admin error flows via isolated fixtures, while authenticated two-web-player Connect remains open.

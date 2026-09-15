@@ -131,6 +131,14 @@ export async function createAdminBackup(token: string, includeCaches = false) {
 export async function downloadAdminBackup(token: string, name: string) {
   const url = `${API_BASE}/admin/backups/${encodeURIComponent(name)}/download`;
   if (token === 'cookie') {
+    // Check access and existence before handing a large streamed archive to the browser.
+    // A failed direct navigation otherwise replaces Admin with the API's JSON error.
+    const probe = await fetch(url, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' });
+    if (!probe.ok) {
+      if (probe.status === 404) throw new Error('Backup not found');
+      if (probe.status === 403) throw new Error('Administrator access required');
+      throw new Error(`Backup download failed (${probe.status})`);
+    }
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.style.display = 'none';
