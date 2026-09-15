@@ -724,7 +724,16 @@ export function BrowseNew(props: {
   }, [selectedLanguage, refreshLanguageTracks]);
 
   // Keep existing cards stationary while pages are appended or refreshed.
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const browseScrollRef = useRef<{ tab: Tab; top: number }>({ tab, top: 0 });
+  const attachBrowseScroll = useCallback((element: HTMLDivElement | null) => {
+    scrollRef.current = element;
+    if (!element) return;
+    if (browseScrollRef.current.tab !== tab) {
+      browseScrollRef.current = { tab, top: 0 };
+    }
+    element.scrollTop = browseScrollRef.current.top;
+  }, [tab]);
   const scrollViewportSizeRef = useRef('');
   const [scrollViewportRevision, setScrollViewportRevision] = useState(0);
   const autoFillSignatureRef = useRef('');
@@ -751,9 +760,10 @@ export function BrowseNew(props: {
     if (loading || wsRefreshingRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
+    browseScrollRef.current = { tab, top: el.scrollTop };
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
     if (nearBottom) loadNextListPage();
-  }, [loading, loadNextListPage]);
+  }, [loading, loadNextListPage, tab]);
 
   // A wide viewport can fit the entire first page without creating a scrollbar.
   // Keep measuring it so resizing to a larger window also fills the new space.
@@ -824,6 +834,7 @@ export function BrowseNew(props: {
 
   // Wrapper for selecting artist
   const selectArtist = useCallback((artist: { id: number; name: string }) => {
+    if (scrollRef.current) browseScrollRef.current = { tab, top: scrollRef.current.scrollTop };
     setAlbumDetail(null);
     setArtistAlbums([]);
     setArtistAppearsOn([]);
@@ -831,10 +842,11 @@ export function BrowseNew(props: {
     setArtistBackTarget(null);
     setSidePanelAlbum(null);
     navigate({ type: 'browse-artist', artistId: artist.id, artistName: artist.name });
-  }, [navigate]);
+  }, [navigate, tab]);
 
   // Wrapper for selecting album
   const selectAlbum = useCallback((album: { artist: string; album: string; artistId?: number }) => {
+    if (scrollRef.current) browseScrollRef.current = { tab, top: scrollRef.current.scrollTop };
     setAlbumDetail(null);
     setArtistBackTarget(selectedArtist ? { id: selectedArtist.id, name: selectedArtist.name } : null);
     if (isWideArtistPanel && selectedArtist) {
@@ -843,7 +855,7 @@ export function BrowseNew(props: {
     }
     setSidePanelAlbum(null);
     navigate({ type: 'browse-album', artist: album.artist, album: album.album, artistId: album.artistId });
-  }, [navigate, selectedArtist, isWideArtistPanel]);
+  }, [navigate, selectedArtist, isWideArtistPanel, tab]);
 
   // Wrapper for selecting genre
   const selectGenre = useCallback((genre: string) => {
@@ -1887,7 +1899,7 @@ export function BrowseNew(props: {
       )}
 
       {/* Content */}
-      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto no-scrollbar" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+      <div ref={attachBrowseScroll} onScroll={handleScroll} className="overflow-y-auto no-scrollbar" style={{ maxHeight: 'calc(100vh - 280px)' }}>
         {/* Artists Grid */}
         {tab === 'artists' && (
           <div className="media-card-grid grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">

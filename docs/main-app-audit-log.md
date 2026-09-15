@@ -63,3 +63,11 @@ The web player now saves a chapter's initial position on its first successful pl
 The preview production build, web TypeScript and targeted ESLint passed. The API build, targeted ESLint and seven audiobook/media-activity tests passed. The preview's known Windows symlink trace warning did not block the build. The browser test intercepted all API and websocket traffic, so no real audiobook progress was changed.
 
 After the local admin page showed no scan or player activity, the updated API and web builds were started on port 8080. The stack returned to ready and the delayed audiobook chapter-switch browser regression passed against it.
+
+### Follow-up: 4K browse side-card scroll position
+
+Confirmed issue: opening an artist details card on a 3840×2160 viewport remounted the main browse list and reset its scroll position from 350px to zero. Opening the album tracks kept the card and results route, but the artist selection visibly jumped back to the start. An isolated browser fixture reproduced the jump on the previous local build with 288 artists. It also checked that the visible 4K artist row filled before the card opened.
+
+The browse list now remembers its scroll position by tab and restores it when the main list remounts for a details card or returns after closing it. Opening artist albums, then their tracks, keeps the main selection in place without an offset-zero refetch. The 4K browser regression passed against an isolated updated production preview, including closing the card. Five related wide-panel and 390/1280px lazy-loading tests passed, as did web TypeScript, targeted ESLint and the preview production build. The preview emitted its known Windows symlink trace warning without preventing a successful build. All API and websocket traffic in these tests was intercepted; actual authenticated 4K library browsing remains a coverage gap.
+
+The updated web build was deployed to the local npm stack after the admin page showed no scan or player activity. Port 8080 returned to ready and the intercepted 4K side-card scroll regression passed against it.
