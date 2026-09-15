@@ -79,6 +79,8 @@ services:
       # Worker
       # Mount your music below and list the container paths here.
       MUSIC_DIRS: /music,/music2
+      RESCAN_INTERVAL: ${RESCAN_INTERVAL:-}       # e.g. 60s, 1m, 1h, 2d; default 5m
+      RESCAN_INTERVAL_MS: ${RESCAN_INTERVAL_MS:-} # legacy fallback; bare numbers are ms
 
       # Web -> API internal calls
       API_INTERNAL_BASE: http://127.0.0.1:3001
@@ -148,6 +150,12 @@ docker compose logs -f app
 curl -fsS http://localhost/health
 curl -fsS http://localhost/api/health
 ```
+
+Set `RESCAN_INTERVAL=1h` in `.env` to scan music automatically every hour. The
+worker also accepts `60s`, `1m`, and `2d`. A configured `RESCAN_INTERVAL` takes
+priority over the older `RESCAN_INTERVAL_MS` setting. Both accept duration
+suffixes, and bare numbers remain milliseconds. Restart the app after changing
+either setting.
 
 ### Backup / restore
 

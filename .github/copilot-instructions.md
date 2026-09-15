@@ -72,7 +72,7 @@
 - Runtime defaults and important vars:
   - API: `PORT` (container uses `API_PORT=3001`), `JWT_SECRET`, `COOKIE_NAME` (default `mvbar_token`), `COOKIE_SECURE`, `TRUST_PROXY`
   - DB/Search: `DATABASE_URL`, `REDIS_URL`, `MEILI_HOST`, `MEILI_MASTER_KEY`
-  - Worker: `MUSIC_DIRS` (comma-separated; defaults to `/music`), `RESCAN_INTERVAL_MS`, `FAST_SCAN`
+  - Worker: `MUSIC_DIRS` (comma-separated; defaults to `/music`), `RESCAN_INTERVAL` (e.g. `1h`; legacy `RESCAN_INTERVAL_MS`), `FAST_SCAN`
   - Caches/outputs: `ART_DIR` (`/data/cache/art`), `LYRICS_DIR` (`/data/cache/lyrics`), `HLS_DIR` (`/hls`), podcasts under `/podcasts`
   - Web -> API internal calls from Next route handlers: `API_INTERNAL_BASE` (compose sets `http://127.0.0.1:3001`)
 

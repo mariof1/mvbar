@@ -438,11 +438,21 @@ internal static class Program
                     additions.Add(key + "=" + config[key]);
                 }
             }
+            if (!config.ContainsKey("RESCAN_INTERVAL"))
+            {
+                config["RESCAN_INTERVAL"] = "";
+                additions.Add("RESCAN_INTERVAL=");
+            }
+            if (!config.ContainsKey("RESCAN_INTERVAL_MS"))
+            {
+                config["RESCAN_INTERVAL_MS"] = "3600000";
+                additions.Add("RESCAN_INTERVAL_MS=3600000");
+            }
             if (additions.Count > 0)
             {
                 File.AppendAllText(
                     configPath,
-                    Environment.NewLine + "# Server-managed backup and sandboxed plugins" + Environment.NewLine +
+                    Environment.NewLine + "# Server-managed backup, plugins, and library scanning" + Environment.NewLine +
                         String.Join(Environment.NewLine, additions.ToArray()) + Environment.NewLine,
                     Encoding.UTF8);
             }
@@ -484,6 +494,8 @@ internal static class Program
         config["PLUGIN_MAX_CONCURRENCY"] = "4";
         config["LISTEN_HOST"] = "127.0.0.1";
         config["PORT"] = "8080";
+        config["RESCAN_INTERVAL"] = "";
+        config["RESCAN_INTERVAL_MS"] = "3600000";
         return config;
     }
 
@@ -497,7 +509,8 @@ internal static class Program
             "ADMIN_EMAIL", "ADMIN_PASSWORD", "DATABASE_PASSWORD", "JWT_SECRET",
             "MEILI_MASTER_KEY", "MUSIC_DIRS", "AUDIOBOOK_DIRS", "BACKUP_DIR",
             "PLUGINS_ENABLED", "PLUGINS_DIR", "PLUGIN_MAX_UPLOAD_MB", "PLUGIN_TIMEOUT_MS",
-            "PLUGIN_MEMORY_MB", "PLUGIN_MAX_CONCURRENCY", "LISTEN_HOST", "PORT"
+            "PLUGIN_MEMORY_MB", "PLUGIN_MAX_CONCURRENCY", "LISTEN_HOST", "PORT",
+            "RESCAN_INTERVAL", "RESCAN_INTERVAL_MS"
         };
         foreach (string key in keys)
         {
@@ -664,7 +677,8 @@ internal static class Program
         Environment.SetEnvironmentVariable("UV_THREADPOOL_SIZE", "16");
         Environment.SetEnvironmentVariable("SCAN_CONCURRENCY", "8");
         Environment.SetEnvironmentVariable("METADATA_TIMEOUT_MS", "300000");
-        Environment.SetEnvironmentVariable("RESCAN_INTERVAL_MS", "3600000");
+        Environment.SetEnvironmentVariable("RESCAN_INTERVAL", Get(config, "RESCAN_INTERVAL", ""));
+        Environment.SetEnvironmentVariable("RESCAN_INTERVAL_MS", Get(config, "RESCAN_INTERVAL_MS", "3600000"));
         Environment.SetEnvironmentVariable("TEMPO_DETECT", "0");
         Environment.SetEnvironmentVariable("LOG_LEVEL", "info");
         Environment.SetEnvironmentVariable("APP_VERSION", "standalone-" + BuildId);
@@ -713,7 +727,8 @@ internal static class Program
         environment["UV_THREADPOOL_SIZE"] = "16";
         environment["SCAN_CONCURRENCY"] = "8";
         environment["METADATA_TIMEOUT_MS"] = "300000";
-        environment["RESCAN_INTERVAL_MS"] = "3600000";
+        environment["RESCAN_INTERVAL"] = Get(config, "RESCAN_INTERVAL", "");
+        environment["RESCAN_INTERVAL_MS"] = Get(config, "RESCAN_INTERVAL_MS", "3600000");
         environment["TEMPO_DETECT"] = "0";
         environment["NODE_ENV"] = "production";
         environment["APP_VERSION"] = "standalone-" + BuildId;

@@ -45,6 +45,12 @@ Use **Settings** in the launcher or notification-area menu to change:
 Application data survives upgrades under `%LOCALAPPDATA%\MVBar\data`. Settings
 are stored in `%LOCALAPPDATA%\MVBar\config.env`.
 
+Set `RESCAN_INTERVAL=1h` in `config.env` to change the automatic music scan
+interval. Values such as `60s`, `1m`, `1h`, and `2d` are accepted. The older
+`RESCAN_INTERVAL_MS` setting remains available as a fallback when
+`RESCAN_INTERVAL` is blank; it also accepts duration suffixes or bare
+millisecond values. Save and restart the launcher to apply the change.
+
 Server-managed portable backups are stored under `%LOCALAPPDATA%\MVBar\data\backups`
 by default. The location can be changed with `BACKUP_DIR` in `config.env`.
 

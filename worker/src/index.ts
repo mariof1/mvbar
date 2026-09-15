@@ -15,6 +15,7 @@ import { scanAudiobooks } from './audiobookScanner.js';
 import { ensureTracksIndex, getTrackIndexStatus, indexAllTracks } from './indexer.js';
 import { reconcileMusicArtwork } from './musicArtReconciliation.js';
 import logger from './logger.js';
+import { formatRescanInterval, parseRescanInterval } from './rescanInterval.js';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
 
@@ -29,7 +30,7 @@ const audiobookDirs = (process.env.AUDIOBOOK_DIRS ?? '')
   .filter(Boolean);
 
 const useFastScan = process.env.FAST_SCAN !== '0';
-const rescanIntervalMs = parseInt(process.env.RESCAN_INTERVAL_MS ?? '300000', 10); // Default 5 minutes
+const rescanIntervalMs = parseRescanInterval(process.env.RESCAN_INTERVAL, process.env.RESCAN_INTERVAL_MS);
 
 const tempoDetectEnabled = process.env.TEMPO_DETECT === '1' && (process.env.TEMPO_MODE ?? 'batch') === 'batch';
 const tempoBackfillIntervalMs = parseInt(process.env.TEMPO_BACKFILL_INTERVAL_MS ?? '1800000', 10); // Default 30 minutes
@@ -258,7 +259,7 @@ setTimeout(() => {
 }, 0);
 
 // Schedule periodic rescans
-logger.info('worker', `Scheduling periodic library scan every ${rescanIntervalMs / 1000}s`);
+logger.info('worker', `Scheduling periodic library scan every ${formatRescanInterval(rescanIntervalMs)}`);
 setInterval(periodicRescan, rescanIntervalMs);
 
 // Schedule tempo backfill (independent batches throughout the day)

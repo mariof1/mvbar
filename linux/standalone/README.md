@@ -79,8 +79,9 @@ They are grouped as follows:
   `WEB_PUSH_VAPID_SUBJECT`;
 - libraries and scanning: `MUSIC_DIRS`, `AUDIOBOOK_DIRS`, `LIBRARY_READ_ONLY`,
   `FAST_SCAN`, `SCAN_CONCURRENCY`, `ARTIST_ART_CONCURRENCY`, `SCAN_MAX_QUEUE`,
-  `SCAN_REFRESH_META`, `METADATA_TIMEOUT_MS`, `RESCAN_INTERVAL_MS`,
-  `AUDIOBOOK_RESCAN_INTERVAL_MS`, `PODCAST_REFRESH_INTERVAL_MS`;
+  `SCAN_REFRESH_META`, `METADATA_TIMEOUT_MS`, `RESCAN_INTERVAL`,
+  `RESCAN_INTERVAL_MS`, `AUDIOBOOK_RESCAN_INTERVAL_MS`,
+  `PODCAST_REFRESH_INTERVAL_MS`;
 - tempo analysis: `TEMPO_DETECT`, `TEMPO_MODE`, `TEMPO_METHOD`,
   `TEMPO_MIN_CONF`, `TEMPO_CONCURRENCY`, `TEMPO_BACKFILL_INTERVAL_MS`,
   `TEMPO_BACKFILL_BATCH`;
@@ -91,6 +92,12 @@ They are grouped as follows:
 - persistent generated-data paths: `LYRICS_DIR`, `ART_DIR`, `AVATARS_DIR`,
   `HLS_DIR`, `PODCAST_DIR`, `PODCAST_ART_DIR`, `AUDIOBOOK_ART_DIR`,
   `DEVICE_LOG_DIR`, `BACKUP_DIR`, `PLUGINS_DIR`.
+
+Set `RESCAN_INTERVAL=1h` in `config.env` to change the automatic music scan
+interval. Values such as `60s`, `1m`, `1h`, and `2d` are accepted. The older
+`RESCAN_INTERVAL_MS` value remains available as a fallback when
+`RESCAN_INTERVAL` is blank; it also accepts duration suffixes or bare
+millisecond values.
 
 Plugin packages can be installed from **Admin → Plugins** or copied into
 `PLUGINS_DIR`. They are disabled until an administrator reviews and approves
