@@ -1341,6 +1341,7 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
   const [restoring, setRestoring] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const backupLastUpdate = useBackupUpdates((state) => state.lastUpdate);
+  const beginBackupsRequest = useLatestRequest('admin-backups', token);
 
   function formatBytes(bytes: number) {
     if (bytes < 1024) return `${bytes} B`;
@@ -1360,17 +1361,21 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
   }
 
   const loadBackups = useCallback(async (showLoading = false) => {
+    const isCurrent = beginBackupsRequest();
+    if (!isCurrent()) return;
     if (showLoading) setLoading(true);
     try {
       const result = await listAdminBackups(token);
-      setBackups(result.backups);
-      setCreating(result.creating);
+      if (isCurrent()) {
+        setBackups(result.backups);
+        setCreating(result.creating);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load backups');
+      if (isCurrent()) setError(err instanceof Error ? err.message : 'Could not load backups');
     } finally {
-      if (showLoading) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [token]);
+  }, [token, beginBackupsRequest]);
 
   useEffect(() => {
     void loadBackups(backupLastUpdate === 0);

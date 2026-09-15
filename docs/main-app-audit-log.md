@@ -119,3 +119,13 @@ Confirmed main-app Admin issue: a stored backup missing from the server was down
 Both missing-backup and successful attachment checks passed against an isolated production preview and then the updated port 8080 build. The successful fixture observed HEAD followed by GET and the expected archive filename, while staying in Admin. Three profile-account regression checks, web TypeScript, targeted ESLint and production builds also passed. The preview emitted the known Windows symlink trace warning without blocking the build. No real backup was created, downloaded, restored or deleted; browser fixture traffic was intercepted. A concurrent deletion between the HEAD and GET requests could still fail after preflight, so this check primarily protects the normal missing/stale-list case.
 
 The web build was deployed when the local Admin page showed no scan or player, and port 8080 returned to ready. Continue with backup upload validation and other admin error flows via isolated fixtures, while authenticated two-web-player Connect remains open.
+
+### Follow-up: backup list races after upload
+
+Confirmed Admin issue: a slow initial backup-list response could arrive after an upload's successful refresh and replace the newer list with its stale empty result. An isolated browser fixture held the initial GET, uploaded a disposable fixture archive through intercepted API traffic, received the newer list, then released the old GET; the uploaded backup disappeared on the prior port 8080 build.
+
+The backup panel now accepts list data and errors only from the newest account-scoped request. When a newer refresh finishes, it also clears the initial loading state even if that older request is still pending. The regression, missing-download error, and successful attachment checks passed against an isolated updated production preview. Web TypeScript, targeted ESLint and production preview build passed; the known Windows symlink trace warning did not block the build. No real backup was uploaded or modified; all fixture API and websocket traffic was intercepted.
+
+Continue with restore and backup status error flows via fixtures without touching real stored archives. Authenticated two-web-player Connect remains a coverage gap.
+
+The updated main web build was deployed after the Admin page showed no active scan or player. Port 8080 returned to ready and all three isolated backup-list/download browser checks passed against it. The restart may initiate the normal background library scan; no scan was manually triggered.
