@@ -25,6 +25,7 @@ import { showConfirm } from './ConfirmModal';
 import { PushNotificationSettings } from './PushNotificationSettings';
 import { unsubscribeCurrentPushDevice } from './pushNotifications';
 import { formatCalendarDate } from './format';
+import { useLatestRequest } from './useLatestRequest';
 
 type Tab = 'account' | 'playback' | 'notifications' | 'integrations' | 'about';
 
@@ -63,6 +64,7 @@ export function Settings() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const beginProfileRequest = useLatestRequest(user?.id, token);
 
   // Password change state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -129,10 +131,13 @@ export function Settings() {
   // Load profile
   const loadProfile = async () => {
     if (!token) return;
+    const isCurrent = beginProfileRequest();
     try {
       const r = await apiFetch('/users/profile', { method: 'GET' }, token);
-      setProfile(r);
-      updateAvatar(r.avatar_path);
+      if (isCurrent()) {
+        setProfile(r);
+        updateAvatar(r.avatar_path);
+      }
     } catch {}
   };
 
@@ -206,6 +211,7 @@ export function Settings() {
     const input = e.currentTarget;
     const file = input.files?.[0];
     if (!file || !token) return;
+    const isCurrent = beginProfileRequest();
 
     const formData = new FormData();
     formData.append('file', file);
@@ -223,31 +229,36 @@ export function Settings() {
         throw new Error(data.error || 'Upload failed');
       }
       const result = await res.json() as { avatar_path: string };
-      setProfile((current) => current ? { ...current, avatar_path: result.avatar_path } : current);
-      updateAvatar(result.avatar_path);
-      setNotice('Avatar updated');
+      if (isCurrent()) {
+        setProfile((current) => current ? { ...current, avatar_path: result.avatar_path } : current);
+        updateAvatar(result.avatar_path);
+        setNotice('Avatar updated');
+      }
     } catch (err: any) {
-      setError(err.message || 'Failed to upload avatar');
+      if (isCurrent()) setError(err.message || 'Failed to upload avatar');
     } finally {
       input.value = '';
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
   // Delete avatar
   const handleDeleteAvatar = async () => {
     if (!token) return;
+    const isCurrent = beginProfileRequest();
     setLoading(true);
     try {
       await apiFetch('/users/avatar', { method: 'DELETE' }, token);
-      setProfile((current) => current ? { ...current, avatar_path: null } : current);
-      updateAvatar(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      setNotice('Avatar removed');
+      if (isCurrent()) {
+        setProfile((current) => current ? { ...current, avatar_path: null } : current);
+        updateAvatar(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        setNotice('Avatar removed');
+      }
     } catch (err: any) {
-      setError(err.message || 'Failed to remove avatar');
+      if (isCurrent()) setError(err.message || 'Failed to remove avatar');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
