@@ -7,6 +7,7 @@ import { resolveInside } from './pathSafety.js';
 import { db } from './db.js';
 import { allowedLibrariesForUser } from './access.js';
 import {
+  audiobookChapterListeningDelta,
   boundedPosition,
   continuousListeningDelta,
   recordMediaActivity,
@@ -269,7 +270,6 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
       previous_position_ms: number | null;
       previous_finished: boolean | null;
       previous_chapter_position: number | null;
-      previous_chapter_duration_ms: number | null;
     }>(
       `SELECT
          chapter.duration_ms as chapter_duration_ms,
@@ -277,8 +277,7 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
          progress.chapter_id as previous_chapter_id,
          progress.position_ms as previous_position_ms,
          progress.finished as previous_finished,
-         previous_chapter.position as previous_chapter_position,
-         previous_chapter.duration_ms as previous_chapter_duration_ms
+         previous_chapter.position as previous_chapter_position
        FROM audiobook_chapters chapter
        JOIN active_audiobooks book ON book.id = chapter.audiobook_id
        LEFT JOIN user_audiobook_progress progress
@@ -307,23 +306,14 @@ export const audiobooksPlugin: FastifyPluginAsync = fp(async (app) => {
       [req.user.userId, id, chapter_id, normalizedPosition, finished ?? null]
     );
 
-    let listenedMs = 0;
-    if (chapter.previous_chapter_id == null) {
-      listenedMs = continuousListeningDelta(null, normalizedPosition);
-    } else if (Number(chapter.previous_chapter_id) === chapter_id) {
-      listenedMs = continuousListeningDelta(chapter.previous_position_ms, normalizedPosition);
-    } else if (
+    const listenedMs = audiobookChapterListeningDelta(
+      chapter.previous_chapter_id == null ? null : Number(chapter.previous_chapter_id),
+      chapter_id,
+      chapter.previous_position_ms,
+      normalizedPosition,
       chapter.previous_chapter_position != null
-      && chapter.chapter_position > chapter.previous_chapter_position
-    ) {
-      const previousRemainder = chapter.previous_chapter_duration_ms == null
-        ? 0
-        : continuousListeningDelta(
-            chapter.previous_position_ms,
-            chapter.previous_chapter_duration_ms
-          );
-      listenedMs = previousRemainder + continuousListeningDelta(null, normalizedPosition);
-    }
+        && chapter.chapter_position > chapter.previous_chapter_position
+    );
     await recordMediaActivity({
       req,
       mediaType: 'audiobook',

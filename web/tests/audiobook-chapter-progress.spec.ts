@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('switching audiobook chapters saves the outgoing audio under its own chapter', async ({ page }) => {
+test('switching audiobook chapters saves the old position and starts the new chapter resume', async ({ page }) => {
   page.on('pageerror', error => console.error('page error:', error.message, error.stack));
   await page.addInitScript(() => {
     const positions = new WeakMap<HTMLMediaElement, number>();
@@ -31,13 +31,18 @@ test('switching audiobook chapters saves the outgoing audio under its own chapte
   });
   await page.routeWebSocket('**/*', () => {});
   const progress: Array<{ chapter_id: number; position_ms: number }> = [];
-  await page.route('**/api/**', route => {
+  let releaseOldPosition = () => {};
+  await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/auth/me')) {
       return route.fulfill({ json: { ok: true, user: { id: 'audit', email: 'test@local', role: 'user' } } });
     }
     if (path.endsWith('/audiobooks/1/progress')) {
-      progress.push(route.request().postDataJSON());
+      const request = route.request().postDataJSON();
+      progress.push(request);
+      if (request.chapter_id === 11 && request.position_ms === 42000) {
+        await new Promise<void>(resolve => { releaseOldPosition = resolve; });
+      }
       return route.fulfill({ json: { ok: true } });
     }
     if (path.endsWith('/audiobooks')) {
@@ -68,7 +73,16 @@ test('switching audiobook chapters saves the outgoing audio under its own chapte
       .__auditAudioInstances[0].currentTime = 42;
   });
   await page.getByRole('button', { name: 'Play Second chapter' }).click();
-  await expect.poll(() => progress.length).toBeGreaterThan(0);
+  await expect.poll(() => progress.some(request =>
+    request.chapter_id === 11 && request.position_ms === 42000)).toBe(true);
   expect(progress).toContainEqual({ chapter_id: 11, position_ms: 42000, finished: false });
   expect(progress.some(request => request.chapter_id === 12 && request.position_ms === 42000)).toBe(false);
+  await expect.poll(() => page.evaluate(() => (window as typeof window & {
+    __auditAudioInstances: HTMLAudioElement[];
+  }).__auditAudioInstances.length)).toBe(2);
+  expect(progress.some(request => request.chapter_id === 12 && request.position_ms === 0)).toBe(false);
+  releaseOldPosition();
+  await page.locator('button[title="Close"]').last().click();
+  await expect.poll(() => progress.some(request =>
+    request.chapter_id === 12 && request.position_ms === 0)).toBe(true);
 });

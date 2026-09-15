@@ -20,6 +20,22 @@ export function continuousListeningDelta(previousMs: number | null, nextMs: numb
   return delta > 0 && delta <= MAX_CONTIGUOUS_DELTA_MS ? delta : 0;
 }
 
+export function audiobookChapterListeningDelta(
+  previousChapterId: number | null,
+  chapterId: number,
+  previousPositionMs: number | null,
+  positionMs: number,
+  movedForward: boolean
+) {
+  if (previousChapterId == null) return continuousListeningDelta(null, positionMs);
+  if (previousChapterId === chapterId) {
+    return continuousListeningDelta(previousPositionMs, positionMs);
+  }
+  // A chapter change can be a manual skip; previous chapter time is recorded
+  // by its own progress updates and must not be inferred here.
+  return movedForward ? continuousListeningDelta(null, positionMs) : 0;
+}
+
 export async function recordMediaActivity(params: {
   req: FastifyRequest;
   mediaType: 'podcast' | 'audiobook';

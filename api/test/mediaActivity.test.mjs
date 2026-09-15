@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  audiobookChapterListeningDelta,
   boundedPosition,
   continuousListeningDelta,
 } from '../dist/mediaActivity.js';
@@ -18,4 +19,11 @@ test('continuousListeningDelta ignores seeks and counts contiguous playback', ()
   assert.equal(continuousListeningDelta(25_000, 10_000), 0);
   assert.equal(continuousListeningDelta(0, 20 * 60_000), 0);
   assert.equal(continuousListeningDelta(null, 20 * 60_000), 15 * 60_000);
+});
+
+test('audiobook chapter switches count only reported listening, not skipped time', () => {
+  assert.equal(audiobookChapterListeningDelta(11, 12, 42_000, 0, true), 0);
+  assert.equal(audiobookChapterListeningDelta(11, 12, 42_000, 10_000, true), 10_000);
+  assert.equal(audiobookChapterListeningDelta(12, 11, 10_000, 0, false), 0);
+  assert.equal(audiobookChapterListeningDelta(12, 12, 10_000, 25_000, false), 15_000);
 });

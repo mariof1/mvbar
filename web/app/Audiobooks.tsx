@@ -75,11 +75,23 @@ async function fetchAudiobook(id: number, token: string, signal?: AbortSignal): 
   };
 }
 
-async function updateProgress(audiobookId: number, chapterId: number, positionMs: number, finished: boolean, token: string) {
-  return apiFetch(`/audiobooks/${audiobookId}/progress`, {
-    method: 'POST',
-    body: JSON.stringify({ chapter_id: chapterId, position_ms: positionMs, finished }),
-  }, token);
+const pendingProgressByBook = new Map<number, Promise<void>>();
+
+function updateProgress(audiobookId: number, chapterId: number, positionMs: number, finished: boolean, token: string) {
+  const previous = pendingProgressByBook.get(audiobookId) ?? Promise.resolve();
+  const request = previous.catch(() => {}).then(async () => {
+    await apiFetch(`/audiobooks/${audiobookId}/progress`, {
+      method: 'POST',
+      body: JSON.stringify({ chapter_id: chapterId, position_ms: positionMs, finished }),
+    }, token);
+  });
+  pendingProgressByBook.set(audiobookId, request);
+  void request.finally(() => {
+    if (pendingProgressByBook.get(audiobookId) === request) {
+      pendingProgressByBook.delete(audiobookId);
+    }
+  }).catch(() => {});
+  return request;
 }
 
 async function markFinished(audiobookId: number, token: string) {
@@ -165,9 +177,21 @@ export function AudiobookPlayer({
 
     const onTimeUpdate = () => setCurrentTime(audioEl.currentTime);
     const onLoadedMetadata = () => setDuration(audioEl.duration);
+    let started = false;
     const onPlay = () => {
       setPlaying(true);
       publishSystemPlaybackState('playing');
+      if (!started && token) {
+        started = true;
+        // Save the selected chapter before the first ten-second timer tick.
+        // The saved resume position is a fallback while metadata is still loading.
+        const positionMs = Math.floor(Math.max(
+          audioEl.currentTime * 1000,
+          playingChapter.position_ms
+        ));
+        updateProgress(playingChapter.audiobook_id, playingChapter.id, positionMs, false, token)
+          .catch(() => {});
+      }
     };
     const onPause = () => {
       setPlaying(false);
