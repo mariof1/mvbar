@@ -113,11 +113,18 @@ export type AdminBackupJob = {
   includeCaches: boolean;
 };
 
+export type AdminBackupResult = {
+  jobId: string;
+  status: 'created' | 'failed';
+  error?: string;
+};
+
 export async function listAdminBackups(token: string) {
   return (await apiFetch('/admin/backups', { method: 'GET' }, token)) as {
     ok: true;
     backups: AdminBackup[];
     creating: AdminBackupJob | null;
+    lastFinished?: AdminBackupResult | null;
   };
 }
 

@@ -1341,6 +1341,8 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
   const [restoring, setRestoring] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [jobError, setJobError] = useState<string | null>(null);
+  const creatingJobRef = useRef<string | null>(null);
   const backupLastUpdate = useBackupUpdates((state) => state.lastUpdate);
   const beginBackupsRequest = useLatestRequest('admin-backups', token);
 
@@ -1371,6 +1373,13 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
         setBackups(result.backups);
         setCreating(result.creating);
         setListError(null);
+        if (result.creating) creatingJobRef.current = result.creating.id;
+        else if (result.lastFinished?.jobId === creatingJobRef.current) {
+          setJobError(result.lastFinished.status === 'failed'
+            ? result.lastFinished.error || 'Backup creation failed'
+            : null);
+          creatingJobRef.current = null;
+        }
       }
     } catch (err) {
       if (isCurrent()) {
@@ -1394,8 +1403,10 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
 
   async function startBackup() {
     setError(null);
+    setJobError(null);
     try {
       const result = await createAdminBackup(token, includeCaches);
+      creatingJobRef.current = result.job.id;
       setCreating(result.job);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Backup failed');
@@ -1503,6 +1514,9 @@ function BackupSettings({ token, clear }: { token: string; clear: () => void }) 
       )}
       {listError && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">Could not load backups: {listError}</div>
+      )}
+      {jobError && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{jobError}</div>
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">

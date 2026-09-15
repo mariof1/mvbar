@@ -98,6 +98,12 @@ type BackupJob = {
   includeCaches: boolean;
 };
 
+type BackupResult = {
+  jobId: string;
+  status: 'created' | 'failed';
+  error?: string;
+};
+
 type CacheCategory = {
   key: string;
   root: string;
@@ -118,6 +124,7 @@ export type RestoreContext = {
 
 let restoreInProgress = false;
 let backupInProgress: BackupJob | null = null;
+let lastFinishedBackup: BackupResult | null = null;
 
 export function isSafeBackupName(name: string) {
   return BACKUP_NAME_RE.test(name) && path.basename(name) === name;
@@ -1015,7 +1022,7 @@ async function restoreArchiveFile(
 export const backupPlugin: FastifyPluginAsync = fp(async (app) => {
   app.get('/api/admin/backups', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
-    return { ok: true, backups: await listStoredBackups(), creating: backupInProgress };
+    return { ok: true, backups: await listStoredBackups(), creating: backupInProgress, lastFinished: lastFinishedBackup };
   });
 
   app.post('/api/admin/backups', async (req, reply) => {
@@ -1025,15 +1032,22 @@ export const backupPlugin: FastifyPluginAsync = fp(async (app) => {
     const includeCaches = Boolean((req.body as { includeCaches?: boolean } | undefined)?.includeCaches);
     const job: BackupJob = { id: randomUUID(), startedAt: new Date().toISOString(), includeCaches };
     backupInProgress = job;
+    lastFinishedBackup = null;
     broadcastToAdmins('backup:started', { job });
     void createStoredBackup(includeCaches)
       .then((backup) => {
         backupInProgress = null;
+        lastFinishedBackup = { jobId: job.id, status: 'created' };
         broadcastToAdmins('backup:created', { backup, source: 'created' });
         app.log.info({ backup: backup.name, bytes: backup.size }, 'Server backup created');
       })
       .catch((error) => {
         backupInProgress = null;
+        lastFinishedBackup = {
+          jobId: job.id,
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Backup creation failed',
+        };
         app.log.error({ err: error }, 'Server backup creation failed');
         broadcastToAdmins('backup:error', {
           operation: 'create',
@@ -1135,10 +1149,12 @@ export const backupPlugin: FastifyPluginAsync = fp(async (app) => {
     const includeCaches = (req.query as { includeCaches?: string }).includeCaches === 'true';
     const job: BackupJob = { id: randomUUID(), startedAt: new Date().toISOString(), includeCaches };
     backupInProgress = job;
+    lastFinishedBackup = null;
     broadcastToAdmins('backup:started', { job });
     try {
       const backup = await createStoredBackup(includeCaches);
       backupInProgress = null;
+      lastFinishedBackup = { jobId: job.id, status: 'created' };
       broadcastToAdmins('backup:created', { backup, source: 'created' });
       return reply
         .type('application/zip')
@@ -1148,6 +1164,7 @@ export const backupPlugin: FastifyPluginAsync = fp(async (app) => {
         .send(createReadStream(path.join(BACKUP_DIRECTORY, backup.name)));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Backup creation failed';
+      lastFinishedBackup = { jobId: job.id, status: 'failed', error: message };
       broadcastToAdmins('backup:error', { operation: 'create', error: message });
       return reply.code(500).send({ ok: false, error: message });
     } finally {
