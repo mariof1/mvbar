@@ -45,3 +45,11 @@ Confirmed podcast completion bug: the still-mounted player continued its five-se
 Both browser regressions passed against an isolated updated production preview, along with the two mobile queue gestures and repeat-one history/scrobble regression. Web TypeScript and targeted ESLint passed. The preview had the known Windows symlink trace warning but built successfully. Fixture API and websocket requests were intercepted, so no real account or media progress was changed. Next gaps: actual podcast/audiobook resume and seek with isolated playback, authenticated web-to-web Connect, and real 4K side-card browsing.
 
 The updated web build was deployed to the local npm stack after the admin page showed no active scan or playback. Port 8080 returned to ready, and both intercepted browser regressions passed against it.
+
+### Follow-up: immediate podcast resume after pause or close
+
+Confirmed issue: podcast progress was saved to the API only by the five-second timer, throttled to fifteen seconds. The global player supplies no final-progress callback, so a seek followed by pause or closing the player before the next timer tick lost the resume position. An isolated browser fixture closed an episode at 42 seconds on the previous local build and received no progress request.
+
+The player now saves its current position on pause and cleanup, with a small keepalive request for a closing tab. It updates local and websocket progress at the same time, allowing an immediate reopen to resume at the saved position. The completed state is retained when replaying an already-played episode. The browser fixture passed against an isolated updated production preview: active close resumed at 42 seconds, pause resumed at 30 seconds, and an ended episode stayed out of In progress after the timer. The audiobook chapter-switch regression, web TypeScript, targeted ESLint and preview production build also passed. The preview emitted the known Windows symlink trace warning without a build failure. All test API and websocket traffic was isolated; no real account progress was altered.
+
+After the admin page showed no scan or player activity, the main web build was deployed to the local npm stack. Port 8080 returned to ready, and the intercepted pause/close/resume/completion browser regression passed against it.

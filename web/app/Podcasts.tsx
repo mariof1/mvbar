@@ -1360,10 +1360,12 @@ export function PodcastPlayer({
     }
 
     // Event handlers - store references for cleanup
+    let completed = episode.played;
     const onTimeUpdate = () => setCurrentTime(audioEl.currentTime);
     const onLoadedMetadata = () => setDuration(audioEl.duration);
     const onEnded = () => {
       setPlaying(false);
+      completed = true;
       const positionMs = Math.floor(audioEl.currentTime * 1000);
       onProgressUpdate?.(episode.id, positionMs, true);
       // Persist played=true to the API so it leaves "Continue Listening"
@@ -1383,9 +1385,25 @@ export function PodcastPlayer({
       setPlaying(true);
       publishSystemPlaybackState('playing');
     };
+    const saveStoppedPosition = () => {
+      if (!token || audioEl.ended || audioEl.currentTime <= 0) return;
+      const positionMs = Math.floor(audioEl.currentTime * 1000);
+      apiFetch(
+        `/podcasts/episodes/${episode.id}/progress`,
+        { method: 'POST', body: JSON.stringify({ positionMs }), keepalive: true },
+        token
+      ).catch(() => {});
+      updateLocalPodcastProgress(episode.id, positionMs, completed);
+      sendWebSocketMessage('podcast:progress', {
+        episodeId: episode.id,
+        position_ms: positionMs,
+        played: completed,
+      });
+    };
     const onPause = () => {
       setPlaying(false);
       publishSystemPlaybackState('paused');
+      saveStoppedPosition();
     };
 
     audioEl.addEventListener('timeupdate', onTimeUpdate);
@@ -1406,7 +1424,7 @@ export function PodcastPlayer({
         const now = Date.now();
         
         // Update local progress store for UI sync (Continue Listening, etc.) - every 5s
-        updateLocalPodcastProgress(episode.id, positionMs, false);
+        updateLocalPodcastProgress(episode.id, positionMs, completed);
         
         // Save to API (throttle to every 15s)
         if (now - lastApiSave >= 15000) {
@@ -1424,7 +1442,7 @@ export function PodcastPlayer({
           sendWebSocketMessage('podcast:progress', {
             episodeId: episode.id,
             position_ms: positionMs,
-            played: false,
+            played: completed,
           });
         }
       }
@@ -1438,9 +1456,10 @@ export function PodcastPlayer({
       audioEl.removeEventListener('ended', onEnded);
       audioEl.removeEventListener('play', onPlay);
       audioEl.removeEventListener('pause', onPause);
+      saveStoppedPosition();
       // Save final position
       if (audioEl.currentTime > 0) {
-        onProgressUpdate?.(episode.id, Math.floor(audioEl.currentTime * 1000), false);
+        onProgressUpdate?.(episode.id, Math.floor(audioEl.currentTime * 1000), completed);
       }
       audioEl.pause();
       audioEl.src = '';

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('a completed podcast stays played while its player remains open', async ({ page }) => {
+test('closing or pausing a podcast saves its seek and completion stays played', async ({ page }) => {
   await page.addInitScript(() => {
     const originalAudio = window.Audio;
     const instances: HTMLAudioElement[] = [];
@@ -76,17 +76,46 @@ test('a completed podcast stays played while its player remains open', async ({ 
     __auditPodcastAudio: HTMLAudioElement[];
   }).__auditPodcastAudio.length)).toBe(1);
   await page.evaluate(() => {
+    (window as typeof window & { __auditPodcastAudio: HTMLAudioElement[] })
+      .__auditPodcastAudio[0].currentTime = 42;
+  });
+  await page.locator('button[title="Close"]').last().click();
+  await expect.poll(() => progress.some(request => request.positionMs === 42000)).toBe(true);
+  await page.getByRole('button', { name: 'Play Fixture episode' }).click();
+  await expect.poll(() => page.evaluate(() => (window as typeof window & {
+    __auditPodcastAudio: HTMLAudioElement[];
+  }).__auditPodcastAudio.length)).toBe(2);
+  await expect.poll(() => page.evaluate(() => (window as typeof window & {
+    __auditPodcastAudio: HTMLAudioElement[];
+  }).__auditPodcastAudio[1].currentTime)).toBe(42);
+  await page.evaluate(() => {
+    const audio = (window as typeof window & { __auditPodcastAudio: HTMLAudioElement[] })
+      .__auditPodcastAudio[1];
+    audio.currentTime = 30;
+    audio.pause();
+  });
+  await expect.poll(() => progress.some(request => request.positionMs === 30000)).toBe(true);
+  await page.locator('button[title="Close"]').last().click();
+  await page.getByRole('button', { name: 'Play Fixture episode' }).click();
+  await expect.poll(() => page.evaluate(() => (window as typeof window & {
+    __auditPodcastAudio: HTMLAudioElement[];
+  }).__auditPodcastAudio.length)).toBe(3);
+  await expect.poll(() => page.evaluate(() => (window as typeof window & {
+    __auditPodcastAudio: HTMLAudioElement[];
+  }).__auditPodcastAudio[2].currentTime)).toBe(30);
+  await page.evaluate(() => {
     const state = window as typeof window & {
       __auditPodcastAudio: HTMLAudioElement[];
       __auditEndPodcast: (audio: HTMLAudioElement) => void;
     };
-    const audio = state.__auditPodcastAudio[0];
+    const audio = state.__auditPodcastAudio[2];
     audio.currentTime = 60;
     state.__auditEndPodcast(audio);
   });
   await expect.poll(() => progress.some(request => request.played === true)).toBe(true);
   await expect(page.getByRole('button', { name: /In progress 0/ })).toBeVisible();
+  const requestsAtCompletion = progress.length;
   await page.waitForTimeout(5500);
   await expect(page.getByRole('button', { name: /In progress 0/ })).toBeVisible();
-  expect(progress).toHaveLength(1);
+  expect(progress).toHaveLength(requestsAtCompletion);
 });
