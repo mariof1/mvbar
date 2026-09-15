@@ -32,4 +32,6 @@ Confirmed issue: after a song ended in repeat-one mode, PlayerBar sought to zero
 
 At the repeat boundary, PlayerBar now resets its per-listen state and start timestamp, and the shell clears the same-track history latch. The test passed against an isolated updated production preview: two completed cycles yielded two history requests and two scrobbles. Web TypeScript, targeted ESLint, the preview build, and eight related Last.fm, mobile player and Connect tests passed. The preview emitted the same Windows symlink trace warning as prior runs, without a build failure. All API and websocket responses in these browser checks were isolated; no real account, playback history or media was changed.
 
+After the library scan and player were idle, the updated main web build was deployed to the local npm stack. The repeat-one regression test passed against port 8080 after restart, and the in-app admin page recovered normally.
+
 Next gaps: authenticated web-to-web Connect with isolated live players, real podcast/audiobook resume and seek, and real 4K library browsing.
