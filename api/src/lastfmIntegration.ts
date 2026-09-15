@@ -442,7 +442,7 @@ async function submitUserTrack(
   if (!server.apiKey || !server.sharedSecret) return { submitted: false, reason: 'server_not_configured' };
 
   const params: Record<string, string> = {
-    artist: track.artist,
+    artist: lastfmSubmissionArtist(track.artist),
     track: track.title,
     sk: user.sessionKey,
   };
