@@ -1386,11 +1386,13 @@ function PlayerBar(props: {
 
             {/* Track identity and timeline stay together at every phone width. */}
             <div className="mobile-player-track-panel mx-5 mb-3 rounded-2xl border border-white/[0.06] bg-white/[0.035] px-4 py-3 text-center">
-              <ScrollingTrackTitle
-                text={props.nowPlaying.title ?? `Track #${props.nowPlaying.id}`}
-                align="center"
-                className="text-xl font-bold leading-tight text-white"
-              />
+              <h2>
+                <ScrollingTrackTitle
+                  text={props.nowPlaying.title ?? `Track #${props.nowPlaying.id}`}
+                  align="center"
+                  className="text-xl font-bold leading-tight text-white"
+                />
+              </h2>
               <p className="mt-1 truncate text-sm text-white/60">
                 {props.nowPlaying.artist ?? 'Unknown Artist'}
               </p>
