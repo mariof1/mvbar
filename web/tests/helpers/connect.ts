@@ -39,7 +39,7 @@ export async function connectFixture(page: import('@playwright/test').Page) {
       ? { ok: true, user: { id: 'connect-audit', email: 'test@local', role: 'admin' } }
       : { ok: true, items: [], tracks: [], playlists: [], devices: [], searches: [] },
   }));
-  await page.goto('http://localhost:8080/#/for-you');
+  await page.goto(`${process.env.MVBAR_TEST_URL || 'http://localhost:8080'}/#/for-you`);
   await expect.poll(() => outgoing.some(m => m.type === 'connect:register')).toBe(true);
   return {
     outgoing,

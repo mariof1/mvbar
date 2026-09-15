@@ -55,6 +55,7 @@ export function startMusicPlayback(trackId: number, play = true): Promise<void> 
   const streamUrl = directMusicStreamUrl(trackId);
   if (audio.getAttribute('src') !== streamUrl) {
     audio.src = streamUrl;
+    delete audio.dataset.mvbarPlaybackStartedAt;
   }
   if (!play) {
     audio.pause();
@@ -65,6 +66,9 @@ export function startMusicPlayback(trackId: number, play = true): Promise<void> 
   }
   audio.dataset.mvbarPlaybackState = 'pending';
   delete audio.dataset.mvbarPlaybackError;
+  // The first playing event may arrive before PlayerBar mounts its listeners.
+  // Keep the track's start time on the persistent audio element across pauses.
+  audio.dataset.mvbarPlaybackStartedAt ||= String(Math.floor(Date.now() / 1000));
   const playPromise = audio.play();
   playPromise.then(
     () => {
@@ -79,6 +83,7 @@ export function startMusicPlayback(trackId: number, play = true): Promise<void> 
     (error: unknown) => {
       if (attempt === playbackAttempt) {
         audio.dataset.mvbarPlaybackState = 'failed';
+        delete audio.dataset.mvbarPlaybackStartedAt;
         audio.dataset.mvbarPlaybackError = error && typeof error === 'object' && 'name' in error
           ? String((error as { name?: unknown }).name || '')
           : 'PlaybackError';
@@ -95,6 +100,7 @@ export function stopMusicPlayback(clearSource = false): void {
 
   audio.pause();
   audio.dataset.mvbarPlaybackState = 'idle';
+  delete audio.dataset.mvbarPlaybackStartedAt;
   publishSystemPlaybackState('none');
   delete audio.dataset.mvbarPlaybackError;
   if (clearSource) {

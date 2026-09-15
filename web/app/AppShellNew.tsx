@@ -522,7 +522,7 @@ function PlayerBar(props: {
   hasNext: boolean;
   onPrev: () => void;
   onNext: (p?: { currentTime: number; duration: number }) => void;
-  onPlayed: (p: { currentTime: number; duration: number; listenedMs: number }) => void;
+  onPlayed: (p: { currentTime: number; duration: number; listenedMs: number; startedAt: number | null }) => void;
   onPlaybackStopped: (p: {
     trackId: number;
     currentTime: number;
@@ -681,6 +681,7 @@ function PlayerBar(props: {
     duration: 0,
     lastPosition: 0,
     listenedSeconds: 0,
+    startedAt: null as number | null,
   });
   const lastNotifiedTrackRef = useRef<number | null>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -715,6 +716,7 @@ function PlayerBar(props: {
       duration: 0,
       lastPosition: 0,
       listenedSeconds: 0,
+      startedAt: null,
     };
 
     return () => {
@@ -948,12 +950,25 @@ function PlayerBar(props: {
       setIsPlaying(false);
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     };
+    const markPlaybackStart = () => {
+      const metrics = playbackMetricsRef.current;
+      if (metrics.trackId === playerEventPropsRef.current.nowPlaying.id && metrics.startedAt === null) {
+        const audioStart = Number(a.dataset.mvbarPlaybackStartedAt);
+        if (Number.isSafeInteger(audioStart) && audioStart > 0) {
+          metrics.startedAt = audioStart;
+        } else if (!a.paused) {
+          metrics.startedAt = Math.floor(Date.now() / 1000);
+        }
+      }
+    };
+    const onPlaying = () => markPlaybackStart();
     const onTimeUpdate = () => {
       setCurrentTime(a.currentTime);
       playerEventPropsRef.current.onTimeUpdate?.(a.currentTime);
       updateMediaSessionPosition(a.currentTime, a.duration);
       const metrics = playbackMetricsRef.current;
       if (metrics.trackId === playerEventPropsRef.current.nowPlaying.id) {
+        if (!a.paused) markPlaybackStart();
         const delta = a.currentTime - metrics.lastPosition;
         // Ignore seeks while counting actual media consumed. Normal browser
         // timeupdate intervals remain comfortably below ten seconds.
@@ -974,6 +989,7 @@ function PlayerBar(props: {
           currentTime: a.currentTime,
           duration: a.duration,
           listenedMs: Math.round(metrics.listenedSeconds * 1000),
+          startedAt: metrics.startedAt,
         });
       }
     };
@@ -1005,6 +1021,7 @@ function PlayerBar(props: {
           currentTime: Number.isFinite(a.duration) ? a.duration : a.currentTime,
           duration: a.duration,
           listenedMs: Math.round(metrics.listenedSeconds * 1000),
+          startedAt: metrics.startedAt,
         });
       }
       if (currentProps.playMode === 'repeat-one') {
@@ -1016,6 +1033,7 @@ function PlayerBar(props: {
     };
 
     a.addEventListener('play', onPlay);
+    a.addEventListener('playing', onPlaying);
     a.addEventListener('pause', onPause);
     a.addEventListener('timeupdate', onTimeUpdate);
     a.addEventListener('loadedmetadata', onLoadedMetadata);
@@ -1025,6 +1043,7 @@ function PlayerBar(props: {
     a.addEventListener('ended', onEnded);
 
     setIsPlaying(!a.paused);
+    markPlaybackStart();
     setCurrentTime(a.currentTime || 0);
     setDuration(Number.isFinite(a.duration) ? a.duration : 0);
     if ('mediaSession' in navigator) {
@@ -1033,6 +1052,7 @@ function PlayerBar(props: {
 
     return () => {
       a.removeEventListener('play', onPlay);
+      a.removeEventListener('playing', onPlaying);
       a.removeEventListener('pause', onPause);
       a.removeEventListener('timeupdate', onTimeUpdate);
       a.removeEventListener('loadedmetadata', onLoadedMetadata);
@@ -3133,7 +3153,7 @@ export function AppShellNew() {
             }).catch((e: any) => { if (e?.status === 401) clearAuth(); });
             // Scrobble to connected services
             scrobbleToListenBrainz(token, nowPlaying.id).catch(() => {});
-            scrobbleToLastfm(token, nowPlaying.id).catch(() => {});
+            scrobbleToLastfm(token, nowPlaying.id, p.startedAt ?? undefined).catch(() => {});
           }}
           onPlaybackStopped={handlePlaybackStopped}
           onClose={close}
