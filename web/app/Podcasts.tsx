@@ -155,7 +155,7 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
       onSubscribed();
       onClose();
     } catch (err: any) {
-      setError(err?.error || 'Failed to subscribe');
+      setError(err?.data?.error || err?.error || err?.message || 'Failed to subscribe');
     } finally {
       setSubscribing(null);
     }
@@ -197,7 +197,7 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
       onSubscribed();
       onClose();
     } catch (err: any) {
-      setError(err?.error || err?.message || 'Failed to subscribe');
+      setError(err?.data?.error || err?.error || err?.message || 'Failed to subscribe');
     } finally {
       rssPending.current = false;
       setRssLoading(false);
@@ -265,7 +265,7 @@ function SubscribeModal({ onClose, onSubscribed, subscribedFeedUrls }: {
 
             {/* Results */}
             <div className="flex-1 overflow-y-auto space-y-2">
-              {searchResults.length === 0 && !loading && searchQuery && (
+              {searchResults.length === 0 && !loading && !error && searchQuery && (
                 <p className="text-slate-400 text-center py-8">No podcasts found. Try a different search term.</p>
               )}
               {searchResults.map((result) => {
