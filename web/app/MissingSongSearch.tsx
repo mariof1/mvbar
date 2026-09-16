@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from './apiClient';
 import { useAuth } from './store';
 import { useToastStore } from './Toast';
+import { useRouter } from './router';
 
 type Song = {
   recordingId: string; title: string; artist: string; album: string | null;
@@ -12,8 +13,9 @@ type Song = {
   present: boolean; requested: boolean;
 };
 
-export function MissingSongSearch({ query }: { query: string }) {
+export function MissingSongSearch({ query, onExploreArtist }: { query: string; onExploreArtist?: () => void }) {
   const token = useAuth(state => state.token);
+  const navigate = useRouter(state => state.navigate);
   const [enabled, setEnabled] = useState(false);
   const [songs, setSongs] = useState<Song[]>([]);
   const [loading, setLoading] = useState(false);
@@ -83,7 +85,12 @@ export function MissingSongSearch({ query }: { query: string }) {
       songs.length === 0 ? <p className="py-3 text-sm text-slate-400">No catalog matches. Try the song title and artist.</p> :
       <ul className="mt-2 space-y-1">{songs.map(song => <li key={song.recordingId} className="flex items-center gap-3 rounded-lg bg-white/[0.03] p-3">
         <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-white" title={song.title}>{song.title}</p>
-          <p className="truncate text-xs text-slate-400" title={`${song.artist}${song.album ? ` • ${song.album}` : ''}`}>{song.artist}{song.album ? ` • ${song.album}` : ''}</p>
+          <p className="truncate text-xs text-slate-400" title={`${song.artist}${song.album ? ` • ${song.album}` : ''}`}>
+            <button type="button" className="text-left text-cyan-300 hover:underline" onClick={() => {
+              navigate({ type: 'missing-music', artistId: song.musicBrainzArtistId, artistName: song.artist });
+              onExploreArtist?.();
+            }} aria-label={`Find missing albums by ${song.artist}`}>{song.artist}</button>{song.album ? ` • ${song.album}` : ''}
+          </p>
           {song.version && <p className="mt-1 text-xs text-slate-400">{song.version}</p>}</div>
         {song.present ? <span className="shrink-0 text-xs text-emerald-400">In library</span> : song.requested ?
           <span className="shrink-0 text-xs text-cyan-400">Requested</span> :

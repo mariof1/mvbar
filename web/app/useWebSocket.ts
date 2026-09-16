@@ -655,14 +655,16 @@ export function useWebSocket(authIdentity: string | null) {
                 useToastStore.getState().show(msg.data.error || 'Plugin operation failed', 'error', 'top-right');
               }
             }
-          } else if (msg.type === 'missing-music:update') {
-            useMissingMusicUpdates.getState().setEvent(msg);
-            const failed = msg.data.status === 'failed' || msg.data.status === 'rejected';
-            useToastStore.getState().show(
-              msg.data.message || `${msg.data.title}: ${msg.data.status}`,
-              failed ? 'error' : 'success',
-              'top-right',
-            );
+            } else if (msg.type === 'missing-music:update') {
+              useMissingMusicUpdates.getState().setEvent(msg);
+              if (msg.data.event !== 'download-progress') {
+                const failed = msg.data.status === 'failed' || msg.data.status === 'rejected';
+                useToastStore.getState().show(
+                  msg.data.message || `${msg.data.title}: ${msg.data.status}`,
+                  failed ? 'error' : 'success',
+                  'top-right',
+                );
+              }
           } else if (msg.type === 'connect:devices') {
             useMvbarConnect.getState().setDevices(Array.isArray(msg.data.devices) ? msg.data.devices : []);
           } else if (msg.type === 'connect:registered') {

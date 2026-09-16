@@ -3102,7 +3102,7 @@ export function AppShellNew() {
 
             {tab === 'audiobooks' && <Audiobooks />}
 
-            {tab === 'missing-music' && missingMusicEnabled && <MissingMusic />}
+            {tab === 'missing-music' && missingMusicEnabled && <MissingMusic initialArtist={route.type === 'missing-music' && route.artistId && route.artistName ? { id: route.artistId, name: route.artistName } : undefined} />}
 
             {tab === 'missing-music' && !missingMusicEnabled && (
               <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-8 text-center text-white/50">

@@ -205,8 +205,29 @@ The plugin works without external configuration as a managed wanted list.
 Administrators can approve, reject, and manually mark requests fulfilled.
 Optionally, approved requests can be handed to an administrator-configured
 external HTTP service. MVBar sends metadata and MusicBrainz identifiers only.
-The extension has no download, media storage, import, or streaming path;
-delivery stays outside the plugin. Removing the package cascades its request
+The plugin package itself has no media filesystem access. The MVBar host can
+optionally stage a song or a complete album from Deezer after an administrator
+selects an exact match in the request queue. Users can search local or
+MusicBrainz artists in Missing Music, compare their album catalog, and request
+a missing album. Song search results also link to that artist's albums. Album
+titles already in the library can be opened to compare individual tracks; an
+incomplete album can still be requested. The request queue has status filters
+and search, and album downloads show track-by-track progress before packaging.
+Staging verifies the full Deezer track list and prepares one ZIP with tagged
+tracks; a failed track leaves no ready album. This is unavailable while an
+external request provider is configured. Staged files remain outside the music
+library; the administrator can download the song or ZIP, review/import it, and
+then mark the request fulfilled. The account's session cookie is never exposed
+to the plugin or browser.
+
+To enable staging, install `api/requirements-deezer.txt` in a Python environment
+available to the API process (for example,
+`python3 -m pip install -r api/requirements-deezer.txt`) and set `DEEZER_ARL`, `DEEZER_PYTHON`, and
+`DEEZER_DOWNLOAD_DIR` in the server environment. Set `DEEZER_QUALITY=0` for
+MP3 128 (default), `1` for MP3 320, or `2` for FLAC, according to account
+availability. Keep the staging directory private, writable by the API, and
+separate from read-only music mounts. Use downloads only where you have the
+rights to retain the recording. Removing the package cascades its request
 rows, saved artist matches, and MusicBrainz cache.
 
 Plugin releases can be updated in that repository without rebuilding MVBar.

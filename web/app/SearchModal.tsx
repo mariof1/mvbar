@@ -1251,7 +1251,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
             )}
 
             {/* Spotify-style recently selected results */}
-            {isOpen && <MissingSongSearch query={q} />}
+            {isOpen && <MissingSongSearch query={q} onExploreArtist={onClose} />}
             {!hasQuery && recentError && (
               <p role="alert" className="px-5 pt-3 text-sm text-red-400">{recentError}</p>
             )}

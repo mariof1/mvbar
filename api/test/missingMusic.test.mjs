@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs/promises';
 import {
+  albumTrackIsMissing,
   isPrivateNetworkAddress,
   normalizeCatalogText,
   normalizeLocalAlbumTitle,
@@ -106,6 +107,15 @@ test('local album normalization ignores edition metadata without changing real t
   assert.equal(normalizeLocalAlbumTitle('Album – 2024 Remaster'), 'album');
   assert.equal(normalizeLocalAlbumTitle('Album (Disc 2)'), 'album');
   assert.equal(normalizeLocalAlbumTitle('Extended Play'), 'extended play');
+});
+
+test('album track comparison accepts equivalent titles even when recording IDs differ', () => {
+  const ids = new Set(['local-recording']);
+  const titles = new Set([normalizeCatalogText('One More Time')]);
+  assert.equal(albumTrackIsMissing('local-recording', 'Different title', ids, titles), false);
+  assert.equal(albumTrackIsMissing('another-edition', 'One More Time', ids, titles), false);
+  assert.equal(albumTrackIsMissing(null, 'One More Time!', ids, titles), false);
+  assert.equal(albumTrackIsMissing('absent-recording', 'Aerodynamic', ids, titles), true);
 });
 
 test('private network detection covers loopback, RFC1918, link-local, and IPv6 ULA', () => {

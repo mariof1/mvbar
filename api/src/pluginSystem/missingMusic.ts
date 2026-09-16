@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import net from 'node:net';
+import path from 'node:path';
 import fp from 'fastify-plugin';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { allowedLibrariesForUser } from '../access.js';
@@ -9,6 +12,7 @@ import logger from '../logger.js';
 import { broadcastToAdmins, broadcastToUser } from '../websocket.js';
 import { pluginsEnabledGlobally } from './registry.js';
 import type { NdpManifest, PluginDbRow } from './types.js';
+import { deezerStagingConfig, searchDeezerAlbums, searchDeezerTracks, stageDeezerAlbum, stageDeezerTrack, validStagedFilename, verifiedDeezerAlbum, verifiedDeezerTrack } from './deezerStaging.js';
 
 export const MISSING_MUSIC_PLUGIN_ID = 'mvbar.missing-music';
 const EXTENSION_TYPE = 'missing-music';
@@ -134,6 +138,10 @@ export function normalizeLocalAlbumTitle(value: string) {
     }
   }
   return normalized || original;
+}
+
+export function albumTrackIsMissing(recordingId: string | null, title: string, recordingIds: Set<string>, titles: Set<string>) {
+  return !((recordingId && recordingIds.has(recordingId)) || titles.has(normalizeCatalogText(title)));
 }
 
 function artistMatchKey(userId: string, name: string) {
@@ -349,14 +357,20 @@ async function songPresence(req: FastifyRequest, songs: SongCandidate[]) {
 
 let musicBrainzQueue = Promise.resolve();
 let lastMusicBrainzRequestAt = 0;
+const musicBrainzInFlight = new Map<string, Promise<unknown>>();
 
 async function musicBrainzFetch<T>(plugin: MissingMusicPluginRow, cacheKey: string, pathname: string, parameters: Record<string, string>) {
+  const inFlightKey = `${plugin.id}:${cacheKey}`;
+  const existing = musicBrainzInFlight.get(inFlightKey);
+  if (existing) return existing as Promise<T>;
   const cached = await db().query<{ value: Buffer }>(
     `select value from plugin_kv
       where plugin_id=$1 and key=$2 and (expires_at is null or expires_at > now())`,
     [plugin.id, `musicbrainz:${cacheKey}`]
   );
   if (cached.rows[0]) return JSON.parse(cached.rows[0].value.toString('utf8')) as T;
+  const queued = musicBrainzInFlight.get(inFlightKey);
+  if (queued) return queued as Promise<T>;
 
   const run = musicBrainzQueue.then(async () => {
     const url = new URL(`/ws/2/${pathname.replace(/^\/+/, '')}`, MUSICBRAINZ_ORIGIN);
@@ -416,6 +430,8 @@ async function musicBrainzFetch<T>(plugin: MissingMusicPluginRow, cacheKey: stri
     return parsed;
   });
   musicBrainzQueue = run.then(() => undefined, () => undefined);
+  musicBrainzInFlight.set(inFlightKey, run);
+  void run.then(() => musicBrainzInFlight.delete(inFlightKey), () => musicBrainzInFlight.delete(inFlightKey));
   return run;
 }
 
@@ -436,9 +452,9 @@ async function releaseGroupsForArtist(plugin: MissingMusicPluginRow, artistMbid:
   for (let offset = 0; offset < 1000; offset += 100) {
     const page = await musicBrainzFetch<{ 'release-group-count'?: number; 'release-groups'?: MbReleaseGroup[] }>(
       plugin,
-      `artist:${artistMbid}:release-groups:${offset}`,
+      `artist:${artistMbid}:release-groups:website-default:${offset}`,
       'release-group',
-      { artist: artistMbid, limit: '100', offset: String(offset) }
+      { artist: artistMbid, 'release-group-status': 'website-default', limit: '100', offset: String(offset) }
     );
     const groups = Array.isArray(page['release-groups']) ? page['release-groups'] : [];
     output.push(...groups);
@@ -480,6 +496,7 @@ async function localCatalog(req: FastifyRequest, artistMbid: string, localArtist
 }
 
 function serializeRequest(row: MediaRequestRow) {
+  const deezer = row.metadata?.deezer as { state?: string; filename?: string; trackId?: string; albumId?: string; trackCount?: number; completed?: number; total?: number; phase?: string } | undefined;
   return {
     id: row.id,
     userId: row.user_id,
@@ -495,10 +512,72 @@ function serializeRequest(row: MediaRequestRow) {
     status: row.status,
     providerRequestId: row.provider_request_id,
     error: row.provider_error,
+    deezer: deezer ? { state: deezer.state ?? null, filename: deezer.filename ?? null,
+      trackId: deezer.trackId ?? null, albumId: deezer.albumId ?? null, trackCount: deezer.trackCount ?? null,
+      completed: deezer.completed ?? null, total: deezer.total ?? null, phase: deezer.phase ?? null } : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
   };
+}
+
+const deezerJobs = new Map<string, Promise<void>>();
+
+async function downloadDeezerRequest(request: MediaRequestRow, itemId: string) {
+  try {
+    const album = request.item_type === 'album'
+      ? await verifiedDeezerAlbum(itemId, request.artist, request.title) : null;
+    const reportProgress = async (completed: number, total: number, phase: 'downloading' | 'packaging') => {
+      try {
+        const row = (await db().query<MediaRequestRow>(`update plugin_media_requests
+          set metadata=jsonb_set(metadata,'{deezer}',coalesce(metadata->'deezer','{}'::jsonb)
+            || jsonb_build_object('completed',$2::int,'total',$3::int,'phase',$4::text)), updated_at=now()
+          where id=$1 and metadata->'deezer'->>'state'='downloading' returning *`,
+        [request.id, completed, total, phase])).rows[0];
+        if (row) await notifyRequest(row, 'download-progress');
+      } catch (error) {
+        logger.warn('missing-music', `Could not record Deezer progress for ${request.id}: ${errorMessage(error)}`);
+      }
+    };
+    const filename = album
+      ? await stageDeezerAlbum(album, reportProgress)
+      : await stageDeezerTrack(await verifiedDeezerTrack(itemId, request.artist, request.title, request.album));
+    const deezer = album
+      ? { state: 'staged', albumId: itemId, trackCount: album.trackCount, filename }
+      : { state: 'staged', trackId: itemId, filename };
+    const row = await updateRequest(request.id, {
+      metadata: { ...request.metadata, deezer },
+      provider_error: null,
+    });
+    if (row) {
+      void audit('plugin_media_staged_from_deezer', { pluginId: request.plugin_id, requestId: request.id,
+        itemType: request.item_type, deezerId: itemId, trackCount: album?.trackCount ?? 1, filename })
+        .catch(error => logger.warn('missing-music', `Could not audit Deezer staging: ${errorMessage(error)}`));
+      await notifyRequest(row, 'staged', 'Download is ready in the admin staging folder');
+    }
+  } catch (error) {
+    const message = errorMessage(error).slice(0, 500);
+    try {
+      const row = await updateRequest(request.id, {
+        status: 'failed',
+        provider_error: message,
+        metadata: { ...request.metadata, deezer: { state: 'failed', [request.item_type === 'album' ? 'albumId' : 'trackId']: itemId } },
+      });
+      if (row) await notifyRequest(row, 'failed', message);
+    } catch (databaseError) {
+      logger.error('missing-music', `Could not record Deezer staging failure for ${request.id}: ${errorMessage(databaseError)}`);
+    }
+    logger.warn('missing-music', `Deezer staging failed for request ${request.id}: ${message}`);
+  } finally {
+    deezerJobs.delete(request.id);
+  }
+}
+
+async function recoverInterruptedDeezerJobs() {
+  await db().query(`update plugin_media_requests
+    set status='failed', provider_error='Deezer download was interrupted. Choose the track again to retry.',
+        metadata=jsonb_set(metadata,'{deezer,state}','"failed"'::jsonb), updated_at=now()
+    where plugin_id=$1 and metadata->'deezer'->>'state'='downloading'`, [MISSING_MUSIC_PLUGIN_ID]);
 }
 
 async function notifyRequest(row: MediaRequestRow, event: string, message?: string) {
@@ -617,7 +696,7 @@ export async function runMissingMusicJobs() {
     if (!plugin || !plugin.config.providerBaseUrl) return;
     const jobs = await db().query<MediaRequestRow>(
       `select * from plugin_media_requests
-        where plugin_id=$1 and status in ('approved','submitted')
+        where plugin_id=$1 and status in ('approved','submitted') and not (metadata ? 'deezer')
         order by updated_at,id limit 3`,
       [plugin.id]
     );
@@ -639,7 +718,9 @@ export function startMissingMusicScheduler() {
     logger.error('missing-music', `Scheduler failed: ${errorMessage(error)}`);
   }), 30_000);
   schedulerTimer.unref();
-  void runMissingMusicJobs().catch(() => undefined);
+  void recoverInterruptedDeezerJobs().then(() => runMissingMusicJobs()).catch((error) => {
+    logger.warn('missing-music', `Could not recover interrupted Deezer jobs: ${errorMessage(error)}`);
+  });
 }
 
 export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
@@ -721,6 +802,8 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       enabled: Boolean(installed?.enabled && pluginsEnabledGlobally()),
       configured: providerConfigured,
       providerConfigured,
+      deezerConfigured: deezerStagingConfig().configured,
+      deezerStagingDirectory: req.user.role === 'admin' ? deezerStagingConfig().directory || null : null,
       mode: providerConfigured ? 'provider' : 'wanted-list',
       requireAdminApproval: installed?.config.requireAdminApproval !== false,
       localArtistCount,
@@ -748,8 +831,8 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
         where coalesce(nullif(track.album_artist,''),track.artist,'') <> ''
           and ($1='' or position($1 in lower(coalesce(nullif(track.album_artist,''),track.artist,''))) > 0)
           ${filter.sql}
-        group by 1 order by lower(coalesce(nullif(track.album_artist,''),track.artist)) limit 200`,
-      [query, ...filter.params]
+        group by 1 order by lower(coalesce(nullif(track.album_artist,''),track.artist)) limit $${2 + filter.params.length}`,
+      [query, ...filter.params, query ? 100 : 40]
     );
     const matchKeys = result.rows.map((row) => artistMatchKey(req.user!.userId, row.name));
     const savedMatches = matchKeys.length
@@ -793,7 +876,8 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
         { query, limit: '10' }
       );
       const matches = (result.artists ?? [])
-        .filter((candidate) => validMbid(candidate.id) && typeof candidate.name === 'string' && candidate.name.trim())
+        .filter((candidate) => validMbid(candidate.id) && typeof candidate.name === 'string' && candidate.name.trim()
+          && (Number(candidate.score) >= 60 || normalizeCatalogText(candidate.name).includes(normalizedQuery)))
         .map((candidate) => ({
           id: candidate.id!,
           name: candidate.name!.trim(),
@@ -922,7 +1006,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
           trackNumber: track.position ?? null,
           number: track.number ?? null,
           durationMs: track.length ?? null,
-          missing: recordingId ? !recordingIds.has(recordingId) : !titles.has(normalizeCatalogText(title)),
+          missing: albumTrackIsMissing(recordingId, title, recordingIds, titles),
         };
       }));
       return { ok: true, releaseId: release.id, releaseTitle: detail.title ?? album ?? null, tracks };
@@ -944,6 +1028,75 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       all ? [plugin.id] : [plugin.id, req.user!.userId]
     );
     return { ok: true, requests: result.rows.map(serializeRequest) };
+  });
+
+  app.get('/api/plugins/missing-music/requests/:id/deezer-candidates', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    if (req.user!.role !== 'admin') return reply.code(403).send({ ok: false, error: 'Administrator access required' });
+    const { id } = req.params as { id: string };
+    const request = (await db().query<MediaRequestRow>('select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id])).rows[0];
+    if (!request) return reply.code(404).send({ ok: false, error: 'Request not found' });
+    try {
+      return { ok: true, candidates: request.item_type === 'album'
+        ? await searchDeezerAlbums(request.artist, request.title)
+        : await searchDeezerTracks(request.artist, request.title, request.album) };
+    } catch (error) {
+      logger.warn('missing-music', `Deezer catalog lookup failed: ${errorMessage(error)}`);
+      return reply.code(502).send({ ok: false, error: 'Could not search Deezer. Please try again.' });
+    }
+  });
+
+  app.post('/api/plugins/missing-music/requests/:id/deezer-download', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    if (req.user!.role !== 'admin') return reply.code(403).send({ ok: false, error: 'Administrator access required' });
+    if (plugin.config.providerBaseUrl) return reply.code(409).send({ ok: false, error: 'Disable the external request provider before using Deezer staging' });
+    if (!deezerStagingConfig().configured) return reply.code(409).send({ ok: false, error: 'Set DEEZER_ARL and DEEZER_DOWNLOAD_DIR on the server first' });
+    const body = req.body as { trackId?: unknown; albumId?: unknown } | null;
+    if (body?.albumId !== undefined && body.trackId !== undefined) return reply.code(400).send({ ok: false, error: 'Choose one Deezer item' });
+    const itemType = body?.albumId !== undefined ? 'album' : 'track';
+    const itemId = itemType === 'album' ? body?.albumId : body?.trackId;
+    if (typeof itemId !== 'string' || !/^\d{1,16}$/.test(itemId)) return reply.code(400).send({ ok: false, error: 'Invalid Deezer item id' });
+    const { id } = req.params as { id: string };
+    const request = (await db().query<MediaRequestRow>(
+      `update plugin_media_requests set status='submitted', submitted_at=now(), approved_by=coalesce(approved_by,$3),
+        approved_at=coalesce(approved_at,now()), provider_error=null,
+        metadata=jsonb_set(metadata,'{deezer}',jsonb_build_object('state','downloading',
+          case when item_type='album' then 'albumId' else 'trackId' end,$4::text)), updated_at=now()
+       where id=$1 and plugin_id=$2 and item_type=$5 and status in ('requested','approved','failed')
+         and coalesce(metadata->'deezer'->>'state','') not in ('downloading','staged') returning *`,
+      [id, plugin.id, req.user!.userId, itemId, itemType]
+    )).rows[0];
+    if (!request) return reply.code(409).send({ ok: false, error: 'Request is not available for Deezer staging' });
+    const job = downloadDeezerRequest(request, itemId);
+    deezerJobs.set(id, job);
+    void audit('plugin_media_deezer_download_started', { pluginId: plugin.id, requestId: id, by: req.user!.userId,
+      itemType, deezerId: itemId }).catch(error => logger.warn('missing-music', `Could not audit Deezer start: ${errorMessage(error)}`));
+    await notifyRequest(request, 'downloading', 'An administrator started a Deezer download');
+    return reply.code(202).send({ ok: true, request: serializeRequest(request) });
+  });
+
+  app.get('/api/plugins/missing-music/requests/:id/deezer-file', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    if (req.user!.role !== 'admin') return reply.code(403).send({ ok: false, error: 'Administrator access required' });
+    const { id } = req.params as { id: string };
+    const request = (await db().query<MediaRequestRow>('select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id])).rows[0];
+    const deezer = request?.metadata?.deezer as { state?: string; filename?: unknown } | undefined;
+    if (deezer?.state !== 'staged' || !validStagedFilename(deezer.filename)) return reply.code(404).send({ ok: false, error: 'No staged file for this request' });
+    const directory = deezerStagingConfig().directory;
+    if (!directory) return reply.code(404).send({ ok: false, error: 'Staging directory is not configured' });
+    const file = path.join(directory, deezer.filename);
+    try {
+      const details = await stat(file);
+      if (!details.isFile()) throw new Error('Not a file');
+    } catch {
+      return reply.code(404).send({ ok: false, error: 'Staged file is missing' });
+    }
+    return reply.header('Content-Type', deezer.filename.endsWith('.zip') ? 'application/zip' : deezer.filename.endsWith('.flac') ? 'audio/flac' : 'audio/mpeg')
+      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(deezer.filename)}`)
+      .send(createReadStream(file));
   });
 
   app.post('/api/plugins/missing-music/requests', async (req, reply) => {
@@ -1027,6 +1180,9 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     const action = (req.body as { action?: unknown }).action;
     const current = (await db().query<MediaRequestRow>('select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id])).rows[0];
     if (!current) return reply.code(404).send({ ok: false, error: 'Request not found' });
+    if ((current.metadata?.deezer as { state?: string } | undefined)?.state === 'downloading') {
+      return reply.code(409).send({ ok: false, error: 'Wait for the Deezer download to finish' });
+    }
     try {
       let row: MediaRequestRow;
       if (action === 'approve' && current.status === 'requested') {
@@ -1034,6 +1190,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       } else if (action === 'reject' && ['requested', 'failed'].includes(current.status)) {
         row = await updateRequest(id, { status: 'rejected', approved_by: req.user!.userId, approved_at: new Date(), provider_error: null });
       } else if (action === 'retry' && current.status === 'failed') {
+        if (current.metadata?.deezer) throw new Error('Choose a Deezer match again to retry this download');
         row = await updateRequest(id, { status: current.provider_request_id ? 'submitted' : 'approved', provider_error: null });
       } else if (action === 'complete' && ['requested', 'approved', 'submitted', 'failed'].includes(current.status)) {
         row = await updateRequest(id, {
@@ -1062,6 +1219,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     const result = await db().query<MediaRequestRow>('select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id]);
     const row = result.rows[0];
     if (!row) return reply.code(404).send({ ok: false, error: 'Request not found' });
+    if ((row.metadata?.deezer as { state?: string } | undefined)?.state === 'downloading') return reply.code(409).send({ ok: false, error: 'Wait for the Deezer download to finish' });
     if (req.user!.role !== 'admin' && row.user_id !== req.user!.userId) return reply.code(403).send({ ok: false, error: 'Access denied' });
     await db().query('delete from plugin_media_requests where id=$1', [id]);
     await audit('plugin_media_request_deleted', { pluginId: plugin.id, requestId: id, by: req.user!.userId });

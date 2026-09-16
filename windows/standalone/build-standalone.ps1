@@ -359,6 +359,8 @@ Copy-Item -LiteralPath (Join-Path $FfmpegDirectory "ffmpeg.exe") -Destination $s
 Copy-Item -LiteralPath (Join-Path $FfmpegDirectory "ffprobe.exe") -Destination $stageFfmpeg
 
 Stage-NodeProject "api"
+Copy-TreeContents (Join-Path $repoRoot "api\scripts") (Join-Path $stagingRoot "app\api\scripts")
+Copy-Item -LiteralPath (Join-Path $repoRoot "api\requirements-deezer.txt") -Destination (Join-Path $stagingRoot "app\api\requirements-deezer.txt")
 Stage-NodeProject "worker"
 
 $stageWeb = Join-Path $stagingRoot "app\web"

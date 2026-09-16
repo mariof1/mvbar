@@ -33,7 +33,7 @@ export type Route =
   | { type: 'podcast'; podcastId: number }
   | { type: 'audiobooks' }
   | { type: 'audiobook'; audiobookId: number }
-  | { type: 'missing-music' }
+  | { type: 'missing-music'; artistId?: string; artistName?: string }
   | { type: 'settings' }
   | { type: 'admin' };
 
@@ -76,7 +76,7 @@ function routeToHash(route: Route): string {
     case 'podcast': return `#/podcast/${route.podcastId}`;
     case 'audiobooks': return '#/audiobooks';
     case 'audiobook': return `#/audiobook/${route.audiobookId}`;
-    case 'missing-music': return '#/missing-music';
+    case 'missing-music': return `#/missing-music${route.artistId && route.artistName ? `?artistId=${encodeURIComponent(route.artistId)}&artist=${encodeURIComponent(route.artistName)}` : ''}`;
     case 'settings': return '#/settings';
     case 'admin': return '#/admin';
     default: return '#/for-you';
@@ -109,7 +109,13 @@ function hashToRoute(hash: string): Route {
   if (path === 'history') return { type: 'history' };
   if (path === 'settings') return { type: 'settings' };
   if (path === 'admin') return { type: 'admin' };
-  if (path === 'missing-music') return { type: 'missing-music' };
+  if (path === 'missing-music') {
+    const artistId = query.get('artistId');
+    const artistName = query.get('artist');
+    return artistId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(artistId) && artistName
+      ? { type: 'missing-music', artistId, artistName: artistName.slice(0, 500) }
+      : { type: 'missing-music' };
+  }
   
   // Browse routes
   if (parts[0] === 'browse') {

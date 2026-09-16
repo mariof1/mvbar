@@ -239,6 +239,8 @@ chmod +x \
 copy_elf_dependencies "$STAGING_ROOT/runtime" "$STAGING_ROOT/runtime/lib"
 
 stage_node_project api
+copy_tree "$REPO_ROOT/api/scripts" "$STAGING_ROOT/app/api/scripts"
+cp "$REPO_ROOT/api/requirements-deezer.txt" "$STAGING_ROOT/app/api/requirements-deezer.txt"
 stage_node_project worker
 
 copy_tree "$REPO_ROOT/web/.next/standalone" "$STAGING_ROOT/app/web"
