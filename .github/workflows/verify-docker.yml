@@ -1,0 +1,31 @@
+name: Verify Docker image
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - Dockerfile
+      - docker-compose.yml
+      - api/requirements-deezer.txt
+      - api/scripts/deezer_download.py
+      - .github/workflows/verify-docker.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
