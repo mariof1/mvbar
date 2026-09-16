@@ -47,6 +47,9 @@ services:
       PLUGIN_TIMEOUT_MS: ${PLUGIN_TIMEOUT_MS:-15000}
       PLUGIN_MEMORY_MB: ${PLUGIN_MEMORY_MB:-64}
       PLUGIN_MAX_CONCURRENCY: ${PLUGIN_MAX_CONCURRENCY:-4}
+      DEEZER_ARL: ${DEEZER_ARL:-}
+      DEEZER_DOWNLOAD_DIR: /data/deezer-staging
+      DEEZER_QUALITY: ${DEEZER_QUALITY:-0}
 
       # worker
       MUSIC_DIRS: /music
@@ -84,6 +87,7 @@ services:
       - cache:/data/cache
       - backups:/data/backups
       - plugins:/data/plugins
+      - deezer_staging:/data/deezer-staging
       - device_logs:/data/device-logs
       - hls:/hls
       - podcasts:/podcasts
@@ -104,6 +108,7 @@ volumes:
   cache:
   backups:
   plugins:
+  deezer_staging:
   device_logs:
   hls:
   podcasts:

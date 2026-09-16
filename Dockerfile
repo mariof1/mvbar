@@ -44,6 +44,12 @@ WORKDIR /src/web
 COPY web/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
+FROM alpine:3.20 AS deezer_builder
+RUN apk add --no-cache python3 py3-pip py3-virtualenv
+COPY api/requirements-deezer.txt /tmp/requirements-deezer.txt
+RUN python3 -m virtualenv /opt/mvbar-deezer && \
+    /opt/mvbar-deezer/bin/pip install --no-cache-dir --only-binary=:all: -r /tmp/requirements-deezer.txt
+
 FROM alpine:3.20
 
 # Re-declare args to use in final stage
@@ -65,6 +71,8 @@ RUN apk add --no-cache \
     su-exec \
     tzdata \
     ffmpeg \
+    python3 \
+    libstdc++ \
     ca-certificates
 
 ENV NODE_ENV=production \
@@ -75,6 +83,7 @@ ENV NODE_ENV=production \
     MEILI_PORT=7700 \
     REDIS_PORT=6379 \
     POSTGRES_PORT=5432 \
+    DEEZER_PYTHON=/opt/mvbar-deezer/bin/python \
     APP_VERSION=${APP_VERSION} \
     GIT_COMMIT=${GIT_COMMIT} \
     GIT_BRANCH=${GIT_BRANCH} \
@@ -85,6 +94,10 @@ WORKDIR /app
 COPY --from=api_builder /src/api/package.json /app/api/package.json
 COPY --from=api_builder /src/api/node_modules /app/api/node_modules
 COPY --from=api_builder /src/api/dist /app/api/dist
+COPY --from=api_builder /src/api/scripts /app/api/scripts
+COPY --from=api_builder /src/api/requirements-deezer.txt /app/api/requirements-deezer.txt
+COPY --from=deezer_builder /opt/mvbar-deezer /opt/mvbar-deezer
+RUN "$DEEZER_PYTHON" -c "from streamrip.client.deezer import DeezerClient; from mutagen import File"
 
 COPY --from=worker_builder /src/worker/package.json /app/worker/package.json
 COPY --from=worker_builder /src/worker/node_modules /app/worker/node_modules

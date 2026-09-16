@@ -220,10 +220,15 @@ library; the administrator can download the song or ZIP, review/import it, and
 then mark the request fulfilled. The account's session cookie is never exposed
 to the plugin or browser.
 
-To enable staging, install `api/requirements-deezer.txt` in a Python environment
-available to the API process (for example,
-`python3 -m pip install -r api/requirements-deezer.txt`) and set `DEEZER_ARL`, `DEEZER_PYTHON`, and
-`DEEZER_DOWNLOAD_DIR` in the server environment. Set `DEEZER_QUALITY=0` for
+For Docker Compose, add `DEEZER_ARL` to the private `.env` file and rebuild with
+`docker compose up -d --build`. The image includes Python, streamrip, and the
+download helper; Compose supplies a persistent `deezer_staging` volume. You do
+not need to install Python inside a running container or set `DEEZER_PYTHON`.
+
+For a standalone server, install `api/requirements-deezer.txt` in a Python
+environment available to the API process (for example,
+`python3 -m pip install -r api/requirements-deezer.txt`) and set `DEEZER_ARL`,
+`DEEZER_PYTHON`, and `DEEZER_DOWNLOAD_DIR` in the server environment. Set `DEEZER_QUALITY=0` for
 MP3 128 (default), `1` for MP3 320, or `2` for FLAC, according to account
 availability. Keep the staging directory private, writable by the API, and
 separate from read-only music mounts. Use downloads only where you have the
