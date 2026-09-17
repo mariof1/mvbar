@@ -56,9 +56,10 @@ async def main():
                 ("tracknumber", metadata.get("trackNumber")),
                 ("discnumber", metadata.get("discNumber")),
                 ("date", job.get("releaseDate")),
+                ("genre", job.get("genre")),
             ):
                 if value:
-                    audio[key] = [str(value)]
+                    audio[key] = [str(item) for item in value] if isinstance(value, list) else [str(value)]
             audio.save()
             extensions.append(extension)
             if "tracks" in job:

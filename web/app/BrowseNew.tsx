@@ -54,6 +54,7 @@ type Track = {
   discNumber?: number | null;
   trackNumber?: number | null;
   source_plugin_id?: string | null;
+  library_id?: number;
 };
 
 type AlbumDetail = {
@@ -286,8 +287,7 @@ export function BrowseNew(props: {
 
   const [albumDetail, setAlbumDetail] = useState<AlbumDetail | null>(null);
 
-  const [anyWritable, setAnyWritable] = useState(false);
-  const [canEditMeta, setCanEditMeta] = useState(false);
+  const [writableLibraryIds, setWritableLibraryIds] = useState<Set<number>>(() => new Set());
   const [editOpen, setEditOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
@@ -546,19 +546,16 @@ export function BrowseNew(props: {
 
   useEffect(() => {
     if (!token || user?.role !== 'admin') {
-      setAnyWritable(false);
-      setCanEditMeta(false);
+      setWritableLibraryIds(new Set());
       return;
     }
     (async () => {
       try {
         const r = await adminLibraryWritable(token);
-        setAnyWritable(Boolean(r.anyWritable));
-        setCanEditMeta(Boolean(r.anyWritable));
+        setWritableLibraryIds(new Set(r.libraries.filter((library) => library.writable).map((library) => library.id)));
       } catch (e: any) {
         if (e?.status === 401) clear();
-        setAnyWritable(false);
-        setCanEditMeta(false);
+        setWritableLibraryIds(new Set());
       }
     })();
   }, [token, user?.role, clear]);
@@ -933,6 +930,7 @@ export function BrowseNew(props: {
 
   // Album Detail View
   if (albumDetail) {
+    const existingAlbumTrack = albumDetail.tracks.find((track) => !track.source_plugin_id);
     const openEditTrack = (t: Track) => {
       setEditTrack(t);
       setEditTitle(t.title ?? '');
@@ -1099,14 +1097,15 @@ export function BrowseNew(props: {
                       </svg>
                     </button>
 
-                    {canEditMeta && (track.path ?? '').toLowerCase().endsWith('.mp3') && (
+                    {writableLibraryIds.has(track.library_id ?? -1) && (/\.(mp3|flac)$/i.test(track.path ?? '')) &&
+                      ((track.path ?? '').toLowerCase().endsWith('.mp3') || track.source_plugin_id === 'mvbar.missing-music') && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           openEditTrack(track);
                         }}
                         className="p-1.5 sm:p-2 rounded-full hover:bg-slate-700 text-slate-400"
-                        title="Edit metadata (MP3)"
+                        title="Edit metadata"
                       >
                         <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
@@ -1166,6 +1165,19 @@ export function BrowseNew(props: {
                 <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
                   {editError}
                 </div>
+              )}
+
+              {editTrack.source_plugin_id === 'mvbar.missing-music' && existingAlbumTrack && (
+                <button type="button" onClick={() => {
+                  setEditAlbum(existingAlbumTrack.album || albumDetail.name);
+                  if (existingAlbumTrack.album_artist) setEditAlbumArtist(existingAlbumTrack.album_artist.split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/).filter(Boolean).join('\n'));
+                  if (existingAlbumTrack.year) setEditYear(String(existingAlbumTrack.year));
+                  if (existingAlbumTrack.genre) setEditGenre(existingAlbumTrack.genre.split(';').map((part) => part.trim()).filter(Boolean).join('\n'));
+                  if (existingAlbumTrack.country) setEditCountry(existingAlbumTrack.country.split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/).filter(Boolean).join('\n'));
+                  if (existingAlbumTrack.language) setEditLanguage(existingAlbumTrack.language.split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/).filter(Boolean).join('\n'));
+                }} className="mt-4 w-full rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-left text-sm text-cyan-200 hover:bg-cyan-500/20">
+                  Use album metadata from your library <span className="block text-xs text-slate-400">Copies album artist, year, genre, country and language. Track title and artist stay as they are.</span>
+                </button>
               )}
 
               <div className="mt-4 space-y-3">
@@ -1282,7 +1294,7 @@ export function BrowseNew(props: {
                 </div>
 
                 <div className="text-xs text-slate-500 flex items-end">
-                  MP3 only (writes ID3 tags) · forces a rescan
+                  Saves tags to the writable audio file and refreshes the library.
                 </div>
               </div>
 
@@ -1374,29 +1386,16 @@ export function BrowseNew(props: {
                       }
 
                       await adminUpdateTrackMetadata(token, editTrack.id, payload);
-
-                      // If album name changed, navigate to the new album route.
-                      const newAlbum = editAlbum.trim();
-                      if (newAlbum && newAlbum !== albumDetail.name) {
-                        navigate({ type: 'browse-album', artist: '', album: newAlbum, artistId: undefined });
-                      }
-
-                      // Best-effort refresh (rescan can take a moment)
-                      await new Promise((r) => setTimeout(r, 1500));
-                      if (activeAlbum) {
-                        const r = await browseAlbum(token, activeAlbum.artist, activeAlbum.album, activeAlbum.artistId);
-                        setAlbumDetail({
-                          name: r.album.name,
-                          artist: r.album.artist,
-                          art_path: r.album.art_path,
-                          tracks: r.tracks,
-                          totalDiscs: r.album.total_discs ?? 1,
-                          hasPluginDownloads: Boolean(r.album.has_plugin_downloads),
-                        });
-                      }
-
                       setEditOpen(false);
                       setEditInitial(null);
+                      showToast('Metadata saved. The library is updating.', 'success');
+                      if (payload.album !== undefined || payload.albumArtist !== undefined || payload.artists !== undefined) {
+                        const newAlbum = editAlbum.trim();
+                        if (newAlbum) navigate({ type: 'browse-album', artist: '', album: newAlbum, artistId: undefined });
+                        else navigate({ type: 'browse', sub: 'albums' });
+                      } else {
+                        window.setTimeout(() => { void refreshAlbumDetail(); }, 1500);
+                      }
                     } catch (e: any) {
                       if (e?.status === 401) clear();
                       setEditError(e?.data?.error || e?.data?.message || e?.message || 'Failed to save');

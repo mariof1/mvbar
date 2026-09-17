@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { searchDeezerAlbums, searchDeezerTracks, verifiedDeezerAlbum, verifiedDeezerTrack, validStagedFilename } from '../dist/pluginSystem/deezerStaging.js';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import unzipper from 'unzipper';
+import { publishStagedTrack, refreshStagedAlbumArchive, searchDeezerAlbums, searchDeezerTracks, stagedAlbumComplete, verifiedDeezerAlbum, verifiedDeezerTrack, validStagedFilename } from '../dist/pluginSystem/deezerStaging.js';
 
 test('Deezer matching keeps the main recording and rejects alternate versions', async () => {
   const originalFetch = globalThis.fetch;
@@ -8,7 +12,7 @@ test('Deezer matching keeps the main recording and rejects alternate versions', 
   globalThis.fetch = async (url) => {
     urls.push(String(url));
     return new Response(JSON.stringify({ data: [
-      { id: 1, title: 'One More Time', title_short: 'One More Time', artist: { name: 'Daft Punk' }, album: { title: 'Discovery' }, duration: 320 },
+      { id: 1, title: 'One More Time', title_short: 'One More Time', artist: { name: 'Daft Punk' }, album: { title: 'Discovery' }, duration: 320, disk_number: 1, track_position: 8 },
       { id: 2, title: 'One More Time (Live)', title_short: 'One More Time', artist: { name: 'Daft Punk' }, album: { title: 'Live' } },
       { id: 3, title: 'One More Time', artist: { name: 'Other Artist' } },
       { id: 4, title: 'One More Time / Aerodynamic', artist: { name: 'Daft Punk' }, album: { title: 'Alive 2007' } },
@@ -20,6 +24,8 @@ test('Deezer matching keeps the main recording and rejects alternate versions', 
     assert.equal(tracks[0].album, 'Discovery');
     assert.equal(tracks[0].durationMs, 320_000);
     assert.equal(tracks[0].score, 110);
+    assert.equal(tracks[0].discNumber, 1);
+    assert.equal(tracks[0].trackNumber, 8);
     assert.match(urls[0], /^https:\/\/api\.deezer\.com\/search\?/);
   } finally {
     globalThis.fetch = originalFetch;
@@ -37,7 +43,11 @@ test('Deezer download selection validates the current catalog item', async () =>
   }
   assert.equal(validStagedFilename('Daft Punk - One More Time [deezer-42].mp3'), true);
   assert.equal(validStagedFilename('Daft Punk - Discovery [deezer-album-42].zip'), true);
+  assert.equal(validStagedFilename('Daft Punk/Discovery/01-08 One More Time.mp3'), true);
+  assert.equal(validStagedFilename('Daft Punk/Discovery.zip'), true);
   assert.equal(validStagedFilename('../secrets.mp3'), false);
+  assert.equal(validStagedFilename('Daft Punk/../secrets.mp3'), false);
+  assert.equal(validStagedFilename('Daft Punk\\Discovery\\song.mp3'), false);
 });
 
 test('Deezer album selection rejects other versions and validates every paginated track', async () => {
@@ -78,5 +88,73 @@ test('Deezer album selection rejects other versions and validates every paginate
     await assert.rejects(verifiedDeezerAlbum('42', 'Other Artist', 'Discovery'), /does not match/);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('album downloads are repackaged from edited staged files', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'mvbar-staged-'));
+  const oldDirectory = process.env.DEEZER_DOWNLOAD_DIR;
+  process.env.DEEZER_DOWNLOAD_DIR = directory;
+  try {
+    const album = path.join(directory, 'Artist', 'Album');
+    await mkdir(album, { recursive: true });
+    await writeFile(path.join(album, '01-01 Song.flac'), 'before');
+    await refreshStagedAlbumArchive('Artist/Album.zip');
+    await writeFile(path.join(album, '01-01 Song.flac'), 'after');
+    await refreshStagedAlbumArchive('Artist/Album.zip');
+    const archive = await unzipper.Open.file(path.join(directory, 'Artist', 'Album.zip'));
+    assert.deepEqual(archive.files.map(file => file.path), ['Artist/Album/01-01 Song.flac']);
+    assert.equal((await archive.files[0].buffer()).toString(), 'after');
+    assert.equal((await readFile(path.join(album, '01-01 Song.flac'))).toString(), 'after');
+  } finally {
+    if (oldDirectory === undefined) delete process.env.DEEZER_DOWNLOAD_DIR;
+    else process.env.DEEZER_DOWNLOAD_DIR = oldDirectory;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('staged albums reject missing tracks even when other audio files remain', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'mvbar-staged-manifest-'));
+  const oldDirectory = process.env.DEEZER_DOWNLOAD_DIR;
+  process.env.DEEZER_DOWNLOAD_DIR = directory;
+  try {
+    const album = path.join(directory, 'Artist', 'Album');
+    const expected = ['01-01 First.flac', '01-02 Second.flac'];
+    await mkdir(album, { recursive: true });
+    await writeFile(path.join(album, expected[0]), 'first');
+    await writeFile(path.join(album, expected[1]), 'second');
+    assert.equal(await stagedAlbumComplete('Artist/Album.zip', expected, 2), true);
+    await refreshStagedAlbumArchive('Artist/Album.zip', expected, 2);
+    await rm(path.join(album, expected[1]));
+    await writeFile(path.join(album, '01-03 Extra.flac'), 'extra');
+    assert.equal(await stagedAlbumComplete('Artist/Album.zip', expected, 2), false);
+    await assert.rejects(refreshStagedAlbumArchive('Artist/Album.zip', expected, 2), /incomplete/);
+    await writeFile(path.join(album, expected[1]), 'second again');
+    await refreshStagedAlbumArchive('Artist/Album.zip', expected, 2);
+    const archive = await unzipper.Open.file(path.join(directory, 'Artist', 'Album.zip'));
+    assert.deepEqual(archive.files.map(file => file.path), expected.map(name => `Artist/Album/${name}`));
+  } finally {
+    if (oldDirectory === undefined) delete process.env.DEEZER_DOWNLOAD_DIR;
+    else process.env.DEEZER_DOWNLOAD_DIR = oldDirectory;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('single-song staging uses disc-track filenames and preserves colliding tracks', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'mvbar-track-'));
+  try {
+    const track = { id: '42', artist: 'Daft Punk', album: 'Discovery', title: 'One More Time', discNumber: 1, trackNumber: 8 };
+    const firstSource = path.join(directory, 'first.mp3');
+    const secondSource = path.join(directory, 'second.mp3');
+    await writeFile(firstSource, 'first recording');
+    await writeFile(secondSource, 'second recording');
+    const first = await publishStagedTrack(directory, firstSource, track, 'mp3');
+    const second = await publishStagedTrack(directory, secondSource, track, 'mp3');
+    assert.equal(first, 'Daft Punk/Discovery/01-08 One More Time.mp3');
+    assert.equal(second, 'Daft Punk/Discovery/01-08 One More Time [deezer-42].mp3');
+    assert.equal((await readFile(path.join(directory, ...first.split('/')))).toString(), 'first recording');
+    assert.equal((await readFile(path.join(directory, ...second.split('/')))).toString(), 'second recording');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });

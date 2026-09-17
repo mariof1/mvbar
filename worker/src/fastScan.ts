@@ -184,7 +184,7 @@ async function* walkDirectory(
           const full = path.join(d, e.name);
           // Downloads are prepared here before an atomic rename publishes them.
           // Never scan a partially written album, even during a periodic scan.
-          if (e.isDirectory() && e.name.startsWith('.incoming-')) continue;
+          if (e.name.startsWith('.incoming-')) continue;
           if (e.isDirectory()) {
             dirs.push(full);
           } else if (e.isFile()) {

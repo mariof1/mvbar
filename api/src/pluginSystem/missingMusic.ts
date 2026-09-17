@@ -12,7 +12,7 @@ import logger from '../logger.js';
 import { broadcastToAdmins, broadcastToUser } from '../websocket.js';
 import { pluginsEnabledGlobally } from './registry.js';
 import type { NdpManifest, PluginDbRow } from './types.js';
-import { deezerStagingConfig, searchDeezerAlbums, searchDeezerTracks, stageDeezerAlbum, stageDeezerTrack, validStagedFilename, verifiedDeezerAlbum, verifiedDeezerTrack } from './deezerStaging.js';
+import { deezerStagingConfig, listStagedAlbumFiles, refreshStagedAlbumArchive, searchDeezerAlbums, searchDeezerTracks, stageDeezerAlbum, stagedAlbumComplete, stageDeezerTrack, validStagedFilename, verifiedDeezerAlbum, verifiedDeezerTrack, type ExistingAlbumMetadata } from './deezerStaging.js';
 
 export const MISSING_MUSIC_PLUGIN_ID = 'mvbar.missing-music';
 const EXTENSION_TYPE = 'missing-music';
@@ -496,7 +496,7 @@ async function localCatalog(req: FastifyRequest, artistMbid: string, localArtist
 }
 
 function serializeRequest(row: MediaRequestRow) {
-  const deezer = row.metadata?.deezer as { state?: string; filename?: string; trackId?: string; albumId?: string; trackCount?: number; completed?: number; total?: number; phase?: string } | undefined;
+  const deezer = row.metadata?.deezer as { state?: string; filename?: string; trackId?: string; albumId?: string; trackCount?: number; completed?: number; total?: number; phase?: string; usedLocalAlbumMetadata?: boolean } | undefined;
   return {
     id: row.id,
     userId: row.user_id,
@@ -514,7 +514,8 @@ function serializeRequest(row: MediaRequestRow) {
     error: row.provider_error,
     deezer: deezer ? { state: deezer.state ?? null, filename: deezer.filename ?? null,
       trackId: deezer.trackId ?? null, albumId: deezer.albumId ?? null, trackCount: deezer.trackCount ?? null,
-      completed: deezer.completed ?? null, total: deezer.total ?? null, phase: deezer.phase ?? null } : null,
+      completed: deezer.completed ?? null, total: deezer.total ?? null, phase: deezer.phase ?? null,
+      usedLocalAlbumMetadata: Boolean(deezer.usedLocalAlbumMetadata) } : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
@@ -522,18 +523,20 @@ function serializeRequest(row: MediaRequestRow) {
 }
 
 async function stagedMediaAvailable(row: MediaRequestRow): Promise<boolean> {
-  const deezer = row.metadata?.deezer as { filename?: unknown } | undefined;
+  const deezer = row.metadata?.deezer as { filename?: unknown; trackFiles?: unknown; trackCount?: unknown } | undefined;
   if (!validStagedFilename(deezer?.filename)) return false;
   const directory = deezerStagingConfig().directory;
   if (!directory) return false;
+  if (row.item_type === 'album') {
+    if (!deezer.filename.toLowerCase().endsWith('.zip')) return false;
+    if (deezer.trackFiles !== undefined && (!Array.isArray(deezer.trackFiles) || !deezer.trackFiles.every(name => typeof name === 'string'))) return false;
+    const expectedCount = typeof deezer.trackCount === 'number' && Number.isSafeInteger(deezer.trackCount) && deezer.trackCount > 0
+      ? deezer.trackCount : undefined;
+    return stagedAlbumComplete(deezer.filename, deezer.trackFiles as string[] | undefined, expectedCount);
+  }
   try {
     const file = await stat(path.join(directory, deezer.filename));
-    if (!file.isFile()) return false;
-    if (row.item_type === 'album') {
-      const album = await stat(path.join(directory, deezer.filename.slice(0, -4)));
-      if (!album.isDirectory()) return false;
-    }
-    return true;
+    return file.isFile();
   } catch {
     return false;
   }
@@ -541,7 +544,25 @@ async function stagedMediaAvailable(row: MediaRequestRow): Promise<boolean> {
 
 const deezerJobs = new Map<string, Promise<void>>();
 
-async function downloadDeezerRequest(request: MediaRequestRow, itemId: string) {
+async function existingAlbumMetadata(request: MediaRequestRow): Promise<ExistingAlbumMetadata | null> {
+  if (request.item_type !== 'track' || !request.album?.trim()) return null;
+  const result = await db().query<ExistingAlbumMetadata>(
+    `select t.album, t.album_artist, t.year, t.genre, t.country, t.language
+       from active_tracks t
+      where lower(t.album)=lower($1) and t.source_plugin_id is null
+        and (lower(t.artist)=lower($2) or lower(t.album_artist)=lower($2)
+          or exists (select 1 from track_artists ta join artists a on a.id=ta.artist_id
+                      where ta.track_id=t.id and lower(a.name)=lower($2)))
+      order by (t.album_artist is not null)::int + (t.year is not null)::int
+             + (t.genre is not null)::int + (t.country is not null)::int + (t.language is not null)::int desc,
+               t.id asc
+      limit 1`,
+    [request.album.trim(), request.artist.trim()]
+  );
+  return result.rows[0] ?? null;
+}
+
+async function downloadDeezerRequest(request: MediaRequestRow, itemId: string, localAlbum: ExistingAlbumMetadata | null) {
   try {
     const album = request.item_type === 'album'
       ? await verifiedDeezerAlbum(itemId, request.artist, request.title) : null;
@@ -559,10 +580,12 @@ async function downloadDeezerRequest(request: MediaRequestRow, itemId: string) {
     };
     const filename = album
       ? await stageDeezerAlbum(album, reportProgress)
-      : await stageDeezerTrack(await verifiedDeezerTrack(itemId, request.artist, request.title, request.album));
+      : await stageDeezerTrack(await verifiedDeezerTrack(itemId, request.artist, request.title, request.album), localAlbum);
+    const trackFiles = album ? await listStagedAlbumFiles(filename) : null;
+    if (album && trackFiles?.length !== album.trackCount) throw new Error('Staged album track list is incomplete');
     const deezer = album
-      ? { state: 'staged', albumId: itemId, trackCount: album.trackCount, filename }
-      : { state: 'staged', trackId: itemId, filename };
+      ? { state: 'staged', albumId: itemId, trackCount: album.trackCount, trackFiles, filename }
+      : { state: 'staged', trackId: itemId, filename, usedLocalAlbumMetadata: Boolean(localAlbum) };
     const row = await updateRequest(request.id, {
       metadata: { ...request.metadata, deezer },
       provider_error: null,
@@ -1080,7 +1103,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     const request = (await db().query<MediaRequestRow>('select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id])).rows[0];
     if (!request) return reply.code(404).send({ ok: false, error: 'Request not found' });
     try {
-      return { ok: true, candidates: request.item_type === 'album'
+      return { ok: true, localAlbumMetadata: await existingAlbumMetadata(request), candidates: request.item_type === 'album'
         ? await searchDeezerAlbums(request.artist, request.title)
         : await searchDeezerTracks(request.artist, request.title, request.album) };
     } catch (error) {
@@ -1095,7 +1118,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (req.user!.role !== 'admin') return reply.code(403).send({ ok: false, error: 'Administrator access required' });
     if (plugin.config.providerBaseUrl) return reply.code(409).send({ ok: false, error: 'Disable the external request provider before using Deezer staging' });
     if (!deezerStagingConfig().configured) return reply.code(409).send({ ok: false, error: deezerStagingConfig().error });
-    const body = req.body as { trackId?: unknown; albumId?: unknown } | null;
+    const body = req.body as { trackId?: unknown; albumId?: unknown; useLocalAlbumMetadata?: unknown } | null;
     if (body?.albumId !== undefined && body.trackId !== undefined) return reply.code(400).send({ ok: false, error: 'Choose one Deezer item' });
     const itemType = body?.albumId !== undefined ? 'album' : 'track';
     const itemId = itemType === 'album' ? body?.albumId : body?.trackId;
@@ -1109,6 +1132,12 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     const existing = (await db().query<MediaRequestRow>(
       'select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id]
     )).rows[0];
+    if (body?.useLocalAlbumMetadata !== undefined && typeof body.useLocalAlbumMetadata !== 'boolean') {
+      return reply.code(400).send({ ok: false, error: 'Invalid album metadata choice' });
+    }
+    if (body?.useLocalAlbumMetadata && itemType !== 'track') return reply.code(400).send({ ok: false, error: 'Album metadata reuse is only available for songs' });
+    const localAlbum = body?.useLocalAlbumMetadata && existing ? await existingAlbumMetadata(existing) : null;
+    if (body?.useLocalAlbumMetadata && !localAlbum) return reply.code(409).send({ ok: false, error: 'Matching album metadata is no longer available' });
     const previous = existing?.metadata?.deezer as { state?: string; filename?: string } | undefined;
     const missingStaged = existing?.item_type === itemType && existing.status === 'submitted'
       && previous?.state === 'staged' && !await stagedMediaAvailable(existing);
@@ -1125,7 +1154,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       [id, plugin.id, req.user!.userId, itemId, itemType, missingStaged, missingStaged ? previous?.filename : null]
     )).rows[0];
     if (!request) return reply.code(409).send({ ok: false, error: 'Request is not available for Deezer staging' });
-    const job = downloadDeezerRequest(request, itemId);
+    const job = downloadDeezerRequest(request, itemId, localAlbum);
     deezerJobs.set(id, job);
     void audit('plugin_media_deezer_download_started', { pluginId: plugin.id, requestId: id, by: req.user!.userId,
       itemType, deezerId: itemId }).catch(error => logger.warn('missing-music', `Could not audit Deezer start: ${errorMessage(error)}`));
@@ -1139,20 +1168,59 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (req.user!.role !== 'admin') return reply.code(403).send({ ok: false, error: 'Administrator access required' });
     const { id } = req.params as { id: string };
     const request = (await db().query<MediaRequestRow>('select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id])).rows[0];
-    const deezer = request?.metadata?.deezer as { state?: string; filename?: unknown } | undefined;
+    const deezer = request?.metadata?.deezer as { state?: string; filename?: unknown; trackFiles?: unknown; trackCount?: unknown } | undefined;
     if (deezer?.state !== 'staged' || !validStagedFilename(deezer.filename)) return reply.code(404).send({ ok: false, error: 'No staged file for this request' });
     const directory = deezerStagingConfig().directory;
     if (!directory) return reply.code(404).send({ ok: false, error: 'Staging directory is not configured' });
     const file = path.join(directory, deezer.filename);
     try {
+      if (request?.item_type === 'album') {
+        if (deezer.trackFiles !== undefined && (!Array.isArray(deezer.trackFiles) || !deezer.trackFiles.every(name => typeof name === 'string'))) throw new Error('Invalid staged album manifest');
+        await refreshStagedAlbumArchive(deezer.filename, deezer.trackFiles as string[] | undefined,
+          typeof deezer.trackCount === 'number' ? deezer.trackCount : undefined);
+      }
       const details = await stat(file);
       if (!details.isFile()) throw new Error('Not a file');
     } catch {
-      return reply.code(404).send({ ok: false, error: 'Staged file is missing' });
+      return reply.code(404).send({ ok: false, error: 'Staged files are missing or could not be packaged' });
     }
     return reply.header('Content-Type', deezer.filename.endsWith('.zip') ? 'application/zip' : deezer.filename.endsWith('.flac') ? 'audio/flac' : 'audio/mpeg')
-      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(deezer.filename)}`)
+      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(deezer.filename))}`)
       .send(createReadStream(file));
+  });
+
+  app.get('/api/plugins/missing-music/requests/:id/deezer-review-album', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    if (req.user!.role !== 'admin') return reply.code(403).send({ ok: false, error: 'Administrator access required' });
+    const { id } = req.params as { id: string };
+    const request = (await db().query<MediaRequestRow>(
+      'select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id]
+    )).rows[0];
+    const filename = (request?.metadata?.deezer as { filename?: unknown } | undefined)?.filename;
+    if (!request || !validStagedFilename(filename)) return reply.code(404).send({ ok: false, error: 'Staged download not found' });
+
+    const isAlbum = request.item_type === 'album';
+    const relative = isAlbum ? `${filename.slice(0, -4)}/` : filename;
+    const normalizedPath = "ltrim(replace(t.path, chr(92), '/'), '/')";
+    const current = await db().query<{ album: string; artist: string }>(
+      `select coalesce(nullif(btrim(t.album), ''), 'Unknown Album — ' ||
+                coalesce(nullif(btrim(t.album_artist), ''), nullif(btrim(t.artist), ''), 'Unknown Artist')) as album,
+              coalesce(nullif(btrim(t.album_artist), ''), nullif(btrim(t.artist), ''), 'Unknown Artist') as artist
+         from active_tracks t join libraries l on l.id=t.library_id
+        where l.source_plugin_id=$1 and l.mount_path=$2
+          and ${isAlbum ? `left(${normalizedPath}, length($3))=$3` : `${normalizedPath}=$3`}
+        order by coalesce(t.disc_number, 1), coalesce(t.track_number, 0), t.id
+        limit 1`,
+      [MISSING_MUSIC_PLUGIN_ID, deezerStagingConfig().directory, relative]
+    );
+    if (current.rows[0]) return { ok: true, ...current.rows[0] };
+    const parts = filename.split('/');
+    const artist = parts.length >= 2 ? parts[0] : request.artist;
+    const album = isAlbum ? (parts.length >= 2 ? parts[1].replace(/\.zip$/i, '') : request.title)
+      : (parts.length >= 3 ? parts[1] : request.album);
+    if (!album) return reply.code(404).send({ ok: false, error: 'Album not found in the library yet' });
+    return { ok: true, artist, album };
   });
 
   app.post('/api/plugins/missing-music/requests', async (req, reply) => {

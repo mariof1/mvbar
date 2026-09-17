@@ -81,7 +81,7 @@ type RequestItem = {
   status: 'requested' | 'approved' | 'submitted' | 'completed' | 'failed' | 'rejected' | 'cancelled';
   providerRequestId: string | null;
   error: string | null;
-  deezer: { state: string | null; filename: string | null; trackId: string | null; albumId: string | null; trackCount: number | null; completed: number | null; total: number | null; phase: string | null } | null;
+  deezer: { state: string | null; filename: string | null; trackId: string | null; albumId: string | null; trackCount: number | null; completed: number | null; total: number | null; phase: string | null; usedLocalAlbumMetadata?: boolean } | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -104,6 +104,8 @@ type PluginUpdate = {
   available: BundledAdminPlugin;
   installed: AdminPlugin;
 };
+
+type ExistingAlbumMetadata = { album: string; album_artist: string | null; year: number | null; genre: string | null; country: string | null; language: string | null };
 
 function messageForError(error: unknown) {
   const value = error as { data?: { error?: string }; message?: string };
@@ -161,6 +163,8 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   const [requestSearch, setRequestSearch] = useState('');
   const [deezerOpen, setDeezerOpen] = useState<string | null>(null);
   const [deezerCandidates, setDeezerCandidates] = useState<Record<string, DeezerCandidate[]>>({});
+  const [localAlbumMetadata, setLocalAlbumMetadata] = useState<Record<string, ExistingAlbumMetadata | null>>({});
+  const [reuseAlbumMetadata, setReuseAlbumMetadata] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [artistsLoading, setArtistsLoading] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -470,8 +474,12 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     setDeezerOpen(request.id);
     setBusyKey(`deezer-search:${request.id}`);
     try {
-      const data = await apiFetch(`/plugins/missing-music/requests/${request.id}/deezer-candidates`, {}, token) as { candidates: DeezerCandidate[] };
-      if (lookupId === deezerLookupId.current) setDeezerCandidates((current) => ({ ...current, [request.id]: data.candidates }));
+      const data = await apiFetch(`/plugins/missing-music/requests/${request.id}/deezer-candidates`, {}, token) as { candidates: DeezerCandidate[]; localAlbumMetadata: ExistingAlbumMetadata | null };
+      if (lookupId === deezerLookupId.current) {
+        setDeezerCandidates((current) => ({ ...current, [request.id]: data.candidates }));
+        setLocalAlbumMetadata((current) => ({ ...current, [request.id]: data.localAlbumMetadata }));
+        setReuseAlbumMetadata((current) => ({ ...current, [request.id]: Boolean(data.localAlbumMetadata) }));
+      }
     } catch (cause) {
       if (lookupId === deezerLookupId.current) {
         setDeezerOpen(null);
@@ -487,7 +495,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     setBusyKey(`deezer-stage:${request.id}`);
     try {
       await apiFetch(`/plugins/missing-music/requests/${request.id}/deezer-download`, {
-        method: 'POST', body: JSON.stringify(request.itemType === 'album' ? { albumId: candidate.id } : { trackId: candidate.id }),
+        method: 'POST', body: JSON.stringify(request.itemType === 'album' ? { albumId: candidate.id } : { trackId: candidate.id, useLocalAlbumMetadata: Boolean(localAlbumMetadata[request.id] && reuseAlbumMetadata[request.id]) }),
       }, token);
       setDeezerOpen(null);
       await loadRequests();
@@ -504,7 +512,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     if (token === 'cookie') {
       const anchor = document.createElement('a');
       anchor.href = fileUrl;
-      anchor.download = request.deezer.filename;
+      anchor.download = request.deezer.filename.split('/').at(-1) || request.deezer.filename;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -521,11 +529,24 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = request.deezer.filename;
+      anchor.download = request.deezer.filename.split('/').at(-1) || request.deezer.filename;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (cause) {
+      showToast(messageForError(cause), 'error', 'top-right');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const reviewStagedAlbum = async (request: RequestItem) => {
+    if (!token) return;
+    setBusyKey(`deezer-review:${request.id}`);
+    try {
+      const result = await apiFetch(`/plugins/missing-music/requests/${request.id}/deezer-review-album`, {}, token) as { artist: string; album: string };
+      window.location.hash = `#/browse/album/${encodeURIComponent(result.artist)}/${encodeURIComponent(result.album)}`;
     } catch (cause) {
       showToast(messageForError(cause), 'error', 'top-right');
     } finally {
@@ -924,7 +945,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                         <div className="h-full rounded-full bg-cyan-400 transition-[width]" style={{ width: `${Math.min(100, 100 * (request.deezer.completed ?? 0) / (request.deezer.total ?? 1))}%` }} />
                       </div>
                     )}
-                    {isAdmin && request.deezer?.state === 'staged' && request.deezer.filename && <p className="mt-2 truncate text-xs text-cyan-200">Staged: {request.deezer.filename}{request.deezer.trackCount ? ` · ${request.deezer.trackCount} tracks` : ''}</p>}
+                    {isAdmin && request.deezer?.state === 'staged' && request.deezer.filename && <p className="mt-2 truncate text-xs text-cyan-200">Staged: {request.deezer.filename}{request.deezer.trackCount ? ` · ${request.deezer.trackCount} tracks` : ''}{request.deezer.usedLocalAlbumMetadata ? ' · Existing album tags applied' : ''}</p>}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {isAdmin && request.status === 'requested' && (
@@ -942,6 +963,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                       </button>
                     )}
                     {isAdmin && request.deezer?.state === 'staged' && <button onClick={() => void downloadStagedFile(request)} disabled={busyKey === `deezer-file:${request.id}`} className="rounded-lg border border-cyan-400/30 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-50">Download {request.itemType === 'album' ? 'album ZIP' : 'staged song'}</button>}
+                    {isAdmin && request.deezer?.state === 'staged' && <button onClick={() => void reviewStagedAlbum(request)} disabled={busyKey === `deezer-review:${request.id}`} className="rounded-lg border border-cyan-400/30 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-50">Review metadata in album</button>}
                     {isAdmin && ['requested', 'approved', 'submitted', 'failed'].includes(request.status) && request.deezer?.state !== 'downloading' && (
                       <button onClick={() => void changeRequest(request, 'complete')} disabled={busyKey === `complete:${request.id}`} className="rounded-lg bg-emerald-400/15 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-400/25 disabled:opacity-50">Mark fulfilled</button>
                     )}
@@ -954,6 +976,12 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                       <p className="text-xs text-white/50">{request.itemType === 'album' ? 'Choose the matching release. Check its track count or open Deezer to distinguish versions.' : 'Select the exact recording. Album and duration help distinguish versions.'}</p>
                       <button onClick={() => void findDeezerCandidates(request)} className="shrink-0 text-xs text-cyan-300 hover:text-cyan-200">Hide</button>
                     </div>
+                    {request.itemType === 'track' && localAlbumMetadata[request.id] && (
+                      <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.06] p-3 text-xs text-emerald-100">
+                        <input type="checkbox" checked={Boolean(reuseAlbumMetadata[request.id])} onChange={(event) => setReuseAlbumMetadata((current) => ({ ...current, [request.id]: event.target.checked }))} className="mt-0.5 accent-emerald-400" />
+                        <span>Use tags from existing album <strong>{localAlbumMetadata[request.id].album}</strong>{localAlbumMetadata[request.id].year ? ` (${localAlbumMetadata[request.id].year})` : ''}. This copies album name, album artist, year and genre while keeping the selected song title and artist.</span>
+                      </label>
+                    )}
                     {(deezerCandidates[request.id] ?? []).map((candidate) => (
                       <div key={candidate.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-white/10 bg-white/[0.04] p-2.5">
                         {request.itemType === 'album' && candidate.cover && <img src={candidate.cover} alt="" className="h-12 w-12 rounded object-cover" />}

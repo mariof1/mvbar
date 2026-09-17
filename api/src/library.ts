@@ -10,12 +10,42 @@ import {
 } from './rateLimitBypass.js';
 import { access, constants } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { resolveInside } from './pathSafety.js';
 import { artistDisplay } from './artistDisplay.js';
+import { deezerStagingConfig } from './pluginSystem/deezerStaging.js';
 import path from 'node:path';
 
 const LIBRARY_READ_ONLY = process.env.LIBRARY_READ_ONLY === '1';
 const LIBRARY_PROBE_TIMEOUT_MS = 3000;
+const FLAC_EDITOR = fileURLToPath(new URL('../scripts/edit_flac_metadata.py', import.meta.url));
+
+function isWritableStagingLibrary(library: { mount_path: string; source_plugin_id: string | null }) {
+  const staging = deezerStagingConfig().directory;
+  return library.source_plugin_id === 'mvbar.missing-music' && Boolean(staging) && path.resolve(library.mount_path) === staging;
+}
+
+function updateFlacTag(file: string, values: Parameters<typeof updateId3Tag>[1]): Promise<void> {
+  const python = deezerStagingConfig().python;
+  return new Promise((resolve, reject) => {
+    const child = spawn(python, [FLAC_EDITOR, file], { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => child.kill(), 30_000);
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error); else resolve();
+    };
+    child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(0, 500); });
+    child.stdin.on('error', error => finish(new Error(`Could not send FLAC metadata: ${error.message}`)));
+    child.on('error', error => finish(new Error(`Could not start FLAC metadata editor: ${error.message}`)));
+    child.on('close', code => finish(code === 0 ? undefined : new Error(stderr || 'FLAC metadata update failed')));
+    child.stdin.end(JSON.stringify(values));
+  });
+}
 
 function safeJoinMount(mountPath: string, relPath: string) {
   return resolveInside(mountPath, relPath);
@@ -470,17 +500,12 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
   // Whether any mounted library is writable inside the container
   app.get('/api/admin/library/writable', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
-    const r = await db().query<{ id: number; mount_path: string; media_type: string }>(
-      'select id, mount_path, media_type from libraries where enabled = true order by media_type, mount_path asc'
+    const r = await db().query<{ id: number; mount_path: string; media_type: string; source_plugin_id: string | null }>(
+      'select id, mount_path, media_type, source_plugin_id from libraries where enabled = true order by media_type, mount_path asc'
     );
-    if (LIBRARY_READ_ONLY) {
-      const libraries = r.rows.map((library) => ({ ...library, writable: false }));
-      return { ok: true, anyWritable: false, writableMounts: [], libraries };
-    }
-
     const results = await Promise.all(
       r.rows.map(async (l) => {
-        const writable = await probeAccess(l.mount_path, constants.W_OK) === true;
+        const writable = (!LIBRARY_READ_ONLY || isWritableStagingLibrary(l)) && await probeAccess(l.mount_path, constants.W_OK) === true;
         return { id: l.id, mount_path: l.mount_path, media_type: l.media_type, writable };
       })
     );
@@ -489,12 +514,10 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     return { ok: true, anyWritable: writable.length > 0, writableMounts: writable, libraries: results };
   });
 
-  // Edit track metadata (MP3 only) for writable libraries
+  // Edit metadata only on writable mounts; a managed staging mount may remain
+  // writable even when the main NAS library is configured read-only.
   app.post('/api/admin/tracks/:id/metadata', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
-    if (LIBRARY_READ_ONLY) {
-      return reply.code(403).send({ ok: false, error: 'Library writes are disabled' });
-    }
 
     const id = Number((req.params as { id: string }).id);
     if (!Number.isFinite(id)) return reply.code(400).send({ ok: false, error: 'Invalid track id' });
@@ -512,15 +535,19 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
       language?: string | null;
     };
 
-    const r = await db().query<{ path: string; ext: string; library_id: number; mount_path: string }>(
-      'select t.path, t.ext, t.library_id, l.mount_path from active_tracks t join libraries l on l.id=t.library_id where t.id=$1',
+    const r = await db().query<{ path: string; ext: string; library_id: number; mount_path: string; source_plugin_id: string | null }>(
+      'select t.path, t.ext, t.library_id, l.mount_path, l.source_plugin_id from active_tracks t join libraries l on l.id=t.library_id where t.id=$1',
       [id]
     );
     const row = r.rows[0];
     if (!row) return reply.code(404).send({ ok: false, error: 'Track not found' });
 
-    if ((row.ext ?? '').toLowerCase() !== '.mp3') {
-      return reply.code(400).send({ ok: false, error: 'Only .mp3 files are editable (v1)' });
+    if (LIBRARY_READ_ONLY && !isWritableStagingLibrary(row)) {
+      return reply.code(403).send({ ok: false, error: 'Library writes are disabled' });
+    }
+    const extension = (row.ext ?? '').toLowerCase();
+    if (extension !== '.mp3' && !(extension === '.flac' && isWritableStagingLibrary(row))) {
+      return reply.code(400).send({ ok: false, error: 'Only MP3 and staged FLAC files are editable' });
     }
 
     // Must be writable
@@ -529,6 +556,9 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     const abs = safeJoinMount(row.mount_path, row.path);
+    if (await probeAccess(abs, constants.W_OK) !== true) {
+      return reply.code(400).send({ ok: false, error: 'Track file is not writable' });
+    }
 
     // Normalize inputs
     const normStr = (s: any) => {
@@ -598,7 +628,8 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     if (language !== undefined) updateOpts.language = languageParts === null ? null : (languageParts ?? []);
 
     try {
-      updateId3Tag(abs, updateOpts);
+      if (extension === '.flac') await updateFlacTag(abs, updateOpts);
+      else updateId3Tag(abs, updateOpts);
     } catch (e: any) {
       return reply.code(500).send({ ok: false, error: e?.message ?? String(e) });
     }
@@ -630,8 +661,8 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
 
   app.get('/api/admin/libraries', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
-    const r = await db().query<{ id: number; mount_path: string; media_type: string }>(
-      'select id, mount_path, media_type from libraries where enabled = true order by media_type, mount_path asc'
+    const r = await db().query<{ id: number; mount_path: string; media_type: string; source_plugin_id: string | null }>(
+      'select id, mount_path, media_type, source_plugin_id from libraries where enabled = true order by media_type, mount_path asc'
     );
 
     const libraries = await Promise.all(
@@ -639,7 +670,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
         const mounted = await probeAccess(l.mount_path);
 
         let writable = false;
-        if (!LIBRARY_READ_ONLY && mounted === true) {
+        if ((!LIBRARY_READ_ONLY || isWritableStagingLibrary(l)) && mounted === true) {
           writable = await probeAccess(l.mount_path, constants.W_OK) === true;
         }
 

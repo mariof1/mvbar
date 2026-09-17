@@ -80,6 +80,8 @@ function SchemaField({
         </select>
       ) : (
         <input
+          name={`plugin-config-${name}`}
+          autoComplete={property.format === 'password' || configuredSecret ? 'new-password' : 'off'}
           type={property.format === 'password' || configuredSecret ? 'password' : property.type === 'integer' || property.type === 'number' ? 'number' : 'text'}
           min={property.minimum}
           max={property.maximum}
@@ -150,19 +152,22 @@ function PluginActionPanel({ token, plugin, action }: { token: string; plugin: A
     </div>
   );
 }
-function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPlugin; refresh: () => Promise<void> }) {
+function PluginCard({ token, plugin, refresh, draft, onDraftChange, clearDraft }: {
+  token: string; plugin: AdminPlugin; refresh: () => Promise<void>;
+  draft?: Record<string, unknown>;
+  onDraftChange: (value: Record<string, unknown>) => void;
+  clearDraft: () => void;
+}) {
   const showToast = useToastStore((state) => state.show);
   const isMissingMusic = plugin.id === 'mvbar.missing-music';
   const providerConfigured = isMissingMusic && typeof plugin.config.providerBaseUrl === 'string' && plugin.config.providerBaseUrl.trim().length > 0;
   const defaults = useMemo(() => Object.fromEntries(
     Object.entries(plugin.configSchema?.properties ?? {}).map(([key, property]) => [key, plugin.config[key] ?? property.default ?? (property.type === 'boolean' ? false : '')])
   ), [plugin]);
-  const [config, setConfig] = useState<Record<string, unknown>>(defaults);
+  const config = draft ?? defaults;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<AdminPluginRun[] | null>(null);
-
-  useEffect(() => setConfig(defaults), [defaults]);
 
   async function saveConfig() {
     setBusy('config');
@@ -170,6 +175,7 @@ function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPl
     try {
       await configureAdminPlugin(token, plugin.id, config);
       showToast(`${plugin.name} configuration saved`, 'success', 'top-right');
+      clearDraft();
       await refresh();
     } catch (caught) {
       setError(errorText(caught));
@@ -247,6 +253,7 @@ function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPl
     setBusy('remove');
     try {
       await deleteAdminPlugin(token, plugin.id);
+      clearDraft();
       await refresh();
     } catch (caught) {
       setError(errorText(caught));
@@ -341,7 +348,10 @@ function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPl
         <section className="mt-5 rounded-xl border border-slate-700/40 bg-slate-950/20 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div><h4 className="font-semibold text-white">Configuration</h4><p className="mt-1 text-xs text-slate-500">Secrets are stored server-side and are never returned to the browser.</p></div>
-            <button onClick={() => void saveConfig()} disabled={Boolean(busy)} className="rounded-lg bg-cyan-600 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-500 disabled:opacity-40">{busy === 'config' ? 'Saving…' : 'Save configuration'}</button>
+            <div className="flex items-center gap-2">
+              {draft && <button onClick={clearDraft} disabled={Boolean(busy)} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700/60 disabled:opacity-40">Discard changes</button>}
+              <button onClick={() => void saveConfig()} disabled={Boolean(busy)} className="rounded-lg bg-cyan-600 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-500 disabled:opacity-40">{busy === 'config' ? 'Saving…' : 'Save configuration'}</button>
+            </div>
           </div>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             {Object.entries(plugin.configSchema.properties ?? {}).map(([key, property]) => (
@@ -351,7 +361,11 @@ function PluginCard({ token, plugin, refresh }: { token: string; plugin: AdminPl
                 property={property}
                 value={config[key]}
                 configuredSecret={plugin.configuredSecrets.includes(key)}
-                onChange={(value) => setConfig((current) => ({ ...current, [key]: value }))}
+                onChange={(value) => {
+                  const next = { ...config, [key]: value };
+                  if (Object.keys(defaults).every(field => Object.is(next[field], defaults[field]))) clearDraft();
+                  else onDraftChange(next);
+                }}
               />
             ))}
           </div>
@@ -398,8 +412,19 @@ export function AdminPlugins({ token }: { token: string }) {
   const [installingBundled, setInstallingBundled] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [showInstall, setShowInstall] = useState(false);
+  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
+  const [configDrafts, setConfigDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [error, setError] = useState<string | null>(null);
   const pluginLastUpdate = usePluginUpdates((state) => state.lastUpdate);
+  const availablePlugins = bundledPlugins.filter((plugin) => !plugin.installed || plugin.updateAvailable);
+  const selectedPlugin = plugins.find((plugin) => plugin.id === selectedPluginId) ?? plugins[0];
+
+  useEffect(() => {
+    if (plugins.length && !plugins.some((plugin) => plugin.id === selectedPluginId)) {
+      setSelectedPluginId(plugins[0].id);
+    }
+  }, [plugins, selectedPluginId]);
 
   const load = useCallback(async () => {
     try {
@@ -427,8 +452,11 @@ export function AdminPlugins({ token }: { token: string }) {
     setUploading(true);
     setError(null);
     try {
-      await uploadAdminPlugin(token, file);
+      const result = await uploadAdminPlugin(token, file);
       await load();
+      setConfigDrafts((current) => { const next = { ...current }; delete next[result.plugin.id]; return next; });
+      setSelectedPluginId(result.plugin.id);
+      setShowInstall(false);
     } catch (caught) {
       setError(errorText(caught));
     } finally {
@@ -450,6 +478,9 @@ export function AdminPlugins({ token }: { token: string }) {
         'top-right',
       );
       await load();
+      setConfigDrafts((current) => { const next = { ...current }; delete next[plugin.id]; return next; });
+      setSelectedPluginId(plugin.id);
+      setShowInstall(false);
     } catch (caught) {
       setError(errorText(caught));
     } finally {
@@ -462,8 +493,8 @@ export function AdminPlugins({ token }: { token: string }) {
     setError(null);
     try {
       const result = await rescanAdminPlugins(token);
-      if (result.errors.length) setError(result.errors.map((entry) => `${entry.filename}: ${entry.error}`).join('\n'));
       await load();
+      if (result.errors.length) setError(result.errors.map((entry) => `${entry.filename}: ${entry.error}`).join('\n'));
     } catch (caught) {
       setError(errorText(caught));
     } finally {
@@ -472,17 +503,20 @@ export function AdminPlugins({ token }: { token: string }) {
   }
 
   return (
-    <div className="space-y-6">
-      <section className="rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-cyan-500/10 to-violet-500/5 p-6">
+    <div className="space-y-5">
+      <section className="rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-cyan-500/10 to-violet-500/5 p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
-            <h2 className="text-xl font-semibold text-white">Sandboxed plugins</h2>
-            <p className="mt-2 text-sm leading-relaxed text-slate-300">Install Navidrome-compatible <span className="font-mono text-cyan-300">.ndp</span> WebAssembly packages or MVBar extensions. Plugins run in isolated worker threads, start disabled, and receive only the permissions shown before enablement.</p>
+            <h2 className="text-xl font-semibold text-white">Plugins</h2>
+            <p className="mt-1 text-sm text-slate-300">{plugins.length} installed · Select a plugin to manage its settings.</p>
           </div>
-          <button onClick={() => void rescan()} disabled={rescanning} className="rounded-lg border border-slate-600 bg-slate-800/60 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700/60 disabled:opacity-50">{rescanning ? 'Scanning…' : 'Rescan folder'}</button>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => void rescan()} disabled={rescanning} className="rounded-lg border border-slate-600 bg-slate-800/60 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700/60 disabled:opacity-50">{rescanning ? 'Scanning…' : 'Rescan folder'}</button>
+            <button onClick={() => setShowInstall((value) => !value)} aria-expanded={showInstall} className="rounded-lg bg-cyan-600 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-500">{showInstall ? 'Close installer' : `Add or update plugin${availablePlugins.some((plugin) => plugin.updateAvailable) ? ' · Update available' : ''}`}</button>
+          </div>
         </div>
         {!executionEnabled && <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">Plugin execution is disabled globally by <span className="font-mono">PLUGINS_ENABLED</span>. Packages and configuration remain manageable.</div>}
-        <div
+        {showInstall && <div
           onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
           onDragOver={(event) => event.preventDefault()}
           onDragLeave={() => setDragging(false)}
@@ -493,10 +527,10 @@ export function AdminPlugins({ token }: { token: string }) {
           <p className="text-sm text-slate-300">Drop an <span className="font-mono">.ndp</span> package here, or</p>
           <button onClick={() => fileInput.current?.click()} disabled={uploading} className="mt-3 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-500 disabled:opacity-50">{uploading ? 'Validating and installing…' : 'Choose package'}</button>
           {uploadLimit > 0 && <p className="mt-2 text-xs text-slate-500">Maximum package size: {readableBytes(uploadLimit)}</p>}
-        </div>
+        </div>}
       </section>
 
-      {bundledPlugins.some((plugin) => !plugin.installed || plugin.updateAvailable) && (
+      {showInstall && availablePlugins.length > 0 && (
         <section className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.06] p-5">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Official MVBar plugins</p>
@@ -504,7 +538,7 @@ export function AdminPlugins({ token }: { token: string }) {
             <p className="mt-1 text-sm text-slate-400">Packages are checksum-verified before installation. No server file setup is needed.</p>
           </div>
           <div className="mt-4 grid gap-3">
-            {bundledPlugins.filter((plugin) => !plugin.installed || plugin.updateAvailable).map((plugin) => (
+            {availablePlugins.map((plugin) => (
               <div key={plugin.key} className="flex flex-col gap-4 rounded-xl border border-white/10 bg-black/20 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -535,7 +569,23 @@ export function AdminPlugins({ token }: { token: string }) {
       ) : plugins.length === 0 ? (
         <div className="rounded-2xl border border-slate-700/40 bg-slate-800/20 px-6 py-12 text-center"><p className="text-slate-300">No plugins installed.</p><p className="mt-2 text-sm text-slate-500">You can also copy .ndp files directly into the configured server plugin directory, then rescan.</p></div>
       ) : (
-        <div className="space-y-5">{plugins.map((plugin) => <PluginCard key={plugin.id} token={token} plugin={plugin} refresh={load} />)}</div>
+        <div className="grid items-start gap-4 xl:grid-cols-[minmax(15rem,18rem)_minmax(0,1fr)]">
+          <div className="grid gap-2 sm:grid-cols-2 xl:sticky xl:top-4 xl:max-h-[calc(100dvh-2rem)] xl:grid-cols-1 xl:overflow-y-auto" aria-label="Installed plugins">
+            {plugins.map((plugin) => (
+              <button key={plugin.id} type="button" onClick={() => setSelectedPluginId(plugin.id)} aria-pressed={selectedPlugin?.id === plugin.id}
+                className={`min-w-0 rounded-xl border p-4 text-left transition-colors ${selectedPlugin?.id === plugin.id ? 'border-cyan-400/70 bg-cyan-500/10' : 'border-slate-700/60 bg-slate-900/40 hover:border-slate-500'}`}>
+                <span className="flex items-center justify-between gap-2"><span className="truncate font-semibold text-white">{plugin.name}</span><span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${plugin.enabled ? 'bg-emerald-500/15 text-emerald-300' : plugin.present ? 'bg-slate-700 text-slate-300' : 'bg-red-500/15 text-red-300'}`}>{plugin.enabled ? 'Enabled' : plugin.present ? 'Disabled' : 'Missing'}</span></span>
+                <span className="mt-1 block truncate text-xs text-slate-400">v{plugin.version}{plugin.description ? ` · ${plugin.description}` : ''}</span>
+                {configDrafts[plugin.id] && <span className="mt-2 block text-xs text-amber-300">Unsaved settings</span>}
+                {plugin.lastError && <span className="mt-2 block truncate text-xs text-red-300">{plugin.lastError}</span>}
+              </button>
+            ))}
+          </div>
+          {selectedPlugin && <PluginCard key={selectedPlugin.id} token={token} plugin={selectedPlugin} refresh={load}
+            draft={configDrafts[selectedPlugin.id]}
+            onDraftChange={(value) => setConfigDrafts((current) => ({ ...current, [selectedPlugin.id]: value }))}
+            clearDraft={() => setConfigDrafts((current) => { const next = { ...current }; delete next[selectedPlugin.id]; return next; })} />}
+        </div>
       )}
 
       <section className="rounded-xl border border-slate-700/40 bg-slate-900/30 p-4 text-xs leading-relaxed text-slate-400">
