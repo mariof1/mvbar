@@ -1075,9 +1075,9 @@ export function BrowseNew(props: {
                       )}
                     </div>
                   </div>
-                  <div className="text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>
+                  <div className="w-12 sm:w-14 text-right tabular-nums text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>
                   {/* Actions - always visible on mobile, hover on desktop */}
-                  <div className="flex items-center gap-0 sm:gap-1 sm:opacity-0 sm:group-hover:opacity-100">
+                  <div className="flex w-[5.75rem] sm:w-[7.25rem] flex-shrink-0 items-center justify-end gap-0 sm:gap-1 sm:opacity-0 sm:group-hover:opacity-100">
                     <button
                       aria-label={favIds.has(track.id) ? `Remove ${track.title || 'track'} from favorites` : `Add ${track.title || 'track'} to favorites`}
                       onClick={async (e) => {
