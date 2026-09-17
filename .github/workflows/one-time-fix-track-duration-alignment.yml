@@ -1,0 +1,113 @@
+name: One-time track duration alignment fix
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - '.github/workflows/one-time-fix-track-duration-alignment.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Patch album track row alignment
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('web/app/BrowseNew.tsx')
+          text = path.read_text()
+
+          old = """            const displayTrackNum = track.trackNumber ?? (idx + 1);\n            \n            return ("""
+          new = """            const displayTrackNum = track.trackNumber ?? (idx + 1);\n            const canEditMetadata = writableLibraryIds.has(track.library_id ?? -1)\n              && (/\\.(mp3|flac)$/i.test(track.path ?? ''))\n              && ((track.path ?? '').toLowerCase().endsWith('.mp3') || track.source_plugin_id === 'mvbar.missing-music');\n            \n            return ("""
+          if text.count(old) != 1:
+              raise SystemExit('displayTrackNum insertion point not found exactly once')
+          text = text.replace(old, new, 1)
+
+          old = '<div className="text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>'
+          new = '<div className="w-12 sm:w-14 text-right tabular-nums text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>'
+          if text.count(old) != 1:
+              raise SystemExit('duration column not found exactly once')
+          text = text.replace(old, new, 1)
+
+          old = """                    {writableLibraryIds.has(track.library_id ?? -1) && (/\\.(mp3|flac)$/i.test(track.path ?? '')) &&
+                      ((track.path ?? '').toLowerCase().endsWith('.mp3') || track.source_plugin_id === 'mvbar.missing-music') && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditTrack(track);
+                        }}
+                        className="p-1.5 sm:p-2 rounded-full hover:bg-slate-700 text-slate-400"
+                        title="Edit metadata"
+                      >
+                        <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                      </button>
+                    )}"""
+          new = """                    {canEditMetadata ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditTrack(track);
+                        }}
+                        className="p-1.5 sm:p-2 rounded-full hover:bg-slate-700 text-slate-400"
+                        title="Edit metadata"
+                      >
+                        <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                      </button>
+                    ) : (
+                      // Reserve the edit-action footprint so read-only and editable rows
+                      // keep the duration and remaining actions in identical columns.
+                      <span aria-hidden="true" className="p-1.5 sm:p-2">
+                        <span className="block w-4 h-4 sm:w-5 sm:h-5" />
+                      </span>
+                    )}"""
+          if text.count(old) != 1:
+              raise SystemExit('metadata action block not found exactly once')
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+
+      - name: Verify alignment guards
+        shell: python
+        run: |
+          from pathlib import Path
+          text = Path('web/app/BrowseNew.tsx').read_text()
+          assert 'const canEditMetadata = writableLibraryIds.has(track.library_id ?? -1)' in text
+          assert 'w-12 sm:w-14 text-right tabular-nums' in text
+          assert 'Reserve the edit-action footprint' in text
+
+      - name: Build web app
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit tested fix
+        shell: bash
+        run: |
+          git rm .github/workflows/one-time-fix-track-duration-alignment.yml
+          git add web/app/BrowseNew.tsx
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Keep album track durations aligned"
+          git push origin HEAD:dev
