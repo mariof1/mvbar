@@ -12,7 +12,7 @@ test('Deezer matching keeps the main recording and rejects alternate versions', 
   globalThis.fetch = async (url) => {
     urls.push(String(url));
     return new Response(JSON.stringify({ data: [
-      { id: 1, title: 'One More Time', title_short: 'One More Time', artist: { name: 'Daft Punk' }, album: { title: 'Discovery' }, duration: 320, disk_number: 1, track_position: 8 },
+      { id: 1, title: 'One More Time', title_short: 'One More Time', artist: { name: 'Daft Punk' }, album: { title: 'Discovery', cover_xl: 'https://cdn-images.dzcdn.net/images/cover/example/1000x1000.jpg' }, duration: 320, disk_number: 1, track_position: 8 },
       { id: 2, title: 'One More Time (Live)', title_short: 'One More Time', artist: { name: 'Daft Punk' }, album: { title: 'Live' } },
       { id: 3, title: 'One More Time', artist: { name: 'Other Artist' } },
       { id: 4, title: 'One More Time / Aerodynamic', artist: { name: 'Daft Punk' }, album: { title: 'Alive 2007' } },
@@ -26,7 +26,26 @@ test('Deezer matching keeps the main recording and rejects alternate versions', 
     assert.equal(tracks[0].score, 110);
     assert.equal(tracks[0].discNumber, 1);
     assert.equal(tracks[0].trackNumber, 8);
+    assert.equal(tracks[0].cover, 'https://cdn-images.dzcdn.net/images/cover/example/1000x1000.jpg');
     assert.match(urls[0], /^https:\/\/api\.deezer\.com\/search\?/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('verified song artwork uses Deezer CDN and rejects lookalike hosts', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    id: 42, title: 'One More Time', artist: { name: 'Daft Punk' },
+    album: {
+      title: 'Discovery',
+      cover_xl: 'https://cdn-images.dzcdn.net.evil.test/images/cover/fake.jpg',
+      cover_big: 'https://cdn-images.dzcdn.net/images/cover/real/500x500.jpg',
+    },
+  }), { status: 200 });
+  try {
+    const track = await verifiedDeezerTrack('42', 'Daft Punk', 'One More Time');
+    assert.equal(track.cover, 'https://cdn-images.dzcdn.net/images/cover/real/500x500.jpg');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -66,6 +85,8 @@ test('Deezer album selection rejects other versions and validates every paginate
     if (url.pathname === '/album/42') return new Response(JSON.stringify({
       id: 42, title: 'Discovery', artist: { name: 'Daft Punk' }, record_type: 'album', nb_tracks: 101,
       release_date: '2001-03-07',
+      cover_medium: 'https://cdn-images.dzcdn.net/images/cover/discovery/250x250.jpg',
+      cover_xl: 'https://cdn-images.dzcdn.net/images/cover/discovery/1000x1000.jpg',
     }), { status: 200 });
     if (url.pathname === '/album/42/tracks') {
       const start = Number(url.searchParams.get('index'));
@@ -81,6 +102,8 @@ test('Deezer album selection rejects other versions and validates every paginate
     const candidates = await searchDeezerAlbums('Daft Punk', 'Discovery');
     assert.deepEqual(candidates.map(album => album.id), ['42']);
     const album = await verifiedDeezerAlbum('42', 'Daft Punk', 'Discovery');
+    assert.equal(album.cover, 'https://cdn-images.dzcdn.net/images/cover/discovery/250x250.jpg');
+    assert.equal(album.artwork, 'https://cdn-images.dzcdn.net/images/cover/discovery/1000x1000.jpg');
     assert.equal(album.tracks.length, 101);
     assert.equal(album.tracks[100].discNumber, 2);
     assert.equal(album.tracks[100].trackNumber, 1);

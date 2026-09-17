@@ -232,7 +232,8 @@ titles already in the library can be opened to compare individual tracks; an
 incomplete album can still be requested. The request queue has status filters
 and search, and album downloads show track-by-track progress before packaging.
 Staging verifies the full Deezer track list and prepares one ZIP with tagged
-tracks; a failed track leaves no ready album. This is unavailable while an
+tracks and embedded Deezer album artwork in each MP3 or FLAC file; a failed
+track leaves no ready album. This is unavailable while an
 external request provider is configured. The staging directory is a separate,
 automatically scanned music library. Album tracks are published together after
 the download finishes, alongside the ZIP for administrators. Artist and album

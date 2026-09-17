@@ -9,6 +9,66 @@ import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+
+MAX_ARTWORK_BYTES = 8 * 1024 * 1024
+
+
+class ArtworkError(Exception):
+    pass
+
+
+class NoRedirects(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        return None
+
+
+def download_artwork(url):
+    parts = urlsplit(url)
+    if (parts.scheme != "https" or parts.hostname != "cdn-images.dzcdn.net"
+            or parts.username or parts.password or parts.port not in (None, 443)
+            or not parts.path.startswith("/images/cover/") or parts.fragment):
+        raise ArtworkError("Invalid Deezer artwork URL")
+    try:
+        request = Request(url, headers={"Accept": "image/jpeg, image/png"})
+        with build_opener(NoRedirects).open(request, timeout=12) as response:
+            data = response.read(MAX_ARTWORK_BYTES + 1)
+    except Exception as error:
+        raise ArtworkError("Deezer artwork could not be downloaded") from error
+    if len(data) < 100 or len(data) > MAX_ARTWORK_BYTES:
+        raise ArtworkError("Deezer artwork is empty or too large")
+    if data.startswith(b"\xff\xd8\xff"):
+        return data, "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return data, "image/png"
+    raise ArtworkError("Deezer artwork is not a supported image")
+
+
+def embed_artwork(output, extension, artwork):
+    if not artwork:
+        return
+    data, mime = artwork
+    if extension == "mp3":
+        from mutagen.id3 import APIC, ID3
+
+        tags = ID3(output)
+        tags.delall("APIC")
+        tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=data))
+        tags.save(output)
+    elif extension == "flac":
+        from mutagen.flac import FLAC, Picture
+
+        audio = FLAC(output)
+        picture = Picture()
+        picture.type = 3
+        picture.mime = mime
+        picture.desc = "Cover"
+        picture.data = data
+        audio.clear_pictures()
+        audio.add_picture(picture)
+        audio.save()
 
 
 async def main():
@@ -30,6 +90,8 @@ async def main():
     directory = Path(job["directory"])
     if not directory.is_dir():
         raise ValueError("Staging directory is missing")
+    cover_url = job.get("coverUrl")
+    artwork = await asyncio.to_thread(download_artwork, cover_url) if cover_url else None
     config = Config.defaults()
     config.session.deezer.arl = os.environ["DEEZER_ARL"]
     client = DeezerClient(config)
@@ -61,6 +123,7 @@ async def main():
                 if value:
                     audio[key] = [str(item) for item in value] if isinstance(value, list) else [str(value)]
             audio.save()
+            embed_artwork(output, extension, artwork)
             extensions.append(extension)
             if "tracks" in job:
                 print(json.dumps({"progress": {"completed": index, "total": len(tracks)}}), flush=True)
@@ -77,5 +140,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except Exception as error:
         # Do not include tracebacks or session credentials in API responses.
-        print(f"Deezer download failed: {type(error).__name__}", file=sys.stderr)
+        print(str(error) if isinstance(error, ArtworkError) else f"Deezer download failed: {type(error).__name__}", file=sys.stderr)
         sys.exit(1)

@@ -20,6 +20,7 @@ export type DeezerTrack = {
   score: number;
   discNumber?: number | null;
   trackNumber?: number | null;
+  cover?: string | null;
 };
 
 export type DeezerAlbum = {
@@ -30,6 +31,7 @@ export type DeezerAlbum = {
   releaseDate: string | null;
   link: string | null;
   cover: string | null;
+  artwork: string | null;
   score: number;
 };
 
@@ -45,7 +47,7 @@ type RawTrack = {
   isrc?: string;
   link?: string;
   artist?: { name?: string };
-  album?: { title?: string };
+  album?: { title?: string; cover_xl?: string; cover_big?: string; cover_medium?: string };
   disk_number?: number;
   track_position?: number;
 };
@@ -58,11 +60,25 @@ type RawAlbum = {
   release_date?: string;
   link?: string;
   cover_medium?: string;
+  cover_big?: string;
+  cover_xl?: string;
   artist?: { name?: string };
 };
 
 function normalized(value: string) {
   return value.normalize('NFKD').toLowerCase().replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function deezerCover(...candidates: Array<string | undefined>) {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const url = new URL(candidate);
+      if (url.protocol === 'https:' && url.hostname === 'cdn-images.dzcdn.net' &&
+          !url.username && !url.password && url.pathname.startsWith('/images/cover/')) return url.toString();
+    } catch { /* Ignore malformed artwork URLs from catalog results. */ }
+  }
+  return null;
 }
 
 function scoreTrack(raw: RawTrack, artist: string, title: string, album?: string | null) {
@@ -88,6 +104,7 @@ function mapTrack(raw: RawTrack, artist: string, title: string, album?: string |
     score,
     discNumber: Number.isSafeInteger(raw.disk_number) && raw.disk_number! > 0 ? raw.disk_number! : null,
     trackNumber: Number.isSafeInteger(raw.track_position) && raw.track_position! > 0 ? raw.track_position! : null,
+    cover: deezerCover(raw.album?.cover_xl, raw.album?.cover_big, raw.album?.cover_medium),
   };
 }
 
@@ -103,7 +120,8 @@ function mapAlbum(raw: RawAlbum, artist: string, title: string): DeezerAlbum | n
     trackCount: Number.isSafeInteger(raw.nb_tracks) ? raw.nb_tracks! : 0,
     releaseDate: /^\d{4}-\d{2}-\d{2}$/.test(raw.release_date ?? '') ? raw.release_date! : null,
     link: typeof raw.link === 'string' && raw.link.startsWith('https://www.deezer.com/') ? raw.link : null,
-    cover: typeof raw.cover_medium === 'string' && raw.cover_medium.startsWith('https://cdn-images.dzcdn.net/') ? raw.cover_medium : null,
+    cover: deezerCover(raw.cover_medium, raw.cover_big, raw.cover_xl),
+    artwork: deezerCover(raw.cover_xl, raw.cover_big, raw.cover_medium),
     score: 110,
   };
 }
@@ -330,7 +348,7 @@ export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: 
   try {
     await onProgress?.(0, album.trackCount, 'downloading');
     const timeout = Math.min(2 * 60 * 60_000, 15 * 60_000 + album.trackCount * 2 * 60_000);
-    const result = await runPython(config.python, { directory: working, quality: config.quality, tracks: album.tracks, albumArtist: album.artist, releaseDate: album.releaseDate }, config.arl, timeout, onProgress);
+    const result = await runPython(config.python, { directory: working, quality: config.quality, tracks: album.tracks, albumArtist: album.artist, releaseDate: album.releaseDate, coverUrl: album.artwork }, config.arl, timeout, onProgress);
     const extensions = result.extensions;
     if (!Array.isArray(extensions) || extensions.length !== album.trackCount || extensions.some(ext => !['mp3', 'flac'].includes(ext))) {
       throw new Error('Deezer returned an incomplete album download');
@@ -442,6 +460,7 @@ export async function stageDeezerTrack(track: DeezerTrack, existingAlbum?: Exist
       albumArtist: existingAlbum?.album_artist || undefined,
       releaseDate: existingAlbum?.year ? String(existingAlbum.year) : undefined,
       genre: existingAlbum?.genre?.split(';').map(part => part.trim()).filter(Boolean),
+      coverUrl: track.cover,
     }, config.arl);
     if (result.extension !== 'mp3' && result.extension !== 'flac') throw new Error('Deezer returned an unsupported audio format');
     const source = path.join(working, `track.${result.extension}`);

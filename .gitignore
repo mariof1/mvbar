@@ -21,6 +21,8 @@ infra/caddy/Caddyfile.lan
 # Build artifacts (do not commit)
 /worker/dist
 /api/dist
+__pycache__/
+*.pyc
 /windows/standalone/out
 /windows/standalone/staging
 /windows/standalone/generated
