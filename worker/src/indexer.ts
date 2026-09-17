@@ -4,7 +4,7 @@ import { asciiFold, stripPunctuation } from './tagRules.js';
 
 const INDEX_TASK_TIMEOUT_MS = Math.max(5000, Number(process.env.MEILI_TASK_TIMEOUT_MS ?? '300000'));
 // Bump when rowToDoc or indexed search fields change so startup rebuilds stale documents.
-export const TRACK_INDEX_VERSION = 2;
+export const TRACK_INDEX_VERSION = 3;
 
 export function meiliErrorCode(error: unknown) {
   if (typeof error !== 'object' || error === null) return '';
@@ -43,6 +43,7 @@ export type TrackDoc = {
   index_version: number;
   id: number;
   library_id: number;
+  source_plugin_id: string | null;
   path: string;
   ext: string;
   title: string | null;
@@ -91,7 +92,7 @@ export async function ensureTracksIndex() {
     ],
     displayedAttributes: [
       'index_version', 'id', 'library_id', 'path', 'ext', 'title', 'artist', 'album_artist', 'album',
-      'duration_ms', 'genre', 'country', 'year', 'language', 'composer', 'mood', 'bpm', 'initial_key'
+      'duration_ms', 'genre', 'country', 'year', 'language', 'composer', 'mood', 'bpm', 'initial_key', 'source_plugin_id'
     ],
     filterableAttributes: [
       'library_id', 'artist', 'album_artist', 'album', 'ext', 'genre', 'country', 'year', 'language',
@@ -111,10 +112,10 @@ export async function ensureTracksIndex() {
   await waitForTask(client, settingsTask);
 }
 
-const TRACK_COLS = `id, library_id, path, ext, title, artist, album_artist, album, duration_ms, genre, country, year, language, composer, mood, bpm, initial_key`;
+const TRACK_COLS = `id, library_id, path, ext, title, artist, album_artist, album, duration_ms, genre, country, year, language, composer, mood, bpm, initial_key, source_plugin_id`;
 
 type TrackRow = {
-  id: number | string; library_id: number | string; path: string; ext: string;
+  id: number | string; library_id: number | string; source_plugin_id: string | null; path: string; ext: string;
   title: string | null; artist: string | null; album_artist: string | null;
   album: string | null; duration_ms: number | null; genre: string | null;
   country: string | null; year: number | null; language: string | null;
@@ -212,7 +213,7 @@ export async function getTrackIndexStatus() {
     db().query<{ id: number }>('SELECT id FROM active_tracks'),
     getIndexedTrackState(index),
   ]);
-  const consistent = indexedState.currentVersion
+  const consistent = indexedState.currentVersion && database === indexed
     && databaseIdsResult.rows.every((row) => indexedState.ids.has(Number(row.id)));
   return {
     database,

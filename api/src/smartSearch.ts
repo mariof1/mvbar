@@ -718,7 +718,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
           limit: fetchLimit,
           offset: 0,
           filter: fullFilter,
-          attributesToRetrieve: ['id', 'path', 'ext', 'title', 'artist', 'album_artist', 'album', 'duration_ms', 'library_id', 'genre', 'country', 'year']
+          attributesToRetrieve: ['id', 'path', 'ext', 'title', 'artist', 'album_artist', 'album', 'duration_ms', 'library_id', 'source_plugin_id', 'genre', 'country', 'year']
         });
       } catch (filterErr: any) {
         // If filter attribute not available, retry with just library filter
@@ -727,7 +727,7 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
             limit: fetchLimit,
             offset: 0,
             filter: libraryFilter,
-            attributesToRetrieve: ['id', 'path', 'ext', 'title', 'artist', 'album_artist', 'album', 'duration_ms', 'library_id', 'genre', 'country', 'year']
+            attributesToRetrieve: ['id', 'path', 'ext', 'title', 'artist', 'album_artist', 'album', 'duration_ms', 'library_id', 'source_plugin_id', 'genre', 'country', 'year']
           });
         } else {
           throw filterErr;
@@ -882,7 +882,8 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
               a.art_hash,
               (array_agg(t.id order by (t.art_path is null) asc, t.path asc))[1]::int as art_track_id,
               count(distinct t.id)::int as track_count,
-              count(distinct nullif(t.album, ''))::int as album_count
+              count(distinct nullif(t.album, ''))::int as album_count,
+              bool_or(t.source_plugin_id is not null) as has_plugin_downloads
             from artists a
             join track_artists ta on ta.artist_id = a.id
             join active_tracks t on t.id = ta.track_id
@@ -981,7 +982,8 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
               order by t.album, (t.art_path is null) asc, t.path
             ),
             album_counts as (
-              select t.album, count(*)::int as track_count
+              select t.album, count(*)::int as track_count,
+                bool_or(t.source_plugin_id is not null) as has_plugin_downloads
               from active_tracks t
               where ${where.join(' and ')}
               group by t.album
@@ -1004,7 +1006,8 @@ export const smartSearchPlugin: FastifyPluginAsync = fp(async (app) => {
               ua.first_track_id::int as art_track_id,
               ua.art_path,
               ua.art_hash,
-              ac.track_count
+              ac.track_count,
+              ac.has_plugin_downloads
             from unique_albums ua
             join album_counts ac on ac.album = ua.album
             order by ua.match_rank, ua.match_similarity desc, ac.track_count desc, ua.album asc

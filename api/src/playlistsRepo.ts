@@ -259,6 +259,7 @@ export async function listItems(userId: string, playlistId: number, allowedLibra
     artist: string | null;
     album: string | null;
     duration_ms: number | null;
+    source_plugin_id: string | null;
     added_at: string;
     added_by: PublicUser | null;
   }>(
@@ -270,6 +271,7 @@ export async function listItems(userId: string, playlistId: number, allowedLibra
        t.artist,
        t.album,
        t.duration_ms,
+       t.source_plugin_id,
        item.added_at,
        case when contributor.id is null then null else
          json_build_object('id', contributor.id, 'email', contributor.email, 'avatarPath', contributor.avatar_path)

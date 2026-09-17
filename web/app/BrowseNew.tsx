@@ -27,11 +27,12 @@ import { useBodyScrollLock } from './useBodyScrollLock';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
 import { ArtworkImage } from './ArtworkImage';
+import { PluginDownloadBadge } from './PluginDownloadBadge';
 
 type Tab = 'artists' | 'albums' | 'genres' | 'countries' | 'languages';
 
-type Artist = { id: number; name: string; track_count: number; album_count: number; art_path?: string | null; art_hash?: string | null };
-type Album = { display_artist: string; album: string; track_count: number; art_path: string | null; art_hash: string | null };
+type Artist = { id: number; name: string; track_count: number; album_count: number; art_path?: string | null; art_hash?: string | null; has_plugin_downloads?: boolean };
+type Album = { display_artist: string; album: string; track_count: number; art_path: string | null; art_hash: string | null; has_plugin_downloads?: boolean };
 type Genre = { genre: string; track_count: number; artist_count: number };
 type Country = { country: string; track_count: number; artist_count: number };
 type Language = { language: string; track_count: number; artist_count: number };
@@ -52,6 +53,7 @@ type Track = {
   artists?: Array<{ id: number; name: string }>;
   discNumber?: number | null;
   trackNumber?: number | null;
+  source_plugin_id?: string | null;
 };
 
 type AlbumDetail = {
@@ -60,6 +62,7 @@ type AlbumDetail = {
   art_path: string | null;
   tracks: Track[];
   totalDiscs: number;
+  hasPluginDownloads: boolean;
 };
 
 type AlbumSelection = { artist: string; album: string; artistId?: number };
@@ -277,8 +280,8 @@ export function BrowseNew(props: {
   const [languagesTotal, setLanguagesTotal] = useState(0);
 
   // Detail view data (derived from nav store selection)
-  const [artistAlbums, setArtistAlbums] = useState<Array<{ album: string; display_artist: string; track_count: number; art_path: string | null }>>([]);
-  const [artistAppearsOn, setArtistAppearsOn] = useState<Array<{ album: string; album_artist: string; track_count: number; art_path: string | null }>>([]);
+  const [artistAlbums, setArtistAlbums] = useState<Array<{ album: string; display_artist: string; track_count: number; art_path: string | null; has_plugin_downloads?: boolean }>>([]);
+  const [artistAppearsOn, setArtistAppearsOn] = useState<Array<{ album: string; album_artist: string; track_count: number; art_path: string | null; has_plugin_downloads?: boolean }>>([]);
   const [artistArt, setArtistArt] = useState<{ art_path: string | null; art_hash: string | null } | null>(null);
 
   const [albumDetail, setAlbumDetail] = useState<AlbumDetail | null>(null);
@@ -577,6 +580,7 @@ export function BrowseNew(props: {
         art_path: r.album.art_path,
         tracks: r.tracks,
         totalDiscs: r.album.total_discs ?? 1,
+        hasPluginDownloads: Boolean(r.album.has_plugin_downloads),
       });
     } catch (e: any) {
       if (!isCurrent()) return;
@@ -997,6 +1001,7 @@ export function BrowseNew(props: {
               {formatCount(albumDetail.tracks.length, 'track')}
               {albumDetail.totalDiscs > 1 && ` · ${albumDetail.totalDiscs} discs`}
             </p>
+            {albumDetail.hasPluginDownloads && <div className="mt-2"><PluginDownloadBadge mixed /></div>}
             <div className="mt-4 flex items-center gap-2">
               <button
                 onClick={() => props.onPlayAll?.(albumDetail.tracks.map((t) => ({ id: t.id, title: t.title, artist: trackArtistLabel(t), album: albumDetail.name })))}
@@ -1050,7 +1055,7 @@ export function BrowseNew(props: {
                     </svg>
                   </button>
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
+                    <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span>{track.source_plugin_id && <PluginDownloadBadge />}</div>
                     <div className="text-xs sm:text-sm text-slate-400 truncate">
                       {track.artists.length > 0 ? (
                         track.artists.map((a, i) => (
@@ -1386,6 +1391,7 @@ export function BrowseNew(props: {
                           art_path: r.album.art_path,
                           tracks: r.tracks,
                           totalDiscs: r.album.total_discs ?? 1,
+                          hasPluginDownloads: Boolean(r.album.has_plugin_downloads),
                         });
                       }
 
@@ -1428,6 +1434,7 @@ export function BrowseNew(props: {
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl sm:text-3xl font-bold text-white [overflow-wrap:anywhere]">{selectedArtist.name}</h1>
             <p className="text-slate-400 mt-1">{formatCount(artistAlbums.length, 'album')}</p>
+            {(artistAlbums.some(album => album.has_plugin_downloads) || artistAppearsOn.some(album => album.has_plugin_downloads)) && <div className="mt-2"><PluginDownloadBadge mixed /></div>}
             <div className="mt-3">
               <AddMenu
                 label="artist"
@@ -1457,6 +1464,7 @@ export function BrowseNew(props: {
                     </div>
                     <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
                     <div className="text-sm text-slate-500">{formatCount(a.track_count, 'track')}</div>
+                    {a.has_plugin_downloads && <PluginDownloadBadge mixed />}
                   </button>
                   <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
                     <AddMenu
@@ -1491,6 +1499,7 @@ export function BrowseNew(props: {
                     </div>
                     <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
                     <div className="text-sm text-slate-500 truncate">{a.album_artist}</div>
+                    {a.has_plugin_downloads && <PluginDownloadBadge mixed />}
                   </button>
                   <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
                     <AddMenu
@@ -1574,7 +1583,7 @@ export function BrowseNew(props: {
                 <img src={`/api/art/${track.art_path}`} alt="" className="w-8 h-8 sm:w-10 sm:h-10 rounded flex-shrink-0" />
               )}
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
+                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span>{track.source_plugin_id && <PluginDownloadBadge />}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
                   {track.artists.length > 0 ? (
                     track.artists.map((a, i) => (
@@ -1663,7 +1672,7 @@ export function BrowseNew(props: {
                 <img src={`/api/art/${track.art_path}`} alt="" className="w-8 h-8 sm:w-10 sm:h-10 rounded flex-shrink-0" />
               )}
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
+                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span>{track.source_plugin_id && <PluginDownloadBadge />}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
                   {track.artists.length > 0 ? (
                     track.artists.map((a, i) => (
@@ -1754,7 +1763,7 @@ export function BrowseNew(props: {
                 <img src={`/api/art/${track.art_path}`} alt="" className="w-8 h-8 sm:w-10 sm:h-10 rounded flex-shrink-0" />
               )}
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-white truncate text-sm sm:text-base">{track.title || 'Untitled'}</div>
+                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span>{track.source_plugin_id && <PluginDownloadBadge />}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
                   {track.artists.length > 0 ? (
                     track.artists.map((a, i) => (
@@ -1919,6 +1928,7 @@ export function BrowseNew(props: {
                   </div>
                   <div className="mt-3 font-medium text-white truncate group-hover:text-cyan-400">{a.name}</div>
                   <div className="text-sm text-slate-500">{formatCount(a.album_count, 'album')}</div>
+                  {a.has_plugin_downloads && <PluginDownloadBadge mixed />}
                 </button>
                 <div className="absolute top-3 right-3 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
                   <AddMenu
@@ -1961,6 +1971,7 @@ export function BrowseNew(props: {
                   </div>
                   <div className="font-medium text-white truncate group-hover:text-cyan-400">{a.album}</div>
                   <div className="text-sm text-slate-500 truncate">{formatArtistValue(a.display_artist) ?? 'Unknown Artist'}</div>
+                  {a.has_plugin_downloads && <PluginDownloadBadge mixed />}
                 </button>
                 <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
                   <AddMenu

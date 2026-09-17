@@ -12,6 +12,7 @@ import { access, constants } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolveInside } from './pathSafety.js';
 import { artistDisplay } from './artistDisplay.js';
+import path from 'node:path';
 
 const LIBRARY_READ_ONLY = process.env.LIBRARY_READ_ONLY === '1';
 const LIBRARY_PROBE_TIMEOUT_MS = 3000;
@@ -664,9 +665,12 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     const id = Number((req.params as { id: string }).id);
     if (!Number.isFinite(id)) return reply.code(400).send({ ok: false, error: 'Invalid library id' });
 
-    const libR = await db().query<{ id: number; mount_path: string }>('select id, mount_path from libraries where id=$1', [id]);
+    const libR = await db().query<{ id: number; mount_path: string; source_plugin_id: string | null }>('select id, mount_path, source_plugin_id from libraries where id=$1', [id]);
     const lib = libR.rows[0];
     if (!lib) return reply.code(404).send({ ok: false, error: 'Library not found' });
+    if (lib.source_plugin_id && process.env.DEEZER_DOWNLOAD_DIR?.trim() && lib.mount_path === path.resolve(process.env.DEEZER_DOWNLOAD_DIR.trim())) {
+      return reply.code(409).send({ ok: false, error: 'Remove DEEZER_DOWNLOAD_DIR from the server configuration before deleting its managed library' });
+    }
 
     const force = ((req.query as any)?.force ?? '') === 'true';
     const mounted = await probeAccess(lib.mount_path);
@@ -717,7 +721,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     const r = await db().query(
       `select id, path, ext, title, artist, album_artist, album, duration_ms,
               library_id, created_at, updated_at, art_path, art_hash,
-              genre, country, language, year, bpm, track_number, disc_number
+              genre, country, language, year, bpm, track_number, disc_number, source_plugin_id
        from active_tracks ${where} ${orderBy} limit $1 offset $2`,
       params as any
     );

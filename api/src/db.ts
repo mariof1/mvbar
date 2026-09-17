@@ -301,6 +301,7 @@ export async function initDb() {
   `);
   await pool.query("alter table libraries add column if not exists media_type text not null default 'music'");
   await pool.query('alter table libraries add column if not exists enabled boolean not null default true');
+  await pool.query('alter table libraries add column if not exists source_plugin_id text');
   await pool.query(`
     DO $$ BEGIN
       ALTER TABLE libraries ADD CONSTRAINT libraries_media_type_check
@@ -672,7 +673,8 @@ export async function initDb() {
            isrc, release_date, original_year, compilation,
            title_sort, artist_sort, album_sort, album_artist_sort,
            musicbrainz_track_id, musicbrainz_release_id, musicbrainz_artist_id, musicbrainz_album_artist_id,
-           embedded_lyrics, embedded_lyrics_synced
+           embedded_lyrics, embedded_lyrics_synced,
+           (select source_library.source_plugin_id from libraries source_library where source_library.id = tracks.library_id) as source_plugin_id
     from tracks
     where tracks.deleted_at is null
       and exists (

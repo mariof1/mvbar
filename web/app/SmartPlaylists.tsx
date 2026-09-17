@@ -20,6 +20,7 @@ import { showConfirm } from './ConfirmModal';
 import { trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
 import { useLatestRequest } from './useLatestRequest';
+import { PluginDownloadBadge } from './PluginDownloadBadge';
 
 const SORT_OPTIONS = [
   { value: 'random', label: 'Random' },
@@ -69,6 +70,7 @@ type Track = {
   duration: number | null;
   art_path: string | null;
   art_hash: string | null;
+  source_plugin_id?: string | null;
 };
 
 // Reusable picker component for search/select
@@ -1135,7 +1137,7 @@ export function SmartPlaylists() {
                       </div>
                       {/* Track info */}
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium text-white text-sm sm:text-base truncate">{t.title ?? `Track #${t.id}`}</div>
+                        <div className="flex min-w-0 items-center gap-2 font-medium text-white text-sm sm:text-base"><span className="truncate">{t.title ?? `Track #${t.id}`}</span>{t.source_plugin_id && <PluginDownloadBadge />}</div>
                         <div className="text-xs sm:text-sm text-slate-400 truncate">
                           {[trackArtistLabel(t), t.album].filter(Boolean).join(' • ')}
                         </div>

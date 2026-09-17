@@ -39,6 +39,7 @@ type MissingMusicStatus = {
   enabled: boolean;
   providerConfigured: boolean;
   deezerConfigured: boolean;
+  deezerConfigurationError?: string | null;
   deezerStagingDirectory: string | null;
   mode: 'provider' | 'wanted-list';
   requireAdminApproval: boolean;
@@ -536,7 +537,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     if (!token) return;
     const confirmed = await showConfirm({
       title: 'Delete music request?',
-      message: `Delete the request for ${request.artist} — ${request.title}?${request.deezer?.state === 'staged' ? ' The staged download will remain in the admin folder.' : ''}`,
+      message: `Delete the request for ${request.artist} — ${request.title}?${request.deezer?.state === 'staged' ? ' The downloaded files will remain in the plugin library.' : ''}`,
       confirmLabel: 'Delete request',
       danger: true,
     });
@@ -567,15 +568,15 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   }, [requests]);
   const providerConfigured = status?.providerConfigured ?? false;
   const requestCounts = useMemo(() => ({
-    action: requests.filter((request) => ['requested', 'approved', 'failed'].includes(request.status)).length,
-    progress: requests.filter((request) => request.deezer?.state === 'downloading' || (request.status === 'submitted' && request.deezer?.state !== 'staged')).length,
+    action: requests.filter((request) => ['requested', 'approved', 'failed'].includes(request.status) || (request.status === 'submitted' && request.deezer?.state === 'missing')).length,
+    progress: requests.filter((request) => request.deezer?.state === 'downloading' || (request.status === 'submitted' && !['staged', 'missing'].includes(request.deezer?.state ?? ''))).length,
     staged: requests.filter((request) => request.deezer?.state === 'staged' && request.status !== 'completed').length,
     history: requests.filter((request) => ['completed', 'rejected', 'cancelled'].includes(request.status)).length,
   }), [requests]);
   const visibleRequests = useMemo(() => requests.filter((request) => {
     const matchesFilter = requestFilter === 'all'
-      || (requestFilter === 'action' && ['requested', 'approved', 'failed'].includes(request.status))
-      || (requestFilter === 'progress' && (request.deezer?.state === 'downloading' || (request.status === 'submitted' && request.deezer?.state !== 'staged')))
+      || (requestFilter === 'action' && (['requested', 'approved', 'failed'].includes(request.status) || (request.status === 'submitted' && request.deezer?.state === 'missing')))
+      || (requestFilter === 'progress' && (request.deezer?.state === 'downloading' || (request.status === 'submitted' && !['staged', 'missing'].includes(request.deezer?.state ?? ''))))
       || (requestFilter === 'staged' && request.deezer?.state === 'staged' && request.status !== 'completed')
       || (requestFilter === 'history' && ['completed', 'rejected', 'cancelled'].includes(request.status));
     const term = requestSearch.trim().toLocaleLowerCase();
@@ -646,7 +647,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
       {status && !providerConfigured && isAdmin && (
         <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/[0.07] px-4 py-3 text-sm text-cyan-100">
           Missing Music is ready in wanted-list mode. {status?.deezerConfigured
-            ? 'Administrators can stage matching Deezer songs and albums, then import them into the library and mark requests fulfilled.'
+              ? 'Administrators can stage matching Deezer songs and albums. They are scanned into a separate library automatically.'
             : 'Administrators can approve requests and mark them fulfilled after importing the music.'} An external provider can be configured in Admin → Plugins.
         </div>
       )}
@@ -876,8 +877,8 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
               </p>
               {isAdmin && <p className="mt-1 text-xs text-white/40">
                 {status?.deezerConfigured
-                  ? `Deezer downloads are staged in ${status.deezerStagingDirectory}. Review and import them into your library before marking a request fulfilled.`
-                  : 'To stage songs and albums from Deezer, set DEEZER_ARL and DEEZER_DOWNLOAD_DIR on the server.'}
+                  ? `Deezer downloads in ${status.deezerStagingDirectory} are scanned into a separate plugin library automatically. Removing that folder removes only its tracks from browsing.`
+                    : status?.deezerConfigurationError || 'To stage songs and albums from Deezer, set DEEZER_ARL and DEEZER_DOWNLOAD_DIR on the server.'}
               </p>}
             </div>
             <button onClick={() => void loadRequests()} className="rounded-lg border border-white/10 px-3 py-2 text-xs hover:bg-white/10">Refresh</button>
@@ -888,7 +889,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                 ['all', 'All', requests.length],
                 ['action', isAdmin ? 'Needs action' : 'Awaiting review', requestCounts.action],
                 ['progress', 'In progress', requestCounts.progress],
-                ['staged', isAdmin ? 'Ready to import' : 'Awaiting import', requestCounts.staged],
+                ['staged', 'Downloaded', requestCounts.staged],
                 ['history', 'History', requestCounts.history],
               ] as const).map(([filter, label, count]) => (
                 <button key={filter} onClick={() => setRequestFilter(filter)} aria-pressed={requestFilter === filter}
@@ -908,7 +909,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate font-medium">{request.title}</span>
-                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${statusClasses(request.status)}`}>{request.deezer?.state === 'downloading' ? request.deezer.phase === 'packaging' ? 'Packaging album ZIP' : request.deezer.total ? `Downloading ${request.deezer.completed ?? 0}/${request.deezer.total} tracks` : `Downloading ${request.itemType} from Deezer` : request.deezer?.state === 'staged' && request.status !== 'completed' ? isAdmin ? 'Ready in staging' : 'Awaiting library import' : statusLabel(request.status, providerConfigured)}</span>
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${request.deezer?.state === 'missing' ? 'border-amber-400/30 bg-amber-400/10 text-amber-200' : statusClasses(request.status)}`}>{request.deezer?.state === 'downloading' ? request.deezer.phase === 'packaging' ? 'Packaging album ZIP' : request.deezer.total ? `Downloading ${request.deezer.completed ?? 0}/${request.deezer.total} tracks` : `Downloading ${request.itemType} from Deezer` : request.deezer?.state === 'missing' ? 'Missing from staging' : request.deezer?.state === 'staged' && request.status !== 'completed' ? 'Downloaded to plugin library' : statusLabel(request.status, providerConfigured)}</span>
                       <span className="text-[11px] uppercase tracking-wide text-white/35">{request.itemType}</span>
                     </div>
                     <p className="mt-1 truncate text-sm text-white/50">{request.artist}{request.album && request.album !== request.title ? ` · ${request.album}` : ''}</p>
@@ -935,9 +936,9 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                     {isAdmin && request.status === 'failed' && !request.deezer && (
                       <button onClick={() => void changeRequest(request, 'retry')} disabled={busyKey === `retry:${request.id}`} className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-black disabled:opacity-50">Retry</button>
                     )}
-                    {isAdmin && !providerConfigured && ['requested', 'approved', 'failed'].includes(request.status) && (
+                    {isAdmin && !providerConfigured && (['requested', 'approved', 'failed'].includes(request.status) || (request.status === 'submitted' && request.deezer?.state === 'missing')) && (
                       <button onClick={() => void findDeezerCandidates(request)} disabled={busyKey === `deezer-search:${request.id}`} className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-400/20 disabled:opacity-50">
-                        {busyKey === `deezer-search:${request.id}` ? 'Searching…' : deezerOpen === request.id ? 'Hide Deezer matches' : 'Find on Deezer'}
+                        {busyKey === `deezer-search:${request.id}` ? 'Searching…' : deezerOpen === request.id ? 'Hide Deezer matches' : request.deezer?.state === 'missing' ? 'Download again' : 'Find on Deezer'}
                       </button>
                     )}
                     {isAdmin && request.deezer?.state === 'staged' && <button onClick={() => void downloadStagedFile(request)} disabled={busyKey === `deezer-file:${request.id}`} className="rounded-lg border border-cyan-400/30 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-50">Download {request.itemType === 'album' ? 'album ZIP' : 'staged song'}</button>}

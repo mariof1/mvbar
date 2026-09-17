@@ -10,6 +10,7 @@ import logger from './logger.js';
 import { asciiFold } from './tagRules.js';
 import { detectTempoBpm, type OnsetMethod } from './tempoDetector.js';
 import { resolveInside } from './pathSafety.js';
+import { configuredMusicRoots, DEEZER_SOURCE_PLUGIN_ID } from './musicRoots.js';
 
 const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
@@ -180,6 +181,9 @@ async function* walkDirectory(
         
         for (const e of entries) {
           const full = path.join(d, e.name);
+          // Downloads are prepared here before an atomic rename publishes them.
+          // Never scan a partially written album, even during a periodic scan.
+          if (e.isDirectory() && e.name.startsWith('.incoming-')) continue;
           if (e.isDirectory()) {
             dirs.push(full);
           } else if (e.isFile()) {
@@ -624,7 +628,11 @@ async function loadDeletedTracks(libraryId: number): Promise<Set<string>> {
 async function getOrCreateLibrary(mountPath: string): Promise<number> {
   const r = await db().query<{ id: number }>('SELECT id FROM libraries WHERE mount_path = $1', [mountPath]);
   if (r.rows.length > 0) return Number(r.rows[0].id);
-  const ins = await db().query<{ id: number }>('INSERT INTO libraries(mount_path) VALUES ($1) RETURNING id', [mountPath]);
+  const staging = configuredMusicRoots(process.env).stagingDirectory === mountPath;
+  const ins = await db().query<{ id: number }>(
+    `INSERT INTO libraries(mount_path, media_type, source_plugin_id) VALUES ($1, 'music', $2)
+     ON CONFLICT (mount_path) DO UPDATE SET source_plugin_id = EXCLUDED.source_plugin_id RETURNING id`,
+    [mountPath, staging ? DEEZER_SOURCE_PLUGIN_ID : null]);
   return Number(ins.rows[0].id);
 }
 

@@ -27,7 +27,7 @@ export const searchPlugin: FastifyPluginAsync = fp(async (app) => {
         limit,
         offset,
         filter,
-        attributesToRetrieve: ['id', 'path', 'ext', 'title', 'artist', 'album', 'duration_ms', 'library_id']
+        attributesToRetrieve: ['id', 'path', 'ext', 'title', 'artist', 'album', 'duration_ms', 'library_id', 'source_plugin_id']
       });
 
       // Log search for recommendations (only meaningful queries, not autocomplete fragments)

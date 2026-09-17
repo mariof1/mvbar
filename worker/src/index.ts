@@ -1,5 +1,6 @@
 import 'dotenv/config';
 
+import { stat } from 'node:fs/promises';
 import Redis from 'ioredis';
 import { audit, db, initDb } from './db.js';
 import * as transcodeJobs from './transcodeRepo.js';
@@ -7,22 +8,23 @@ import { transcodeTrackToHls } from './transcoder.js';
 import { runFastScan } from './fastScan.js';
 import {
   deactivateRemovedAudiobookLibraries,
+  retireUnavailableStagingTracks,
   retireRemovedMusicLibraries,
 } from './libraryReconciliation.js';
 import { runTempoBackfillBatch } from './tempoBackfill.js';
 import { refreshAllPodcasts, startPodcastRefresh } from './podcastRefresh.js';
 import { scanAudiobooks } from './audiobookScanner.js';
-import { ensureTracksIndex, getTrackIndexStatus, indexAllTracks } from './indexer.js';
+import { ensureTracksIndex, getTrackIndexStatus, indexAllTracks, indexChangedTracks } from './indexer.js';
 import { reconcileMusicArtwork } from './musicArtReconciliation.js';
 import logger from './logger.js';
 import { formatRescanInterval, parseRescanInterval } from './rescanInterval.js';
+import { configuredMusicRoots, DEEZER_SOURCE_PLUGIN_ID } from './musicRoots.js';
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
 
-const musicDirs = (process.env.MUSIC_DIRS ?? process.env.MUSIC_DIR ?? '/music')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const musicRoots = configuredMusicRoots(process.env);
+const musicDirs = musicRoots.directories;
+const stagingDirectory = musicRoots.stagingDirectory;
 
 const audiobookDirs = (process.env.AUDIOBOOK_DIRS ?? '')
   .split(',')
@@ -36,6 +38,7 @@ const tempoDetectEnabled = process.env.TEMPO_DETECT === '1' && (process.env.TEMP
 const tempoBackfillIntervalMs = parseInt(process.env.TEMPO_BACKFILL_INTERVAL_MS ?? '1800000', 10); // Default 30 minutes
 
 logger.success('worker', 'Started', { musicDirs, useFastScan, rescanIntervalMs });
+if (musicRoots.overlap) logger.warn('worker', 'Deezer staging overlaps a music root; skipping its separate library to avoid duplicate tracks');
 
 await initDb();
 const recoveredTranscodes = await transcodeJobs.recoverInterruptedTranscodeJobs();
@@ -45,13 +48,22 @@ if (recoveredTranscodes > 0) {
 
 // Ensure libraries exist in DB so we can link tracks
 for (const dir of musicDirs) {
-  await db().query(
-    `INSERT INTO libraries (mount_path, media_type, created_at)
-     VALUES ($1, 'music', NOW())
-     ON CONFLICT (mount_path) DO UPDATE
-       SET media_type = 'music', enabled = TRUE`,
-    [dir]
-  );
+  const sourcePluginId = dir === stagingDirectory ? DEEZER_SOURCE_PLUGIN_ID : null;
+  const inserted = await db().query<{ id: number }>(
+    `INSERT INTO libraries (mount_path, media_type, source_plugin_id, created_at)
+     VALUES ($1, 'music', $2, NOW())
+     ON CONFLICT (mount_path) DO NOTHING RETURNING id`, [dir, sourcePluginId]);
+  if (!inserted.rows[0]) {
+    await db().query(
+      `UPDATE libraries SET media_type = 'music', enabled = TRUE, source_plugin_id = $2
+       WHERE mount_path = $1`, [dir, sourcePluginId]);
+  } else if (sourcePluginId) {
+    // New plugin libraries are available to existing listeners by default.
+    await db().query(
+      `INSERT INTO user_libraries(user_id, library_id)
+       SELECT id, $1 FROM users WHERE role = 'user' ON CONFLICT DO NOTHING`,
+      [inserted.rows[0].id]);
+  }
 }
 
 const retiredMusicLibraries = await retireRemovedMusicLibraries(db(), musicDirs);
@@ -131,6 +143,7 @@ try {
 let scanInProgress = false;
 let cancelRequested = false;
 let pendingRescanForce: boolean | null = null;
+const pendingStagingScans = new Set<string>();
 let musicArtReconciliationInProgress = true;
 
 // Listen for rescan/cancel commands from API (must be active during long scans)
@@ -152,12 +165,15 @@ subscriber.on('message', async (channel, message) => {
     }
     if (cmd.command === 'rescan') {
       const force = cmd.force === true;
+      const target = cmd.mountPath === stagingDirectory ? stagingDirectory : null;
+      if (cmd.mountPath && !target) return;
       if (scanInProgress) {
-        pendingRescanForce = pendingRescanForce === true || force;
+        if (target) pendingStagingScans.add(target);
+        else pendingRescanForce = pendingRescanForce === true || force;
         logger.info('scan', `Manual rescan queued by ${cmd.by || 'unknown'}${force ? ' (FORCE FULL)' : ''}`);
       } else {
         logger.info('scan', `Manual rescan triggered by ${cmd.by || 'unknown'}${force ? ' (FORCE FULL)' : ''}`);
-        void periodicRescan(force);
+        void periodicRescan(force, target);
       }
     } else if (cmd.command === 'cancel_scan') {
       cancelRequested = true;
@@ -168,14 +184,16 @@ subscriber.on('message', async (channel, message) => {
   }
 });
 
-async function periodicRescan(force: boolean = false) {
+async function periodicRescan(force: boolean = false, target: string | null = null) {
   if (!useFastScan) return;
   if (musicArtReconciliationInProgress) {
-    pendingRescanForce = pendingRescanForce === true || force;
+    if (target) pendingStagingScans.add(target);
+    else pendingRescanForce = pendingRescanForce === true || force;
     logger.info('scan', `Library scan queued until music artwork reconciliation finishes${force ? ' (FORCE FULL)' : ''}`);
     return;
   }
   if (scanInProgress) {
+    if (target) pendingStagingScans.add(target);
     logger.info('scan', 'Scan already in progress, skipping');
     return;
   }
@@ -193,9 +211,31 @@ async function periodicRescan(force: boolean = false) {
     );
   } catch { /* ignore */ }
   try {
-    for (const dir of musicDirs) {
+    for (const dir of target ? [target] : musicDirs) {
       if (cancelRequested) break;
       try {
+        if (dir === stagingDirectory) {
+          try {
+            await stat(dir);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            const retired = await retireUnavailableStagingTracks(db(), dir);
+            if (retired.length) {
+              await ensureTracksIndex();
+              await indexChangedTracks([], retired);
+              await publisher.incr('reco:library_revision');
+              await audit('plugin_staging_library_missing', { mountPath: dir, retiredTracks: retired.length });
+            }
+            const indexStatus = await getTrackIndexStatus();
+            if (!indexStatus.consistent) await indexAllTracks();
+            const progress = { status: 'idle', mountPath: dir, libraryIndex: musicDirs.indexOf(dir) + 1,
+              libraryTotal: musicDirs.length, filesFound: 0, filesProcessed: 0, retiredTracks: retired.length };
+            await publisher.set('scan:progress', JSON.stringify(progress));
+            await publisher.publish('library:updates', JSON.stringify({ event: 'scan:complete', ...progress, ts: Date.now() }));
+            logger.info('scan', `Deezer staging directory is absent; ${retired.length} plugin tracks retired`);
+            continue;
+          }
+        }
         await runFastScan(dir, force, {
           libraryIndex: musicDirs.indexOf(dir) + 1,
           libraryTotal: musicDirs.length,
@@ -235,6 +275,10 @@ async function periodicRescan(force: boolean = false) {
     try { publisher.disconnect(); } catch { /* */ }
     if (queuedForce !== null) {
       setImmediate(() => void periodicRescan(queuedForce));
+    } else if (pendingStagingScans.size) {
+      const [next] = pendingStagingScans;
+      pendingStagingScans.delete(next);
+      setImmediate(() => void periodicRescan(false, next));
     }
   }
 }
@@ -261,6 +305,14 @@ setTimeout(() => {
 // Schedule periodic rescans
 logger.info('worker', `Scheduling periodic library scan every ${formatRescanInterval(rescanIntervalMs)}`);
 setInterval(periodicRescan, rescanIntervalMs);
+if (stagingDirectory) {
+  // A small plugin library should reflect external file removals promptly even
+  // when the main NAS scan is configured to run only every few hours.
+  const stagingIntervalMs = Math.max(30_000, Math.min(60 * 60_000,
+    Number(process.env.DEEZER_STAGING_SCAN_INTERVAL_MS) || 60_000));
+  logger.info('worker', `Scheduling Deezer staging scan every ${formatRescanInterval(stagingIntervalMs)}`);
+  setInterval(() => void periodicRescan(false, stagingDirectory), stagingIntervalMs);
+}
 
 // Schedule tempo backfill (independent batches throughout the day)
 if (tempoDetectEnabled) {

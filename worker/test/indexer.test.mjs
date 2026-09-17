@@ -16,6 +16,7 @@ test('rowToDoc normalizes PostgreSQL bigint identifiers', () => {
   const doc = rowToDoc({
     id: '42',
     library_id: '7',
+    source_plugin_id: 'mvbar.missing-music',
     path: 'Artist/Album/Track.mp3',
     ext: '.mp3',
     title: 'Track',
@@ -35,6 +36,7 @@ test('rowToDoc normalizes PostgreSQL bigint identifiers', () => {
 
   assert.equal(doc.id, 42);
   assert.equal(doc.library_id, 7);
+  assert.equal(doc.source_plugin_id, 'mvbar.missing-music');
   assert.equal(doc.index_version, TRACK_INDEX_VERSION);
   assert.equal(doc.artist_ascii, 'Sokol');
 });

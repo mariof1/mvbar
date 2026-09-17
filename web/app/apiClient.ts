@@ -774,7 +774,7 @@ export async function removeFavorite(token: string, trackId: number) {
 export async function listFavorites(token: string, limit = 100, offset = 0) {
   return (await apiFetch(`/favorites?limit=${limit}&offset=${offset}`, { method: 'GET' }, token)) as {
     ok: boolean;
-    tracks: Array<{ id: number; path: string; ext: string; title: string | null; artist: string | null; album: string | null; duration_ms: number | null; added_at: string }>;
+    tracks: Array<{ id: number; path: string; ext: string; title: string | null; artist: string | null; album: string | null; duration_ms: number | null; source_plugin_id?: string | null; added_at: string }>;
     limit: number;
     offset: number;
   };
@@ -899,7 +899,7 @@ export async function browseArtists(token: string, limit = 50, offset = 0, sort:
   const url = `/browse/artists?limit=${limit}&offset=${offset}&sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
   return (await apiFetch(url, { method: 'GET' }, token)) as {
     ok: boolean;
-    artists: Array<{ id: number; name: string; track_count: number; album_count: number }>;
+    artists: Array<{ id: number; name: string; track_count: number; album_count: number; has_plugin_downloads: boolean }>;
     total: number;
     limit: number;
     offset: number;
@@ -910,8 +910,8 @@ export async function browseArtistById(token: string, id: number) {
   return (await apiFetch(`/browse/artist/${id}`, { method: 'GET' }, token)) as {
     ok: boolean;
     artist: { id: number; name: string; art_path: string | null; art_hash: string | null };
-    albums: Array<{ album: string; display_artist: string; track_count: number; art_path: string | null; art_hash: string | null }>;
-    appearsOn: Array<{ album: string; album_artist: string; track_count: number; art_path: string | null; art_hash: string | null }>;
+    albums: Array<{ album: string; display_artist: string; track_count: number; art_path: string | null; art_hash: string | null; has_plugin_downloads: boolean }>;
+    appearsOn: Array<{ album: string; album_artist: string; track_count: number; art_path: string | null; art_hash: string | null; has_plugin_downloads: boolean }>;
   };
 }
 
@@ -929,7 +929,7 @@ export async function browseAlbums(token: string, limit = 50, offset = 0, sort: 
   const url = `/browse/albums?limit=${limit}&offset=${offset}&sort=${sort}${artistId ? `&artistId=${artistId}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
   return (await apiFetch(url, { method: 'GET' }, token)) as {
     ok: boolean;
-    albums: Array<{ display_artist: string; album: string; track_count: number; art_path: string | null; art_hash: string | null }>;
+    albums: Array<{ display_artist: string; album: string; track_count: number; art_path: string | null; art_hash: string | null; has_plugin_downloads: boolean }>;
     total: number;
     limit: number;
     offset: number;
@@ -960,6 +960,7 @@ export async function browseGenreTracks(token: string, genre: string, limit = 50
       duration_ms: number | null;
       art_path: string | null;
       artists: Array<{ id: number; name: string }>;
+      source_plugin_id?: string | null;
     }>;
     limit: number;
     offset: number;
@@ -986,6 +987,7 @@ export async function browseCountryTracks(token: string, country: string, limit 
       duration_ms: number | null;
       art_path: string | null;
       artists: Array<{ id: number; name: string }>;
+      source_plugin_id?: string | null;
     }>;
     limit: number;
     offset: number;
@@ -1012,6 +1014,7 @@ export async function browseLanguageTracks(token: string, language: string, limi
       duration_ms: number | null;
       art_path: string | null;
       artists: Array<{ id: number; name: string }>;
+      source_plugin_id?: string | null;
     }>;
     limit: number;
     offset: number;
@@ -1070,6 +1073,7 @@ export async function browseAlbum(token: string, artist: string | null | undefin
       art_hash: string | null;
       track_count: number;
       total_discs?: number;
+      has_plugin_downloads?: boolean;
     };
     tracks: Array<{
       id: number;
@@ -1087,6 +1091,7 @@ export async function browseAlbum(token: string, artist: string | null | undefin
       artists: Array<{ id: number; name: string }>;
       discNumber?: number | null;
       trackNumber?: number | null;
+      source_plugin_id?: string | null;
     }>;
   };
 }
@@ -1310,6 +1315,7 @@ export async function getSmartPlaylist(token: string, id: number, sort?: string,
       duration: number | null;
       art_path: string | null;
       art_hash: string | null;
+      source_plugin_id?: string | null;
     }>;
   };
 }

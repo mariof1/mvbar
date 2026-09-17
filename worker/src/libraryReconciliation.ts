@@ -95,3 +95,18 @@ export async function deactivateRemovedAudiobookLibraries(
     mountPath: row.mount_path,
   }));
 }
+
+// Only the plugin-owned library is retired when its staging mount disappears.
+// Keeping rows soft-deleted preserves favorites/playlists for a later restore.
+export async function retireUnavailableStagingTracks(
+  database: Pick<Pool, 'query'>,
+  mountPath: string
+): Promise<number[]> {
+  const result = await database.query<{ id: number | string }>(
+    `UPDATE tracks SET deleted_at = NOW()
+     WHERE library_id = (SELECT id FROM libraries WHERE mount_path = $1 AND source_plugin_id = $2)
+       AND deleted_at IS NULL RETURNING id`,
+    [mountPath, 'mvbar.missing-music']
+  );
+  return result.rows.map(row => Number(row.id));
+}

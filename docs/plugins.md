@@ -215,10 +215,21 @@ incomplete album can still be requested. The request queue has status filters
 and search, and album downloads show track-by-track progress before packaging.
 Staging verifies the full Deezer track list and prepares one ZIP with tagged
 tracks; a failed track leaves no ready album. This is unavailable while an
-external request provider is configured. Staged files remain outside the music
-library; the administrator can download the song or ZIP, review/import it, and
-then mark the request fulfilled. The account's session cookie is never exposed
-to the plugin or browser.
+external request provider is configured. The staging directory is a separate,
+automatically scanned music library. Album tracks are published together after
+the download finishes, alongside the ZIP for administrators. Artist and album
+cards show when they contain plugin downloads, and individual tracks are marked
+as plugin downloads. Removing the staging directory retires only its tracks;
+restoring it reactivates them on the next scan. Keep this directory separate from
+other music roots and do not put unrelated files there. Downloads are refused
+when the staging path is unavailable, so a missing NAS mount cannot be silently
+replaced by a new local folder. Requests whose staged files disappear show
+**Missing from staging**; administrators can restore the folder or download
+again. The staging library is
+rescanned every minute by default; set `DEEZER_STAGING_SCAN_INTERVAL_MS` to a
+value from 30000 to 3600000 to adjust this interval. Administrators can still
+download the ZIP and mark a request fulfilled. The account's session cookie is
+never exposed to the plugin or browser.
 
 For Docker Compose, add `DEEZER_ARL` to the private `.env` file and rebuild with
 `docker compose up -d --build`. The image includes Python, streamrip, and the

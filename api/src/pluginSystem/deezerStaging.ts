@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import { constants, createWriteStream } from 'node:fs';
-import { copyFile, mkdir, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ZipArchive } from 'archiver';
@@ -196,12 +196,18 @@ export function deezerStagingConfig() {
   const directory = process.env.DEEZER_DOWNLOAD_DIR?.trim() ?? '';
   const arl = process.env.DEEZER_ARL?.trim() ?? '';
   const quality = Number(process.env.DEEZER_QUALITY ?? 0);
+  const resolved = directory ? path.resolve(directory) : '';
+  const roots = (process.env.MUSIC_DIRS ?? process.env.MUSIC_DIR ?? '/music').split(',').map(root => root.trim()).filter(Boolean);
+  const inside = (relative: string) => !relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
+  const overlapsMusic = Boolean(resolved && roots.some(root =>
+    inside(path.relative(path.resolve(root), resolved)) || inside(path.relative(resolved, path.resolve(root)))));
   return {
-    directory: directory ? path.resolve(directory) : '',
+    directory: resolved,
     arl,
     python: process.env.DEEZER_PYTHON?.trim() || (process.platform === 'win32' ? 'python' : 'python3'),
     quality: Number.isInteger(quality) && quality >= 0 && quality <= 2 ? quality : 0,
-    configured: Boolean(directory && arl),
+    configured: Boolean(directory && arl && !overlapsMusic),
+    error: overlapsMusic ? 'DEEZER_DOWNLOAD_DIR must be separate from MUSIC_DIRS' : 'Set DEEZER_ARL and DEEZER_DOWNLOAD_DIR on the server first',
   };
 }
 
@@ -300,7 +306,7 @@ async function zipAlbum(working: string, album: VerifiedDeezerAlbum, extensions:
 
 export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: AlbumProgress): Promise<string> {
   const config = deezerStagingConfig();
-  if (!config.configured) throw new Error('Set DEEZER_ARL and DEEZER_DOWNLOAD_DIR on the server first');
+  if (!config.configured) throw new Error(config.error);
   if (album.tracks.length !== album.trackCount || album.trackCount < 1 || album.trackCount > 200) {
     throw new Error('Album track list is incomplete');
   }
@@ -326,12 +332,36 @@ export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: 
     if (!details.isFile() || details.size < 10_000) throw new Error('Album archive is incomplete');
     const base = `${safeFilePart(album.artist)} - ${safeFilePart(album.title)} [deezer-album-${album.id}]`;
     for (let attempt = 0; attempt < 20; attempt++) {
-      const filename = `${base}${attempt ? `-${attempt + 1}` : ''}.zip`;
+      const stem = `${base}${attempt ? `-${attempt + 1}` : ''}`;
+      const filename = `${stem}.zip`;
+      const albumDirectory = path.join(config.directory, stem);
+      try {
+        await stat(albumDirectory);
+        continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
       try {
         await copyFile(source, path.join(config.directory, filename), constants.COPYFILE_EXCL);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
+        throw error;
+      }
+      try {
+        await unlink(source);
+        for (const [index, track] of album.tracks.entries()) {
+          const extension = extensions[index];
+          await rename(
+            path.join(working, `track-${String(index + 1).padStart(3, '0')}.${extension}`),
+            path.join(working, `${String(index + 1).padStart(3, '0')} - ${safeFilePart(track.title)}.${extension}`)
+          );
+        }
+        // Publishing the complete folder is atomic; the scanner ignores .incoming-*.
+        await rename(working, albumDirectory);
         return filename;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        await unlink(path.join(config.directory, filename)).catch(() => {});
+        throw error;
       }
     }
     throw new Error('Too many duplicate staged albums');
@@ -342,7 +372,7 @@ export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: 
 
 export async function stageDeezerTrack(track: DeezerTrack): Promise<string> {
   const config = deezerStagingConfig();
-  if (!config.configured) throw new Error('Set DEEZER_ARL and DEEZER_DOWNLOAD_DIR on the server first');
+  if (!config.configured) throw new Error(config.error);
   await mkdir(config.directory, { recursive: true, mode: 0o700 });
   const working = path.join(config.directory, `.incoming-${crypto.randomUUID()}`);
   await mkdir(working, { mode: 0o700 });
@@ -353,17 +383,11 @@ export async function stageDeezerTrack(track: DeezerTrack): Promise<string> {
     const details = await stat(source);
     if (!details.isFile() || details.size < 10_000) throw new Error('Deezer returned an empty or incomplete audio file');
     const base = `${safeFilePart(track.artist)} - ${safeFilePart(track.title)} [deezer-${track.id}]`;
-    let filename = `${base}.${result.extension}`;
-    for (let attempt = 0; attempt < 20; attempt++) {
-      try {
-        await copyFile(source, path.join(config.directory, filename), constants.COPYFILE_EXCL);
-        return filename;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        filename = `${base}-${attempt + 2}.${result.extension}`;
-      }
-    }
-    throw new Error('Too many duplicate staged files');
+    // The source and destination are on the same mount. Rename makes the audio
+    // visible only once the downloader and tag writer have finished.
+    const filename = `${base}-${crypto.randomUUID().slice(0, 12)}.${result.extension}`;
+    await rename(source, path.join(config.directory, filename));
+    return filename;
   } finally {
     await rm(working, { recursive: true, force: true });
   }

@@ -29,6 +29,7 @@ import { useUi, type PodcastEpisode } from './uiStore';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
+import { PluginDownloadBadge } from './PluginDownloadBadge';
 import { useToastStore } from './Toast';
 
 type Hit = {
@@ -41,6 +42,7 @@ type Hit = {
   path: string;
   ext: string;
   duration_ms: number | null;
+  source_plugin_id?: string | null;
 };
 
 type ArtistHit = {
@@ -51,6 +53,7 @@ type ArtistHit = {
   art_track_id: number | null;
   track_count: number;
   album_count: number;
+  has_plugin_downloads?: boolean;
 };
 
 type AlbumHit = {
@@ -61,6 +64,7 @@ type AlbumHit = {
   art_path: string | null;
   art_hash: string | null;
   track_count: number;
+  has_plugin_downloads?: boolean;
 };
 
 type PlaylistHit = {
@@ -969,7 +973,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium text-white truncate">{a.name}</div>
+                          <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white"><span className="truncate">{a.name}</span>{a.has_plugin_downloads && <PluginDownloadBadge mixed />}</div>
                           <div className="text-xs text-slate-400">{formatCount(a.track_count, 'track')} · {formatCount(a.album_count, 'album')}</div>
                         </div>
                         <svg className="w-4 h-4 text-slate-600 flex-shrink-0 group-hover:opacity-0 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1022,7 +1026,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium text-white truncate">{a.album}</div>
+                          <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white"><span className="truncate">{a.album}</span>{a.has_plugin_downloads && <PluginDownloadBadge mixed />}</div>
                           <div className="text-xs text-slate-400 truncate">{formatArtistValue(a.display_artist) ?? 'Unknown Artist'} · {formatCount(a.track_count, 'track')}</div>
                         </div>
                         <svg className="w-4 h-4 text-slate-600 flex-shrink-0 group-hover:opacity-0 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1204,7 +1208,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
 
                       {/* Track info */}
                       <button onClick={() => handlePlay(t)} className="flex-1 min-w-0 text-left">
-                        <div className="text-sm font-medium text-white truncate">{t.title ?? t.path}</div>
+                        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white"><span className="truncate">{t.title ?? t.path}</span>{t.source_plugin_id && <PluginDownloadBadge />}</div>
                         <div className="text-xs text-slate-400 truncate">
                           {[trackArtistLabel(t), t.album].filter(Boolean).join(' · ')}
                         </div>

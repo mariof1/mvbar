@@ -10,6 +10,7 @@ import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
 import { useToastStore } from './Toast';
 import { useLatestRequest } from './useLatestRequest';
+import { PluginDownloadBadge } from './PluginDownloadBadge';
 
 type Album = {
   album: string;
@@ -18,6 +19,7 @@ type Album = {
   art_path: string | null;
   art_hash: string | null;
   first_track_id: number;
+  has_plugin_downloads?: boolean;
 };
 
 type Track = {
@@ -29,6 +31,7 @@ type Track = {
   track_num: number | null;
   disc_num: number | null;
   duration_ms: number;
+  source_plugin_id?: string | null;
 };
 
 function ArtImage({ path, hash, className }: { path: string | null; hash: string | null; className?: string }) {
@@ -199,6 +202,7 @@ export function RecentlyAdded({
             <h2 className="text-2xl font-bold text-white [overflow-wrap:anywhere]">{selectedAlbum.album}</h2>
             <p className="text-slate-400 mt-1 [overflow-wrap:anywhere]">{formatArtistValue(selectedAlbum.display_artist) ?? 'Unknown Artist'}</p>
             <p className="text-slate-500 text-sm mt-1">{formatCount(selectedAlbum.track_count, 'track')}</p>
+            {selectedAlbum.has_plugin_downloads && <div className="mt-2"><PluginDownloadBadge mixed /></div>}
             <div className="flex gap-3 mt-4">
               <button
                 onClick={(e) => handlePlayAlbum(selectedAlbum, e)}
@@ -232,7 +236,7 @@ export function RecentlyAdded({
                   {track.track_num || idx + 1}
                 </span>
                 <span className="flex-1 min-w-0">
-                  <span className="block text-white truncate">{track.title}</span>
+                  <span className="flex min-w-0 items-center gap-2 text-white"><span className="truncate">{track.title}</span>{track.source_plugin_id && <PluginDownloadBadge />}</span>
                   <span className="block text-slate-400 text-sm truncate">{trackArtistLabel(track)}</span>
                 </span>
                 <span className="text-slate-500 text-sm">{formatDuration(track.duration_ms)}</span>
@@ -301,6 +305,7 @@ export function RecentlyAdded({
           </div>
           <h3 className="font-medium text-white truncate">{album.album}</h3>
           <p className="text-sm text-slate-400 truncate">{formatArtistValue(album.display_artist) ?? 'Unknown Artist'}</p>
+          {album.has_plugin_downloads && <PluginDownloadBadge mixed />}
         </div>
       ))}
     </div>

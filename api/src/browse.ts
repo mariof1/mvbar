@@ -65,7 +65,8 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         a.art_path,
         a.art_hash,
         count(distinct t.id)::int as track_count,
-        count(distinct ${albumNameSql})::int as album_count
+        count(distinct ${albumNameSql})::int as album_count,
+        bool_or(t.source_plugin_id is not null) as has_plugin_downloads
       from artists a
       join track_artists ta on ta.artist_id = a.id
       join active_tracks t on t.id = ta.track_id
@@ -208,7 +209,9 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         order by ${albumNameSql}, t.path
       ),
       album_counts as (
-        select ${albumNameSql} as album, count(*)::int as track_count, max(t.updated_at) as max_updated, case when bool_or(nullif(btrim(t.album), '') is null) then max(t.created_at) else min(t.created_at) end as min_created_at
+        select ${albumNameSql} as album, count(*)::int as track_count, max(t.updated_at) as max_updated,
+          bool_or(t.source_plugin_id is not null) as has_plugin_downloads,
+          case when bool_or(nullif(btrim(t.album), '') is null) then max(t.created_at) else min(t.created_at) end as min_created_at
         from active_tracks t
         where true
         ${artistFilter}
@@ -230,6 +233,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
           )
         ) as display_artist,
         ac.track_count,
+        ac.has_plugin_downloads,
         ua.art_path,
         ua.art_hash,
         ac.max_updated,
@@ -569,7 +573,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       `
       select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms,
              t.art_path, t.art_hash, t.path, t.genre, t.country, t.language,
-             t.year, t.bpm, t.track_number, t.disc_number
+             t.year, t.bpm, t.track_number, t.disc_number, t.source_plugin_id
       from active_tracks t
       where t.country ilike '%' || $1 || '%'
       ${libFilter}
@@ -610,7 +614,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       `
       select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms,
              t.art_path, t.art_hash, t.path, t.genre, t.country, t.language,
-             t.year, t.bpm, t.track_number, t.disc_number
+             t.year, t.bpm, t.track_number, t.disc_number, t.source_plugin_id
       from active_tracks t
       where t.language ilike '%' || $1 || '%'
       ${libFilter}
@@ -651,7 +655,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       `
       select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms,
              t.art_path, t.art_hash, t.path, t.genre, t.country, t.language,
-             t.year, t.bpm, t.track_number, t.disc_number
+             t.year, t.bpm, t.track_number, t.disc_number, t.source_plugin_id
       from active_tracks t
       where t.genre ilike '%' || $1 || '%'
       ${libFilter}
@@ -714,7 +718,8 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         order by ${albumNameSql}, t.path
       ),
       album_counts as (
-        select ${albumNameSql} as album, count(*)::int as track_count
+        select ${albumNameSql} as album, count(*)::int as track_count,
+          bool_or(t.source_plugin_id is not null) as has_plugin_downloads
         from track_artists ta
         join active_tracks t on t.id = ta.track_id
         where ta.artist_id = $1
@@ -733,6 +738,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
            where ta2.track_id = at.first_track_id and ta2.role = 'artist')
         ) as display_artist,
         ac.track_count,
+        ac.has_plugin_downloads,
         at.art_path,
         at.art_hash
       from album_tracks at
@@ -770,7 +776,8 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         order by ${albumNameSql}, t.path
       ),
       album_counts as (
-        select ${albumNameSql} as album, count(*)::int as track_count
+        select ${albumNameSql} as album, count(*)::int as track_count,
+          bool_or(t.source_plugin_id is not null) as has_plugin_downloads
         from track_artists ta
         join active_tracks t on t.id = ta.track_id
         where ta.artist_id = $1
@@ -790,6 +797,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
            where ta2.track_id = at.first_track_id and ta2.role = 'artist')
         ) as album_artist,
         ac.track_count,
+        ac.has_plugin_downloads,
         at.art_path,
         at.art_hash
       from album_tracks at
@@ -834,7 +842,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       r = await db().query(
         `
         select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
-               t.track_number, t.track_total, t.disc_number, t.disc_total
+               t.track_number, t.track_total, t.disc_number, t.disc_total, t.source_plugin_id
         from active_tracks t
         join track_artists ta on ta.track_id = t.id
         where ta.artist_id = $1
@@ -871,7 +879,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         r = await db().query(
           `
           select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
-                 t.track_number, t.track_total, t.disc_number, t.disc_total
+                 t.track_number, t.track_total, t.disc_number, t.disc_total, t.source_plugin_id
           from active_tracks t
           join track_artists ta on ta.track_id = t.id
           where ta.artist_id = $1
@@ -896,7 +904,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         r = await db().query(
           `
           select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
-                 t.track_number, t.track_total, t.disc_number, t.disc_total
+                 t.track_number, t.track_total, t.disc_number, t.disc_total, t.source_plugin_id
           from active_tracks t
           where ${albumNameSql} = $2 and (
             t.album_artist = $1 
@@ -916,7 +924,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       r = await db().query(
         `
         select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
-               t.track_number, t.track_total, t.disc_number, t.disc_total
+               t.track_number, t.track_total, t.disc_number, t.disc_total, t.source_plugin_id
         from active_tracks t
         where ${albumNameSql} = $1
         ${libFilter}
@@ -976,6 +984,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         art_path: firstTrack.art_path,
         art_hash: firstTrack.art_hash,
         track_count: tracks.length,
+        has_plugin_downloads: tracks.some((track: any) => Boolean(track.source_plugin_id)),
         total_discs: totalDiscs
       },
       tracks 

@@ -70,7 +70,7 @@ export async function listFavorites(userId: string, limit: number, offset: numbe
   const params = allowedLibraries === null ? [userId, limit, offset] : [userId, limit, offset, allowedLibraries];
 
   const r = await db().query(
-    `select t.id, t.path, t.ext, t.title, t.artist, t.album, t.duration_ms, ft.added_at
+    `select t.id, t.path, t.ext, t.title, t.artist, t.album, t.duration_ms, t.source_plugin_id, ft.added_at
      from favorite_tracks ft
      join active_tracks t on t.id = ft.track_id
      where ft.user_id=$1

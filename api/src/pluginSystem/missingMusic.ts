@@ -7,7 +7,7 @@ import path from 'node:path';
 import fp from 'fastify-plugin';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { allowedLibrariesForUser } from '../access.js';
-import { audit, db } from '../db.js';
+import { audit, db, redis } from '../db.js';
 import logger from '../logger.js';
 import { broadcastToAdmins, broadcastToUser } from '../websocket.js';
 import { pluginsEnabledGlobally } from './registry.js';
@@ -521,6 +521,24 @@ function serializeRequest(row: MediaRequestRow) {
   };
 }
 
+async function stagedMediaAvailable(row: MediaRequestRow): Promise<boolean> {
+  const deezer = row.metadata?.deezer as { filename?: unknown } | undefined;
+  if (!validStagedFilename(deezer?.filename)) return false;
+  const directory = deezerStagingConfig().directory;
+  if (!directory) return false;
+  try {
+    const file = await stat(path.join(directory, deezer.filename));
+    if (!file.isFile()) return false;
+    if (row.item_type === 'album') {
+      const album = await stat(path.join(directory, deezer.filename.slice(0, -4)));
+      if (!album.isDirectory()) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const deezerJobs = new Map<string, Promise<void>>();
 
 async function downloadDeezerRequest(request: MediaRequestRow, itemId: string) {
@@ -553,7 +571,12 @@ async function downloadDeezerRequest(request: MediaRequestRow, itemId: string) {
       void audit('plugin_media_staged_from_deezer', { pluginId: request.plugin_id, requestId: request.id,
         itemType: request.item_type, deezerId: itemId, trackCount: album?.trackCount ?? 1, filename })
         .catch(error => logger.warn('missing-music', `Could not audit Deezer staging: ${errorMessage(error)}`));
-      await notifyRequest(row, 'staged', 'Download is ready in the admin staging folder');
+      try {
+        await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: 'missing-music', mountPath: deezerStagingConfig().directory }));
+      } catch (error) {
+        logger.warn('missing-music', `Could not trigger staging library scan: ${errorMessage(error)}`);
+      }
+      await notifyRequest(row, 'staged', 'Download is ready and being added to the library');
     }
   } catch (error) {
     const message = errorMessage(error).slice(0, 500);
@@ -778,6 +801,12 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!req.user) return reply.code(401).send({ ok: false, error: 'Authentication required' });
     const installed = await getMissingMusicPlugin(false);
     const providerConfigured = Boolean(installed?.config.providerBaseUrl?.trim());
+    const staging = deezerStagingConfig();
+    let stagingAvailable = staging.configured;
+    if (stagingAvailable) {
+      try { stagingAvailable = (await stat(staging.directory)).isDirectory(); }
+      catch { stagingAvailable = false; }
+    }
     let localArtistCount = 0;
     let taggedArtistCount = 0;
     if (installed) {
@@ -802,8 +831,11 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       enabled: Boolean(installed?.enabled && pluginsEnabledGlobally()),
       configured: providerConfigured,
       providerConfigured,
-      deezerConfigured: deezerStagingConfig().configured,
-      deezerStagingDirectory: req.user.role === 'admin' ? deezerStagingConfig().directory || null : null,
+      deezerConfigured: stagingAvailable,
+      deezerConfigurationError: req.user.role === 'admin' && !stagingAvailable
+        ? staging.configured ? 'Deezer staging directory is unavailable. Restore its mount before downloading.' : staging.error
+        : null,
+      deezerStagingDirectory: req.user.role === 'admin' ? staging.directory || null : null,
       mode: providerConfigured ? 'provider' : 'wanted-list',
       requireAdminApproval: installed?.config.requireAdminApproval !== false,
       localArtistCount,
@@ -1027,7 +1059,17 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
         order by request.created_at desc limit 500`,
       all ? [plugin.id] : [plugin.id, req.user!.userId]
     );
-    return { ok: true, requests: result.rows.map(serializeRequest) };
+    const requests: ReturnType<typeof serializeRequest>[] = [];
+    for (let index = 0; index < result.rows.length; index += 32) {
+      requests.push(...await Promise.all(result.rows.slice(index, index + 32).map(async row => {
+        const serialized = serializeRequest(row);
+        if (serialized.deezer?.state === 'staged' && !await stagedMediaAvailable(row)) {
+          serialized.deezer.state = 'missing';
+        }
+        return serialized;
+      })));
+    }
+    return { ok: true, requests };
   });
 
   app.get('/api/plugins/missing-music/requests/:id/deezer-candidates', async (req, reply) => {
@@ -1052,21 +1094,35 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!plugin) return;
     if (req.user!.role !== 'admin') return reply.code(403).send({ ok: false, error: 'Administrator access required' });
     if (plugin.config.providerBaseUrl) return reply.code(409).send({ ok: false, error: 'Disable the external request provider before using Deezer staging' });
-    if (!deezerStagingConfig().configured) return reply.code(409).send({ ok: false, error: 'Set DEEZER_ARL and DEEZER_DOWNLOAD_DIR on the server first' });
+    if (!deezerStagingConfig().configured) return reply.code(409).send({ ok: false, error: deezerStagingConfig().error });
     const body = req.body as { trackId?: unknown; albumId?: unknown } | null;
     if (body?.albumId !== undefined && body.trackId !== undefined) return reply.code(400).send({ ok: false, error: 'Choose one Deezer item' });
     const itemType = body?.albumId !== undefined ? 'album' : 'track';
     const itemId = itemType === 'album' ? body?.albumId : body?.trackId;
     if (typeof itemId !== 'string' || !/^\d{1,16}$/.test(itemId)) return reply.code(400).send({ ok: false, error: 'Invalid Deezer item id' });
+    try {
+      if (!(await stat(deezerStagingConfig().directory)).isDirectory()) throw new Error('Not a directory');
+    } catch {
+      return reply.code(409).send({ ok: false, error: 'Deezer staging directory is unavailable. Restore its mount before downloading.' });
+    }
     const { id } = req.params as { id: string };
+    const existing = (await db().query<MediaRequestRow>(
+      'select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id]
+    )).rows[0];
+    const previous = existing?.metadata?.deezer as { state?: string; filename?: string } | undefined;
+    const missingStaged = existing?.item_type === itemType && existing.status === 'submitted'
+      && previous?.state === 'staged' && !await stagedMediaAvailable(existing);
     const request = (await db().query<MediaRequestRow>(
       `update plugin_media_requests set status='submitted', submitted_at=now(), approved_by=coalesce(approved_by,$3),
         approved_at=coalesce(approved_at,now()), provider_error=null,
         metadata=jsonb_set(metadata,'{deezer}',jsonb_build_object('state','downloading',
           case when item_type='album' then 'albumId' else 'trackId' end,$4::text)), updated_at=now()
-       where id=$1 and plugin_id=$2 and item_type=$5 and status in ('requested','approved','failed')
-         and coalesce(metadata->'deezer'->>'state','') not in ('downloading','staged') returning *`,
-      [id, plugin.id, req.user!.userId, itemId, itemType]
+       where id=$1 and plugin_id=$2 and item_type=$5 and (
+         (status in ('requested','approved','failed') and coalesce(metadata->'deezer'->>'state','') not in ('downloading','staged'))
+         or ($6::boolean and status='submitted' and metadata->'deezer'->>'state'='staged'
+           and metadata->'deezer'->>'filename'=$7)
+       ) returning *`,
+      [id, plugin.id, req.user!.userId, itemId, itemType, missingStaged, missingStaged ? previous?.filename : null]
     )).rows[0];
     if (!request) return reply.code(409).send({ ok: false, error: 'Request is not available for Deezer staging' });
     const job = downloadDeezerRequest(request, itemId);

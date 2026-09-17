@@ -183,7 +183,7 @@ export async function buildSmartPlaylistQuery(
   filters: SmartFilters,
   sortMode: string,
   allowed: number[] | null,
-  selectColumns = 't.id, t.title, t.artist, t.album, t.duration_ms, t.art_path, t.art_hash'
+  selectColumns = 't.id, t.title, t.artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.source_plugin_id'
 ): Promise<{ sql: string; params: any[] }> {
   const conditions: string[] = [];
   const params: any[] = [];
@@ -487,6 +487,7 @@ export const smartPlaylistsPlugin: FastifyPluginAsync = fp(async (app) => {
         duration: t.duration_ms ? Math.round(t.duration_ms / 1000) : null,
         art_path: t.art_path,
         art_hash: t.art_hash,
+        source_plugin_id: t.source_plugin_id,
       })),
     };
   });

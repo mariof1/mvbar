@@ -25,6 +25,7 @@ import { usePlaylistUpdates, useLibraryUpdates } from './useWebSocket';
 import { useToastStore } from './Toast';
 import { trackArtistLabel } from './artistDisplay';
 import { formatCalendarDate, formatCount } from './format';
+import { PluginDownloadBadge } from './PluginDownloadBadge';
 
 type PlaylistTab = 'regular' | 'smart';
 
@@ -37,6 +38,7 @@ type PlaylistItem = {
   display_artist?: string | null;
   album: string | null;
   duration_ms: number | null;
+  source_plugin_id?: string | null;
   added_at: string;
   added_by: SocialUser | null;
 };
@@ -652,7 +654,7 @@ export function Playlists(props: {
                     </svg>
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-white sm:text-base">{it.title ?? `Track #${it.track_id}`}</span>
+                    <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{it.title ?? `Track #${it.track_id}`}</span>{it.source_plugin_id && <PluginDownloadBadge />}</span>
                     <span className="block truncate text-xs text-slate-400 sm:text-sm">
                       {[trackArtistLabel(it), it.album].filter(Boolean).join(' • ')}
                     </span>
