@@ -32,17 +32,23 @@ jobs:
           path = Path('web/app/BrowseNew.tsx')
           text = path.read_text()
 
+          start_marker = '  // Album Detail View\n  if (albumDetail) {'
+          end_marker = '        {editOpen && editTrack && ('
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          section = text[start:end]
+
           old = """            const displayTrackNum = track.trackNumber ?? (idx + 1);\n            \n            return ("""
           new = """            const displayTrackNum = track.trackNumber ?? (idx + 1);\n            const canEditMetadata = writableLibraryIds.has(track.library_id ?? -1)\n              && (/\\.(mp3|flac)$/i.test(track.path ?? ''))\n              && ((track.path ?? '').toLowerCase().endsWith('.mp3') || track.source_plugin_id === 'mvbar.missing-music');\n            \n            return ("""
-          if text.count(old) != 1:
-              raise SystemExit('displayTrackNum insertion point not found exactly once')
-          text = text.replace(old, new, 1)
+          if section.count(old) != 1:
+              raise SystemExit('album displayTrackNum insertion point not found exactly once')
+          section = section.replace(old, new, 1)
 
           old = '<div className="text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>'
           new = '<div className="w-12 sm:w-14 text-right tabular-nums text-xs sm:text-sm text-slate-500 flex-shrink-0">{formatDuration(track.duration_ms)}</div>'
-          if text.count(old) != 1:
-              raise SystemExit('duration column not found exactly once')
-          text = text.replace(old, new, 1)
+          if section.count(old) != 1:
+              raise SystemExit(f'expected 1 album duration column, found {section.count(old)}')
+          section = section.replace(old, new, 1)
 
           old = """                    {writableLibraryIds.has(track.library_id ?? -1) && (/\\.(mp3|flac)$/i.test(track.path ?? '')) &&
                       ((track.path ?? '').toLowerCase().endsWith('.mp3') || track.source_plugin_id === 'mvbar.missing-music') && (
@@ -81,10 +87,11 @@ jobs:
                         <span className="block w-4 h-4 sm:w-5 sm:h-5" />
                       </span>
                     )}"""
-          if text.count(old) != 1:
-              raise SystemExit('metadata action block not found exactly once')
-          text = text.replace(old, new, 1)
+          if section.count(old) != 1:
+              raise SystemExit('album metadata action block not found exactly once')
+          section = section.replace(old, new, 1)
 
+          text = text[:start] + section + text[end:]
           path.write_text(text)
 
       - name: Verify alignment guards
