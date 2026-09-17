@@ -84,6 +84,7 @@ ENV NODE_ENV=production \
     REDIS_PORT=6379 \
     POSTGRES_PORT=5432 \
     DEEZER_PYTHON=/opt/mvbar-deezer/bin/python \
+    DEEZER_DOWNLOAD_DIR=/data/deezer-staging \
     APP_VERSION=${APP_VERSION} \
     GIT_COMMIT=${GIT_COMMIT} \
     GIT_BRANCH=${GIT_BRANCH} \

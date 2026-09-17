@@ -224,6 +224,8 @@ For Docker Compose, add `DEEZER_ARL` to the private `.env` file and rebuild with
 `docker compose up -d --build`. The image includes Python, streamrip, and the
 download helper; Compose supplies a persistent `deezer_staging` volume. You do
 not need to install Python inside a running container or set `DEEZER_PYTHON`.
+The image defaults `DEEZER_DOWNLOAD_DIR` to `/data/deezer-staging`; a custom
+Compose stack only needs to mount its writable staging folder at that path.
 
 For a standalone server, install `api/requirements-deezer.txt` in a Python
 environment available to the API process (for example,
