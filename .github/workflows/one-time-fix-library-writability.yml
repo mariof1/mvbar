@@ -1,0 +1,120 @@
+name: One-time library writability fix
+# Triggered after workflow registration so GitHub Actions can execute it.
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - '.github/workflows/one-time-fix-library-writability.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Patch library writability checks
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('api/src/library.ts')
+          text = path.read_text()
+
+          import_anchor = "import { deezerStagingConfig } from './pluginSystem/deezerStaging.js';\n"
+          import_line = "import { probeWritableDirectory } from './libraryWritability.js';\n"
+          if import_line not in text:
+              if import_anchor not in text:
+                  raise SystemExit('library.ts import anchor not found')
+              text = text.replace(import_anchor, import_anchor + import_line, 1)
+
+          old = "await probeAccess(l.mount_path, constants.W_OK) === true"
+          count = text.count(old)
+          if count != 2:
+              raise SystemExit(f'expected 2 library mount W_OK checks, found {count}')
+          text = text.replace(old, "await probeWritableDirectory(l.mount_path)")
+
+          old_track_mount = "if (await probeAccess(row.mount_path, constants.W_OK) !== true) {"
+          if text.count(old_track_mount) != 1:
+              raise SystemExit('metadata mount W_OK check not found exactly once')
+          text = text.replace(old_track_mount, "if (!await probeWritableDirectory(row.mount_path)) {", 1)
+
+          path.write_text(text)
+
+      - name: Add writability regression tests
+        shell: bash
+        run: |
+          cat > api/test/libraryWritability.test.mjs <<'EOF'
+          import assert from 'node:assert/strict';
+          import test from 'node:test';
+          import { probeWritableDirectory } from '../dist/libraryWritability.js';
+
+          test('writable directory probe requires a real create and delete', async () => {
+            const calls = [];
+            const handle = { async close() { calls.push('close'); } };
+            const fsOps = {
+              async open(target, flags, mode) {
+                calls.push(['open', target, flags, mode]);
+                return handle;
+              },
+              async unlink(target) {
+                calls.push(['unlink', target]);
+              },
+            };
+
+            assert.equal(await probeWritableDirectory('/music', fsOps), true);
+            assert.equal(calls[0][0], 'open');
+            assert.equal(calls[0][2], 'wx');
+            assert.equal(calls[0][3], 0o600);
+            assert.equal(calls[0][1].startsWith('/music/.mvbar-write-probe-'), true);
+            assert.equal(calls.includes('close'), true);
+            assert.equal(calls.filter((call) => Array.isArray(call) && call[0] === 'unlink').length >= 1, true);
+          });
+
+          test('writable directory probe returns false when the mount rejects creation', async () => {
+            const calls = [];
+            const fsOps = {
+              async open() {
+                const error = new Error('Read-only file system');
+                error.code = 'EROFS';
+                throw error;
+              },
+              async unlink(target) {
+                calls.push(target);
+              },
+            };
+
+            assert.equal(await probeWritableDirectory('/music', fsOps), false);
+            assert.equal(calls.length, 1);
+            assert.equal(calls[0].startsWith('/music/.mvbar-write-probe-'), true);
+          });
+          EOF
+
+      - name: Build and run focused tests
+        working-directory: api
+        run: |
+          npm ci
+          npm run build
+          node --test test/libraryWritability.test.mjs
+
+      - name: Commit tested fix
+        shell: bash
+        run: |
+          git rm .github/workflows/one-time-fix-library-writability.yml
+          git add api/src/library.ts api/src/libraryWritability.ts api/test/libraryWritability.test.mjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Fix read-only library metadata controls"
+          git push origin HEAD:dev
