@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveInside } from './pathSafety.js';
 import { artistDisplay } from './artistDisplay.js';
 import { deezerStagingConfig } from './pluginSystem/deezerStaging.js';
+import { probeWritableDirectory } from './libraryWritability.js';
 import path from 'node:path';
 
 const LIBRARY_READ_ONLY = process.env.LIBRARY_READ_ONLY === '1';
@@ -505,7 +506,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     );
     const results = await Promise.all(
       r.rows.map(async (l) => {
-        const writable = (!LIBRARY_READ_ONLY || isWritableStagingLibrary(l)) && await probeAccess(l.mount_path, constants.W_OK) === true;
+        const writable = (!LIBRARY_READ_ONLY || isWritableStagingLibrary(l)) && await probeWritableDirectory(l.mount_path);
         return { id: l.id, mount_path: l.mount_path, media_type: l.media_type, writable };
       })
     );
@@ -551,7 +552,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     }
 
     // Must be writable
-    if (await probeAccess(row.mount_path, constants.W_OK) !== true) {
+    if (!await probeWritableDirectory(row.mount_path)) {
       return reply.code(400).send({ ok: false, error: `Library mount is not writable: ${row.mount_path}` });
     }
 
@@ -671,7 +672,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
 
         let writable = false;
         if ((!LIBRARY_READ_ONLY || isWritableStagingLibrary(l)) && mounted === true) {
-          writable = await probeAccess(l.mount_path, constants.W_OK) === true;
+          writable = await probeWritableDirectory(l.mount_path);
         }
 
         return {
