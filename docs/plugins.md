@@ -23,6 +23,24 @@ Packages can also be copied directly into `PLUGINS_DIR` and loaded with
 - Linux standalone: `~/.local/share/mvbar/data/plugins`
 - Windows standalone: `%LOCALAPPDATA%\MVBar\data\plugins`
 
+When deploying with a custom Compose or Portainer stack, explicitly mount a
+named volume at `/data/plugins` and declare it in the stack's top-level
+`volumes` section:
+
+```yaml
+services:
+  mvbar:
+    volumes:
+      - plugins:/data/plugins
+volumes:
+  plugins:
+```
+
+The image's `VOLUME` declaration alone creates an anonymous volume, which may
+be replaced during an upgrade. MVBar also stores an exact copy of each
+installed package in PostgreSQL and restores a missing package automatically;
+the named volume remains necessary for persistent plugin filesystem data.
+
 Disabling a plugin immediately removes it from capability selection. Removing
 it deletes the package, configuration, run history, KV state, and isolated
 filesystem data. It does not change users, the core schema, or source media.

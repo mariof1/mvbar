@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ZipArchive } from 'archiver';
 import { parsePluginPackage } from '../dist/pluginSystem/package.js';
+import { validateRecoveredPackage } from '../dist/pluginSystem/registry.js';
 import { hostMatchesPattern } from '../dist/pluginSystem/runtime.js';
 
 const MINIMAL_WASM = Buffer.from([
@@ -42,6 +43,28 @@ test('parses a valid .ndp package and discovers exports', async () => {
   assert.deepEqual(parsed.exports, ['mvbar_test']);
   assert.equal(parsed.packageSha256.length, 64);
   assert.equal(parsed.permissionFingerprint.length, 64);
+});
+
+test('recovers only the exact installed plugin package', async () => {
+  const buffer = await createPackage({
+    id: 'example.recovery', name: 'Recovery', author: 'MVBar Test', version: '1.0.0',
+  });
+  const parsed = await parsePluginPackage(buffer, 'example.recovery.ndp');
+  const installed = {
+    id: parsed.id,
+    filename: parsed.filename,
+    package_sha256: parsed.packageSha256,
+    permission_fingerprint: parsed.permissionFingerprint,
+  };
+  assert.equal((await validateRecoveredPackage(buffer, installed)).id, parsed.id);
+  await assert.rejects(
+    () => validateRecoveredPackage(buffer, { ...installed, package_sha256: '0'.repeat(64) }),
+    /does not match/
+  );
+  await assert.rejects(
+    () => validateRecoveredPackage(buffer, { ...installed, permission_fingerprint: '0'.repeat(64) }),
+    /does not match/
+  );
 });
 
 test('rejects invalid package extensions and manifests', async () => {

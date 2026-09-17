@@ -1074,6 +1074,16 @@ export async function initDb() {
   await pool.query('create unique index if not exists plugins_filename_idx on plugins(filename)');
   await pool.query('create index if not exists plugins_enabled_idx on plugins(enabled) where enabled = true');
 
+  // Keep the exact installed package with the database record. This lets a
+  // recreated container recover a plugin even if its package volume was lost.
+  await pool.query(`
+    create table if not exists plugin_packages (
+      plugin_id text primary key references plugins(id) on delete cascade,
+      package_sha256 text not null,
+      package_data bytea not null
+    );
+  `);
+
   await pool.query(`
     create table if not exists plugin_kv (
       plugin_id text not null references plugins(id) on delete cascade,

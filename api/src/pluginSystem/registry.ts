@@ -3,14 +3,19 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { db } from '../db.js';
 import logger from '../logger.js';
+import { getBundledPluginPackage, listBundledPluginPackages } from './bundled.js';
 import { packageFilenameForId, parsePluginPackage, pluginUploadLimitBytes } from './package.js';
 import type { ParsedPluginPackage, PluginDbRow } from './types.js';
 
 const DEFAULT_PLUGIN_DIR = '/data/plugins';
 const RESCAN_INTERVAL_MS = 30_000;
+const OFFICIAL_RECOVERY_RETRY_MS = 5 * 60_000;
 
 let scanInFlight: Promise<PluginScanResult> | null = null;
 let watcherStarted = false;
+const officialRecoveryRetryAt = new Map<string, number>();
+
+type StoredPluginPackage = Pick<PluginDbRow, 'id' | 'filename' | 'package_sha256' | 'permission_fingerprint'>;
 
 export type PluginScanResult = {
   found: number;
@@ -91,9 +96,87 @@ async function upsertPackage(plugin: ParsedPluginPackage): Promise<'installed' |
   return changed ? 'updated' : 'unchanged';
 }
 
+async function backUpPackage(plugin: ParsedPluginPackage, buffer: Buffer) {
+  const existing = await db().query<{ package_sha256: string }>(
+    'select package_sha256 from plugin_packages where plugin_id=$1', [plugin.id]
+  );
+  if (existing.rows[0]?.package_sha256 === plugin.packageSha256) return;
+  await db().query(
+    `insert into plugin_packages (plugin_id, package_sha256, package_data) values ($1,$2,$3)
+     on conflict (plugin_id) do update set
+       package_sha256=excluded.package_sha256,
+       package_data=excluded.package_data`,
+    [plugin.id, plugin.packageSha256, buffer]
+  );
+}
+
+export async function validateRecoveredPackage(buffer: Buffer, row: StoredPluginPackage) {
+  const parsed = await parsePluginPackage(buffer, row.filename);
+  if (parsed.id !== row.id || parsed.packageSha256 !== row.package_sha256 ||
+      parsed.permissionFingerprint !== row.permission_fingerprint) {
+    throw new Error('Recovered plugin package does not match the installed plugin');
+  }
+  return parsed;
+}
+
+async function recoverMissingPackages(presentFilenames: Set<string>) {
+  const rows = await db().query<StoredPluginPackage>(
+    'select id, filename, package_sha256, permission_fingerprint from plugins'
+  );
+  for (const row of rows.rows) {
+    if (presentFilenames.has(row.filename)) continue;
+    let buffer: Buffer | null = null;
+    const backup = await db().query<{ package_sha256: string; package_data: Buffer }>(
+      'select package_sha256, package_data from plugin_packages where plugin_id=$1', [row.id]
+    );
+    if (backup.rows[0]?.package_sha256 === row.package_sha256) {
+      try {
+        await validateRecoveredPackage(backup.rows[0].package_data, row);
+        buffer = backup.rows[0].package_data;
+      } catch (error) {
+        logger.warn('plugins', `Stored package for ${row.id} is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (!buffer && (officialRecoveryRetryAt.get(row.id) ?? 0) <= Date.now()) {
+      officialRecoveryRetryAt.set(row.id, Date.now() + OFFICIAL_RECOVERY_RETRY_MS);
+      try {
+        const official = (await listBundledPluginPackages()).find(
+          (item) => item.id === row.id && item.packageSha256 === row.package_sha256
+        );
+        if (official) {
+          const packageFile = await getBundledPluginPackage(official.key);
+          await validateRecoveredPackage(packageFile.buffer, row);
+          buffer = packageFile.buffer;
+        }
+      } catch (error) {
+        logger.warn('plugins', `Could not recover official package for ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (!buffer) continue;
+    const target = pluginPackagePath(row.filename);
+    const temporary = pluginPackagePath(`restore-${crypto.randomUUID()}.ndp`);
+    try {
+      await fs.writeFile(temporary, buffer, { flag: 'wx', mode: 0o600 });
+      await fs.link(temporary, target);
+      presentFilenames.add(row.filename);
+      logger.info('plugins', `Recovered installed package for ${row.id}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        logger.warn('plugins', `Could not restore package for ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } finally {
+      await fs.unlink(temporary).catch(() => undefined);
+    }
+  }
+}
+
 async function scanNow(): Promise<PluginScanResult> {
   await ensurePluginDirectories();
   const result: PluginScanResult = { found: 0, installed: [], updated: [], errors: [] };
+  const existingFiles = (await fs.readdir(pluginDirectory(), { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.ndp'))
+    .map((entry) => entry.name);
+  await recoverMissingPackages(new Set(existingFiles));
   const files = (await fs.readdir(pluginDirectory(), { withFileTypes: true }))
     .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.ndp'))
     .map((entry) => entry.name)
@@ -107,11 +190,13 @@ async function scanNow(): Promise<PluginScanResult> {
       const packagePath = pluginPackagePath(filename);
       const stat = await fs.stat(packagePath);
       if (!stat.isFile() || stat.size > pluginUploadLimitBytes()) throw new Error('Plugin package exceeds the configured upload limit');
-      const parsed = await parsePluginPackage(await fs.readFile(packagePath), filename);
+      const buffer = await fs.readFile(packagePath);
+      const parsed = await parsePluginPackage(buffer, filename);
       if (seenIds.has(parsed.id)) throw new Error(`Another package already uses plugin id ${parsed.id}`);
       seenIds.add(parsed.id);
       presentFilenames.push(filename);
       const state = await upsertPackage(parsed);
+      await backUpPackage(parsed, buffer);
       if (state === 'installed') result.installed.push(parsed.id);
       if (state === 'updated') result.updated.push(parsed.id);
     } catch (error) {
@@ -123,8 +208,7 @@ async function scanNow(): Promise<PluginScanResult> {
 
   await db().query(
     `update plugins
-        set enabled=false,
-            last_error='Plugin package is missing from the plugin directory'
+        set last_error='Plugin package is missing from the plugin directory'
       where not (filename = any($1::text[]))`,
     [presentFilenames]
   );
@@ -154,6 +238,7 @@ export async function installPluginPackage(buffer: Buffer, originalFilename: str
   }
   parsed.filename = targetFilename;
   const state = await upsertPackage(parsed);
+  await backUpPackage(parsed, buffer);
   return { parsed, state };
 }
 
