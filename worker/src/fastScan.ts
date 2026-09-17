@@ -15,6 +15,7 @@ import { configuredMusicRoots, DEEZER_SOURCE_PLUGIN_ID } from './musicRoots.js';
 const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
 const ART_DIR = process.env.ART_DIR ?? '/data/cache/art';
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://redis:6379';
+const STAGING_DIR = configuredMusicRoots(process.env).stagingDirectory;
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wav']);
 const ARTIST_IMAGE_NAMES = ['artist.jpg', 'artist.jpeg', 'artist.png', 'band.jpg', 'band.jpeg', 'band.png', 'photo.jpg', 'photo.jpeg', 'photo.png'];
 
@@ -628,7 +629,7 @@ async function loadDeletedTracks(libraryId: number): Promise<Set<string>> {
 async function getOrCreateLibrary(mountPath: string): Promise<number> {
   const r = await db().query<{ id: number }>('SELECT id FROM libraries WHERE mount_path = $1', [mountPath]);
   if (r.rows.length > 0) return Number(r.rows[0].id);
-  const staging = configuredMusicRoots(process.env).stagingDirectory === mountPath;
+  const staging = STAGING_DIR === mountPath;
   const ins = await db().query<{ id: number }>(
     `INSERT INTO libraries(mount_path, media_type, source_plugin_id) VALUES ($1, 'music', $2)
      ON CONFLICT (mount_path) DO UPDATE SET source_plugin_id = EXCLUDED.source_plugin_id RETURNING id`,
@@ -1260,7 +1261,7 @@ export async function runFastScan(
     logger.info('search', 'No library changes detected');
   }
 
-  let indexStatus = await getTrackIndexStatus();
+  let indexStatus = await getTrackIndexStatus(musicDir !== STAGING_DIR || hasChanges || forceFullScan);
   if (!indexStatus.consistent) {
     logger.warn(
       'search',

@@ -226,7 +226,7 @@ async function periodicRescan(force: boolean = false, target: string | null = nu
               await publisher.incr('reco:library_revision');
               await audit('plugin_staging_library_missing', { mountPath: dir, retiredTracks: retired.length });
             }
-            const indexStatus = await getTrackIndexStatus();
+            const indexStatus = await getTrackIndexStatus(retired.length > 0);
             if (!indexStatus.consistent) await indexAllTracks();
             const progress = { status: 'idle', mountPath: dir, libraryIndex: musicDirs.indexOf(dir) + 1,
               libraryTotal: musicDirs.length, filesFound: 0, filesProcessed: 0, retiredTracks: retired.length };

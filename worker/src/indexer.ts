@@ -197,7 +197,7 @@ async function getIndexedTrackState(index: ReturnType<ReturnType<typeof meili>['
   return { ids, currentVersion };
 }
 
-export async function getTrackIndexStatus() {
+export async function getTrackIndexStatus(verifyIds = true) {
   const index = meili().index('tracks');
   const [databaseResult, indexStats] = await Promise.all([
     db().query<{ count: number }>('SELECT count(*)::int AS count FROM active_tracks'),
@@ -208,6 +208,9 @@ export async function getTrackIndexStatus() {
   if (database !== indexed) {
     return { database, index: indexed, consistent: false };
   }
+  // Startup and changed scans compare every ID and index version. A frequent
+  // unchanged staging scan only needs the cheap count check between those runs.
+  if (!verifyIds) return { database, index: indexed, consistent: true };
 
   const [databaseIdsResult, indexedState] = await Promise.all([
     db().query<{ id: number }>('SELECT id FROM active_tracks'),
