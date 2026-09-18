@@ -1492,6 +1492,48 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     );
     return { ok: true, imports: result.rows.map(serializePlaylistImport) };
   });
+  app.post('/api/plugins/missing-music/deezer-playlists/:playlistId/import', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    if (plugin.config.providerBaseUrl?.trim()) {
+      return reply.code(409).send({ ok: false, error: 'Disable the external request provider before importing Deezer playlists' });
+    }
+    const staging = deezerStagingConfig();
+    if (!staging.configured) return reply.code(409).send({ ok: false, error: staging.error });
+    try {
+      if (!(await stat(staging.directory)).isDirectory()) throw new Error('Not a directory');
+    } catch {
+      return reply.code(409).send({ ok: false, error: 'Deezer staging directory is unavailable. Restore its mount before importing a playlist.' });
+    }
+
+    const canImport = req.user!.role === 'admin' || (
+      plugin.config.requireAdminApproval === false && plugin.config.autoDownloadDeezer === true
+    );
+    if (!canImport) {
+      return reply.code(409).send({
+        ok: false,
+        error: 'Playlist imports require Auto-download from Deezer for non-administrator users.',
+      });
+    }
+
+    const { playlistId } = req.params as { playlistId: string };
+    if (!validDeezerId(playlistId)) return reply.code(400).send({ ok: false, error: 'Invalid Deezer playlist id' });
+    try {
+      const result = await startDeezerPlaylistImport(plugin, req.user!.userId, playlistId);
+      void runMissingMusicJobs().catch((error) => {
+        logger.warn('missing-music', 'Could not start Deezer playlist import: ' + errorMessage(error));
+      });
+      return reply.code(result.alreadyImported ? 200 : 202).send({
+        ok: true,
+        alreadyImported: result.alreadyImported,
+        import: serializePlaylistImport(result.importRow),
+      });
+    } catch (error) {
+      const message = errorMessage(error);
+      const status = message.includes('already exists') ? 409 : message.includes('up to 1000') ? 400 : 502;
+      return reply.code(status).send({ ok: false, error: message });
+    }
+  });
   app.get('/api/plugins/missing-music/artists', async (req, reply) => {
     const plugin = await requireExtension(req, reply);
     if (!plugin) return;
