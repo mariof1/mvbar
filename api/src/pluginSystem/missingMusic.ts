@@ -227,14 +227,14 @@ export async function validateMissingMusicConfig(config: Record<string, unknown>
   const providerConfigured = typeof config.providerBaseUrl === 'string' && config.providerBaseUrl.trim().length > 0;
   const autoDownloadDeezer = config.autoDownloadDeezer === true;
 
-  if (providerConfigured) {
-    await validateProviderBaseUrl(config.providerBaseUrl, config.allowPrivateProvider === true);
-  }
   if (autoDownloadDeezer && config.requireAdminApproval !== false) {
     throw new Error('Automatic Deezer downloads require administrator approval to be disabled');
   }
   if (autoDownloadDeezer && providerConfigured) {
     throw new Error('Automatic Deezer downloads cannot be used with an external request provider');
+  }
+  if (providerConfigured) {
+    await validateProviderBaseUrl(config.providerBaseUrl, config.allowPrivateProvider === true);
   }
   if (autoDownloadDeezer && !deezerStagingConfig().configured) {
     throw new Error('Configure Deezer staging before enabling automatic downloads');
