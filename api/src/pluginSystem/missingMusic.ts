@@ -1036,6 +1036,10 @@ async function downloadDeezerRequest(request: MediaRequestRow, itemId: string, l
     logger.warn('missing-music', `Deezer staging failed for request ${request.id}: ${message}`);
   } finally {
     deezerJobs.delete(request.id);
+    const next = setTimeout(() => void runMissingMusicJobs().catch((error) => {
+      logger.warn('missing-music', `Could not continue queued Deezer jobs: ${errorMessage(error)}`);
+    }), 250);
+    next.unref();
   }
 }
 
@@ -1167,12 +1171,9 @@ export async function runMissingMusicJobs() {
     const plugin = await getMissingMusicPlugin(true);
     if (!plugin) return;
 
-    const providerConfigured = Boolean(plugin.config.providerBaseUrl?.trim());
-    const autoDownloadDeezer = !providerConfigured
-      && plugin.config.requireAdminApproval === false
-      && plugin.config.autoDownloadDeezer === true;
-    if (!providerConfigured && !autoDownloadDeezer) return;
+    await reconcileDeezerPlaylistImports(plugin);
 
+    const providerConfigured = Boolean(plugin.config.providerBaseUrl?.trim());
     const jobs = providerConfigured
       ? await db().query<MediaRequestRow>(
         `select * from plugin_media_requests
@@ -1187,11 +1188,12 @@ export async function runMissingMusicJobs() {
           order by updated_at,id limit 3`,
         [plugin.id]
       );
+
     for (const request of jobs.rows) {
       try {
         if (providerConfigured) {
           await processRequest(plugin, request);
-        } else if (autoDownloadDeezer) {
+        } else {
           await startAutomaticDeezerDownload(plugin, request);
         }
       } catch (error) {
