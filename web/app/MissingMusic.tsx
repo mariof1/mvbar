@@ -51,6 +51,7 @@ type MissingMusicStatus = {
   autoDownloadDeezer: boolean;
   localArtistCount: number;
   taggedArtistCount: number;
+  deezerMatchedArtistCount: number;
 };
 
 type ReleaseGroup = {
@@ -640,7 +641,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
             {status && (
               <div className="mt-3 flex flex-wrap gap-2 text-xs">
                 <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-white/55">{formatCount(status.localArtistCount, 'local artist')}</span>
-                <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-white/55">{formatCount(status.taggedArtistCount, 'MusicBrainz-tagged artist')}</span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-white/55">{formatCount(status.deezerMatchedArtistCount, 'Deezer-mapped artist')}</span>
                 <span className={`rounded-full border px-2.5 py-1 ${providerConfigured ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-cyan-400/25 bg-cyan-400/10 text-cyan-200'}`}>
                   {providerConfigured ? 'Automatic provider hand-off' : 'Wanted-list mode'}
                 </span>
