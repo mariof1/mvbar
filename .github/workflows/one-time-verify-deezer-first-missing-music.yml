@@ -1,5 +1,5 @@
 name: One-time verify Deezer-first Missing Music
-# rerun after type, local-tag, and edition fixes
+# rerun after structural catalog repair
 
 on:
   push:
