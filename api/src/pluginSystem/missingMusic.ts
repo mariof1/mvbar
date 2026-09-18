@@ -1089,11 +1089,11 @@ async function existingAlbumMetadata(request: MediaRequestRow): Promise<Existing
 }
 
 async function startAutomaticDeezerDownload(plugin: MissingMusicPluginRow, request: MediaRequestRow) {
-  if (request.status !== 'approved' || deezerJobs.has(request.id)) return;
-
-  const staging = deezerStagingConfig();
-  if (!staging.configured) throw new Error(staging.error);
-  await ensureMissingMusicLibraryAccess(request.user_id);
+  if (
+    request.status !== 'approved'
+    || deezerJobs.has(request.id)
+    || availableDeezerDownloadSlots(deezerJobs.size) < 1
+  ) return;
 
   let itemId = request.item_type === 'album' ? request.deezer_album_id : request.deezer_track_id;
   if (!itemId) {
@@ -1131,6 +1131,8 @@ async function startAutomaticDeezerDownload(plugin: MissingMusicPluginRow, reque
 
 async function downloadDeezerRequest(request: MediaRequestRow, itemId: string, localAlbum: ExistingAlbumMetadata | null) {
   try {
+    await assertDeezerStagingReady();
+    await ensureMissingMusicLibraryAccess(request.user_id);
     const album = request.item_type === 'album'
       ? await verifiedDeezerAlbum(itemId, request.artist, request.title) : null;
     const reportProgress = async (completed: number, total: number, phase: 'downloading' | 'publishing') => {
@@ -1192,12 +1194,23 @@ async function downloadDeezerRequest(request: MediaRequestRow, itemId: string, l
 
 async function recoverInterruptedDeezerJobs() {
   await db().query(`update plugin_media_requests
+    set status='approved', submitted_at=null, provider_error=null,
+        metadata=(metadata - 'deezer') || jsonb_build_object('autoDownloadDeezer', true),
+        updated_at=now()
+    where plugin_id=$1
+      and metadata->'deezer'->>'state'='downloading'
+      and metadata->>'hiddenBatch'='true'`, [MISSING_MUSIC_PLUGIN_ID]);
+
+  await db().query(`update plugin_media_requests
     set status='failed', provider_error='Deezer download was interrupted. Choose the track again to retry.',
         metadata=jsonb_set(metadata,'{deezer,state}','"failed"'::jsonb), updated_at=now()
-    where plugin_id=$1 and metadata->'deezer'->>'state'='downloading'`, [MISSING_MUSIC_PLUGIN_ID]);
+    where plugin_id=$1
+      and metadata->'deezer'->>'state'='downloading'
+      and metadata->>'hiddenBatch' is distinct from 'true'`, [MISSING_MUSIC_PLUGIN_ID]);
 }
 
 async function notifyRequest(row: MediaRequestRow, event: string, message?: string) {
+  if (row.metadata?.hiddenBatch === true) return;
   const data = {
     event,
     requestId: row.id,
