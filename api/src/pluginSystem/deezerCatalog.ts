@@ -9,7 +9,7 @@ export type DeezerAlbum = {
   secondaryTypes: string[]; cover: string | null; explicit: boolean; baseTitle: string;
 };
 export type DeezerTrack = {
-  id: string; title: string; artist: string; albumId: string; album: string; isrc: string | null;
+  id: string; title: string; artist: string; artistId: string | null; albumId: string; album: string; isrc: string | null;
   durationMs: number | null; discNumber: number; trackNumber: number;
 };
 export type LocalTrack = {
@@ -24,7 +24,8 @@ type RawAlbum = {
 };
 type RawTrack = {
   id?: number; title?: string; duration?: number; isrc?: string; disk_number?: number; track_position?: number;
-  artist?: { name?: string };
+  artist?: { id?: number; name?: string };
+  album?: { id?: number; title?: string };
 };
 
 const EDITION_SUFFIXES = [
@@ -150,7 +151,8 @@ export async function deezerAlbumTracks(id: string): Promise<{album:DeezerAlbum;
     const url=new URL('/album/'+id+'/tracks',ORIGIN); url.searchParams.set('limit','100'); url.searchParams.set('index',String(index));
     const page=await json(url), rows=Array.isArray(page.data)?page.data:[]; if (!rows.length) break;
     for (const r of rows as RawTrack[]) if (r.id && r.title) tracks.push({
-      id:String(r.id),title:r.title,artist:r.artist?.name?.trim()||album.artist,albumId:id,album:album.title,
+      id:String(r.id),title:r.title,artist:r.artist?.name?.trim()||album.artist,
+      artistId:r.artist?.id?String(r.artist.id):null,albumId:id,album:album.title,
       isrc:typeof r.isrc==='string'&&r.isrc.trim()?r.isrc.trim().toUpperCase():null,
       durationMs:typeof r.duration==='number'&&r.duration>0?r.duration*1000:null,
       discNumber:Number.isSafeInteger(r.disk_number)&&r.disk_number!>0?r.disk_number!:1,
@@ -160,6 +162,34 @@ export async function deezerAlbumTracks(id: string): Promise<{album:DeezerAlbum;
   }
   if (tracks.length!==album.trackCount) throw new Error('Deezer returned an incomplete album track list');
   return {album,tracks};
+}
+
+export async function searchDeezerSongs(query: string): Promise<DeezerTrack[]> {
+  const wanted = query.trim();
+  if (!wanted) return [];
+  const url = new URL('/search', ORIGIN);
+  url.searchParams.set('q', wanted);
+  url.searchParams.set('limit', '50');
+  const data = await json(url);
+  const seen = new Set<string>();
+  return (Array.isArray(data.data) ? data.data : []).flatMap((r: RawTrack) => {
+    if (!r.id || !r.title || !r.artist?.name || !r.album?.id || !r.album?.title) return [];
+    const id = String(r.id);
+    if (seen.has(id)) return [];
+    seen.add(id);
+    return [{
+      id,
+      title: r.title,
+      artist: r.artist.name.trim(),
+      artistId: r.artist.id ? String(r.artist.id) : null,
+      albumId: String(r.album.id),
+      album: r.album.title,
+      isrc: typeof r.isrc === 'string' && r.isrc.trim() ? r.isrc.trim().toUpperCase() : null,
+      durationMs: typeof r.duration === 'number' && r.duration > 0 ? r.duration * 1000 : null,
+      discNumber: Number.isSafeInteger(r.disk_number) && r.disk_number! > 0 ? r.disk_number! : 1,
+      trackNumber: Number.isSafeInteger(r.track_position) && r.track_position! > 0 ? r.track_position! : 0,
+    }];
+  }).slice(0, 20);
 }
 
 export function localAlbumTitleScore(remote:string,local:string) {
