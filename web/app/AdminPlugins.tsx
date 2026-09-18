@@ -297,7 +297,7 @@ function PluginCard({ token, plugin, refresh, draft, onDraftChange, clearDraft }
             <div>
               <h4 className="font-semibold text-white">Missing Music setup</h4>
               <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-300">
-                Enable the plugin to compare every local artist with MusicBrainz. An external provider is optional: without one, requests stay in MVBar as a wanted list that administrators can manage and mark fulfilled.
+                Enable the plugin to compare local artists, albums, tracks, and Deezer playlists against your MVBar library. An external provider is optional: without one, requests stay in MVBar as a wanted list and Deezer staging can be used directly.
               </p>
             </div>
             {plugin.enabled ? (
