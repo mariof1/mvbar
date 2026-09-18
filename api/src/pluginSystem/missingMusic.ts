@@ -1049,23 +1049,31 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
         group by 1 order by lower(coalesce(nullif(track.album_artist,''),track.artist)) limit $${2 + filter.params.length}`,
       [query, ...filter.params, query ? 100 : 40]
     );
-    const matchKeys = result.rows.map((row) => artistMatchKey(req.user!.userId, row.name));
+    const matchKeys = result.rows.flatMap((row) => [
+      artistMatchKey(req.user!.userId, row.name),
+      deezerArtistMatchKey(req.user!.userId, row.name),
+    ]);
     const savedMatches = matchKeys.length
       ? await db().query<{ key: string; value: Buffer }>(
         'select key,value from plugin_kv where plugin_id=$1 and key = any($2::text[])',
         [plugin.id, matchKeys]
       )
       : { rows: [] as Array<{ key: string; value: Buffer }> };
-    const savedByKey = new Map(savedMatches.rows.map((row) => [row.key, parseSavedArtistMatch(row.value)]));
+    const savedByKey = new Map(savedMatches.rows.map((row) => [row.key, row.value]));
     return {
       ok: true,
       artists: result.rows.map((row) => {
-        const saved = row.musicbrainz_id ? null : savedByKey.get(artistMatchKey(req.user!.userId, row.name));
+        const legacyValue = savedByKey.get(artistMatchKey(req.user!.userId, row.name));
+        const legacy = row.musicbrainz_id ? null : legacyValue ? parseSavedArtistMatch(legacyValue) : null;
+        const deezerValue = savedByKey.get(deezerArtistMatchKey(req.user!.userId, row.name));
+        const deezer = deezerValue ? parseSavedDeezerArtistMatch(deezerValue) : null;
         return {
           name: row.name,
-          musicBrainzId: row.musicbrainz_id ?? saved?.musicBrainzId ?? null,
-          musicBrainzName: saved?.musicBrainzName ?? null,
-          matchSource: row.musicbrainz_id ? 'tags' : saved ? 'saved' : null,
+          deezerId: deezer?.deezerId ?? null,
+          deezerName: deezer?.deezerName ?? null,
+          matchSource: deezer ? 'saved' : null,
+          musicBrainzId: row.musicbrainz_id ?? legacy?.musicBrainzId ?? null,
+          musicBrainzName: legacy?.musicBrainzName ?? null,
           albumCount: Number(row.album_count),
           trackCount: Number(row.track_count),
         };
