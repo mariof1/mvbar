@@ -606,7 +606,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     const map = new Map<string, RequestItem>();
     for (const request of requests) {
       if (['failed', 'rejected', 'cancelled'].includes(request.status)) continue;
-      const id = request.itemType === 'album' ? request.musicBrainzReleaseGroupId : request.musicBrainzRecordingId;
+      const id = request.itemType === 'album' ? (request.deezerAlbumId ?? request.musicBrainzReleaseGroupId) : (request.deezerTrackId ?? request.musicBrainzRecordingId);
       if (id && !map.has(`${request.itemType}:${id}`)) map.set(`${request.itemType}:${id}`, request);
     }
     return map;
@@ -723,12 +723,12 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
               <button className="rounded-lg bg-white/10 px-3 text-sm hover:bg-white/15" aria-label="Search artists">Search</button>
             </form>
             <div className="mt-4 max-h-[60vh] space-y-1 overflow-y-auto pr-1">
-              {(catalogSearching || catalogSearched) && <p className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-white/40">MusicBrainz artists</p>}
+              {(catalogSearching || catalogSearched) && <p className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-white/40">Deezer artists</p>}
               {catalogSearching && <p className="px-3 py-2 text-xs text-white/45">Searching the catalog…</p>}
               {catalogSearched && catalogArtists.length === 0 && <p className="px-3 py-2 text-xs text-white/45">No catalog artists found. Try the artist name.</p>}
               {catalogArtists.map((match) => (
-                <button key={`catalog:${match.id}`} onClick={() => void selectArtist({ name: match.name, musicBrainzId: match.id, albumCount: 0, trackCount: 0 })}
-                  className={`w-full rounded-xl px-3 py-2.5 text-left transition ${artist?.musicBrainzId === match.id ? 'bg-cyan-500/15 text-cyan-200' : 'hover:bg-white/[0.06]'}`}>
+                <button key={`catalog:${match.id}`} onClick={() => void selectArtist({ name: match.name, deezerId: match.id, albumCount: 0, trackCount: 0 })}
+                  className={`w-full rounded-xl px-3 py-2.5 text-left transition ${artist?.deezerId === match.id ? 'bg-cyan-500/15 text-cyan-200' : 'hover:bg-white/[0.06]'}`}>
                   <span className="block truncate text-sm font-medium">{match.name}</span>
                   <span className="block truncate text-xs text-white/40">{[match.disambiguation, match.country].filter(Boolean).join(' · ') || 'Browse albums'}</span>
                 </button>
@@ -737,7 +737,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
               {artistsLoading && <div className="flex justify-center py-8"><Spinner /></div>}
               {artists.map((item) => (
                 <button
-                  key={`${item.musicBrainzId}:${item.name}`}
+                  key={`${item.deezerId ?? 'local'}:${item.name}`}
                   onClick={() => void selectArtist(item)}
                   className={`w-full rounded-xl px-3 py-2.5 text-left transition ${artist?.name === item.name ? 'bg-cyan-500/15 text-cyan-200' : 'hover:bg-white/[0.06]'}`}
                 >
@@ -745,11 +745,11 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                   <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-white/40">
                     <span>{formatCount(item.albumCount, 'album')} · {formatCount(item.trackCount, 'track')}</span>
                     {item.matchSource === 'saved' && <span className="rounded bg-emerald-400/10 px-1.5 py-0.5 text-emerald-200">Matched</span>}
-                    {!item.musicBrainzId && <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-amber-200">Choose MusicBrainz match</span>}
+                    {!item.deezerId && <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-amber-200">Choose Deezer match</span>}
                   </div>
                 </button>
               ))}
-              {!artistsLoading && artists.length === 0 && <p className="py-8 text-center text-sm text-white/40">No local artists found. Search an artist name to browse the MusicBrainz catalog.</p>}
+              {!artistsLoading && artists.length === 0 && <p className="py-8 text-center text-sm text-white/40">No local artists found. Search an artist name to browse the Deezer catalog.</p>}
             </div>
           </section>
 
@@ -761,36 +761,36 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                   <div>
                     <h4 className="text-lg font-semibold">{artist.name}</h4>
                     <p className="text-sm text-white/45">
-                      {artist.musicBrainzId
-                        ? `${catalog.length} releases · ${missingCount} album titles missing${artist.musicBrainzName && artist.musicBrainzName !== artist.name ? ` · matched to ${artist.musicBrainzName}` : ''}`
-                        : 'This artist has no MusicBrainz tag. Choose the correct match once to compare the catalog.'}
+                      {artist.deezerId
+                        ? `${catalog.length} releases · ${missingCount} incomplete or missing${artist.deezerName && artist.deezerName !== artist.name ? ` · matched to ${artist.deezerName}` : ''}`
+                        : 'Choose the correct Deezer artist once to compare the catalog.'}
                     </p>
                   </div>
-                  {artist.musicBrainzId && (
+                  {artist.deezerId && (
                     <div className="flex items-center gap-3">
                       {artist.matchSource === 'saved' && (
                         <button
-                          onClick={() => void selectArtist({ ...artist, musicBrainzId: null, musicBrainzName: null, matchSource: null })}
+                          onClick={() => void selectArtist({ ...artist, deezerId: null, deezerName: null, matchSource: null })}
                           className="text-xs text-white/45 hover:text-white/70"
                         >
                           Change match
                         </button>
                       )}
                       <a
-                        href={`https://musicbrainz.org/artist/${artist.musicBrainzId}`}
+                        href={`https://www.deezer.com/artist/${artist.deezerId}`}
                         target="_blank"
                         rel="noreferrer"
                         className="text-xs text-cyan-300 hover:text-cyan-200"
                       >
-                        Open in MusicBrainz ↗
+                        Open in Deezer ↗
                       </a>
                     </div>
                   )}
                 </div>
-                {!artist.musicBrainzId && (
+                {!artist.deezerId && (
                   <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.05] p-3 sm:p-4">
                     {busyKey === 'artist-match' ? (
-                      <div className="flex items-center justify-center gap-3 py-12 text-sm text-white/55"><Spinner /> Finding MusicBrainz matches…</div>
+                      <div className="flex items-center justify-center gap-3 py-12 text-sm text-white/55"><Spinner /> Finding Deezer matches…</div>
                     ) : artistMatches.length > 0 ? (
                       <div className="space-y-2">
                         <p className="mb-3 text-sm text-white/60">Select the artist that represents <strong className="text-white">{artist.name}</strong>:</p>
@@ -810,13 +810,13 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                         ))}
                       </div>
                     ) : (
-                      <p className="py-10 text-center text-sm text-white/45">MusicBrainz did not return a confident match. Check the artist name in your local tags and try again.</p>
+                      <p className="py-10 text-center text-sm text-white/45">Deezer did not return a confident match. Check the artist name in your local tags and try again.</p>
                     )}
                   </div>
                 )}
 
-                {artist.musicBrainzId && loading && catalog.length === 0 && <div className="flex justify-center py-20"><Spinner /></div>}
-                {artist.musicBrainzId && !loading && catalog.length > 0 && (
+                {artist.deezerId && loading && catalog.length === 0 && <div className="flex justify-center py-20"><Spinner /></div>}
+                {artist.deezerId && !loading && catalog.length > 0 && (
                   <div className="mb-4 flex flex-wrap gap-2">
                     {(['missing', 'all', 'present'] as const).map((filter) => (
                       <button
@@ -827,10 +827,10 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                         {filter === 'missing' ? `Missing albums (${missingCount})` : filter === 'present' ? `Album found (${catalog.length - missingCount})` : `All (${catalog.length})`}
                       </button>
                     ))}
-                    <p className="basis-full text-xs text-white/40">An album title in your library may still have missing tracks. Open it in Album found to check.</p>
+                    <p className="basis-full text-xs text-white/40">Partial albums remain in Missing. Open an album to see which Deezer tracks matched your local files.</p>
                   </div>
                 )}
-                {artist.musicBrainzId && (
+                {artist.deezerId && (
                   <div className="space-y-2">
                     {visibleCatalog.map((group) => {
                       const detail = tracks[group.id];
@@ -901,7 +901,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                     })}
                     {!loading && visibleCatalog.length === 0 && (
                       <p className="py-16 text-center text-sm text-white/40">
-                        {catalog.length === 0 ? 'MusicBrainz has no releases matching the configured types.' : `No ${catalogFilter === 'present' ? 'in-library' : catalogFilter} releases in this view.`}
+                        {catalog.length === 0 ? 'Deezer has no releases matching the configured types.' : `No ${catalogFilter === 'present' ? 'in-library' : catalogFilter} releases in this view.`}
                       </p>
                     )}
                   </div>
