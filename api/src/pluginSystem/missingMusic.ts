@@ -1582,6 +1582,69 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     );
     return { ok: true, imports: result.rows.map(serializePlaylistImport) };
   });
+  app.post('/api/plugins/missing-music/deezer-playlist-imports/:importId/retry', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    if (plugin.config.providerBaseUrl?.trim()) {
+      return reply.code(409).send({ ok: false, error: 'Disable the external request provider before retrying a Deezer playlist import' });
+    }
+    try {
+      await assertDeezerStagingReady();
+    } catch (error) {
+      return reply.code(409).send({ ok: false, error: errorMessage(error) });
+    }
+
+    const canImport = req.user!.role === 'admin' || (
+      plugin.config.requireAdminApproval === false && plugin.config.autoDownloadDeezer === true
+    );
+    if (!canImport) {
+      return reply.code(409).send({ ok: false, error: 'Playlist imports require Auto-download from Deezer for non-administrator users.' });
+    }
+
+    const { importId } = req.params as { importId: string };
+    const importRow = (await db().query<DeezerPlaylistImportRow>(
+      'select * from plugin_deezer_playlist_imports where id=$1 and plugin_id=$2 and user_id=$3',
+      [importId, plugin.id, req.user!.userId]
+    )).rows[0];
+    if (!importRow) return reply.code(404).send({ ok: false, error: 'Playlist import not found' });
+
+    const failed = (await db().query<{ count: string | number }>(
+      "select count(*) count from plugin_deezer_playlist_items where import_id=$1 and state='failed'",
+      [importId]
+    )).rows[0];
+    if (Number(failed?.count ?? 0) < 1) {
+      return reply.code(409).send({ ok: false, error: 'This playlist import has no failed tracks to retry' });
+    }
+
+    const client = await db().connect();
+    try {
+      await client.query('begin');
+      await client.query(
+        "update plugin_deezer_playlist_items set state='pending',error=null,request_id=null where import_id=$1 and state='failed'",
+        [importId]
+      );
+      await client.query(
+        "update plugin_deezer_playlist_imports set status='queued',failed_tracks=0,updated_at=now() where id=$1",
+        [importId]
+      );
+      await client.query('commit');
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    void runMissingMusicJobs().catch((error) => {
+      logger.warn('missing-music', 'Could not restart Deezer playlist import: ' + errorMessage(error));
+    });
+    const updated = (await db().query<DeezerPlaylistImportRow>(
+      'select * from plugin_deezer_playlist_imports where id=$1',
+      [importId]
+    )).rows[0];
+    return { ok: true, import: serializePlaylistImport(updated) };
+  });
+
   app.post('/api/plugins/missing-music/deezer-playlists/:playlistId/import', async (req, reply) => {
     const plugin = await requireExtension(req, reply);
     if (!plugin) return;
