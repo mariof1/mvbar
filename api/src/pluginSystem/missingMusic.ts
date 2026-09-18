@@ -1334,6 +1334,7 @@ export async function runMissingMusicJobs() {
     const providerConfigured = Boolean(plugin.config.providerBaseUrl?.trim());
     if (!providerConfigured) await reconcileDeezerPlaylistImports(plugin);
 
+    const availableSlots = availableDeezerDownloadSlots(deezerJobs.size);
     const jobs = providerConfigured
       ? await db().query<MediaRequestRow>(
         `select * from plugin_media_requests
@@ -1342,13 +1343,15 @@ export async function runMissingMusicJobs() {
           order by updated_at,id limit 3`,
         [plugin.id]
       )
-      : await db().query<MediaRequestRow>(
-        `select * from plugin_media_requests
-          where plugin_id=$1 and status='approved'
-            and metadata->>'autoDownloadDeezer'='true' and not (metadata ? 'deezer')
-          order by updated_at,id limit 3`,
-        [plugin.id]
-      );
+      : availableSlots > 0
+        ? await db().query<MediaRequestRow>(
+          `select * from plugin_media_requests
+            where plugin_id=$1 and status='approved'
+              and metadata->>'autoDownloadDeezer'='true' and not (metadata ? 'deezer')
+            order by updated_at,id limit $2`,
+          [plugin.id, availableSlots]
+        )
+        : { rows: [] as MediaRequestRow[] };
 
     for (const request of jobs.rows) {
       try {
