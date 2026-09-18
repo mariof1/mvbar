@@ -656,29 +656,25 @@ async function startAutomaticDeezerDownload(plugin: MissingMusicPluginRow, reque
   const staging = deezerStagingConfig();
   if (!staging.configured) throw new Error(staging.error);
 
-  const candidates = request.item_type === 'album'
-    ? await searchDeezerAlbums(request.artist, request.title)
-    : await searchDeezerTracks(request.artist, request.title, request.album);
-  const candidate = candidates[0];
-  if (!candidate) {
-    throw new Error('No confident Deezer match was found for automatic download');
+  let itemId = request.item_type === 'album' ? request.deezer_album_id : request.deezer_track_id;
+  if (!itemId) {
+    const candidates = request.item_type === 'album'
+      ? await searchDeezerAlbums(request.artist, request.title)
+      : await searchDeezerTracks(request.artist, request.title, request.album);
+    itemId = candidates[0]?.id ?? null;
   }
+  if (!itemId) throw new Error('No confident Deezer match was found for automatic download');
 
   const key = request.item_type === 'album' ? 'albumId' : 'trackId';
-  const claimed = (await db().query<MediaRequestRow>(
-    `update plugin_media_requests
-        set status='submitted', submitted_at=now(), provider_error=null,
-            metadata=jsonb_set(metadata,'{deezer}',
-              jsonb_build_object('state','downloading',$2::text,$3::text,'automatic',true)),
-            updated_at=now()
-      where id=$1 and plugin_id=$4 and status='approved' and not (metadata ? 'deezer')
-      returning *`,
-    [request.id, key, candidate.id, plugin.id]
-  )).rows[0];
+  const updateSql =
+    "update plugin_media_requests set status='submitted', submitted_at=now(), provider_error=null, " +
+    "metadata=jsonb_set(metadata,'{deezer}',jsonb_build_object('state','downloading',$2::text,$3::text,'automatic',true)), " +
+    "updated_at=now() where id=$1 and plugin_id=$4 and status='approved' and not (metadata ? 'deezer') returning *";
+  const claimed = (await db().query<MediaRequestRow>(updateSql, [request.id, key, itemId, plugin.id])).rows[0];
   if (!claimed) return;
 
   const localAlbum = claimed.item_type === 'track' ? await existingAlbumMetadata(claimed) : null;
-  const job = downloadDeezerRequest(claimed, candidate.id, localAlbum);
+  const job = downloadDeezerRequest(claimed, itemId, localAlbum);
   deezerJobs.set(claimed.id, job);
   void job;
 
@@ -687,9 +683,10 @@ async function startAutomaticDeezerDownload(plugin: MissingMusicPluginRow, reque
     requestId: claimed.id,
     by: claimed.user_id,
     itemType: claimed.item_type,
-    deezerId: candidate.id,
+    deezerId: itemId,
     automatic: true,
-  }).catch(error => logger.warn('missing-music', `Could not audit automatic Deezer start: ${errorMessage(error)}`));
+    catalogDirect: Boolean(request.deezer_album_id || request.deezer_track_id),
+  }).catch(error => logger.warn('missing-music', 'Could not audit automatic Deezer start: ' + errorMessage(error)));
   await notifyRequest(claimed, 'downloading', 'Automatic Deezer download started');
 }
 
