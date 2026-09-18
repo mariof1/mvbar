@@ -85,16 +85,6 @@ type MbRelease = {
   date?: string;
 };
 
-type MbArtist = {
-  id?: string;
-  name?: string;
-  'sort-name'?: string;
-  disambiguation?: string;
-  country?: string;
-  type?: string | null;
-  score?: number;
-};
-
 type SavedArtistMatch = {
   musicBrainzId: string;
   musicBrainzName: string;
@@ -1562,7 +1552,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       const itemType = body.itemType === 'album' || body.itemType === 'track' ? body.itemType : null;
       if (!itemType) throw new Error('itemType must be album or track');
 
-      let artist = safeText(body.artist, 'artist');
+      const artist = safeText(body.artist, 'artist');
       let title = safeText(body.title, 'title');
       let album = optionalText(body.album);
       const localArtist = optionalText(body.localArtist, 500) ?? artist;
