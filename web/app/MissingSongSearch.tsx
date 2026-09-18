@@ -9,7 +9,14 @@ import { useRouter } from './router';
 type Song = {
   recordingId: string; title: string; artist: string; album: string | null;
   version?: string | null;
-  musicBrainzArtistId: string; musicBrainzReleaseGroupId: string | null; musicBrainzReleaseId: string | null;
+  deezerArtistId: string | null;
+  deezerAlbumId: string;
+  deezerTrackId: string;
+  isrc?: string | null;
+  durationMs?: number | null;
+  musicBrainzArtistId?: string | null;
+  musicBrainzReleaseGroupId?: string | null;
+  musicBrainzReleaseId?: string | null;
   present: boolean; requested: boolean;
 };
 
@@ -61,8 +68,10 @@ export function MissingSongSearch({ query, onExploreArtist }: { query: string; o
     try {
       await apiFetch('/plugins/missing-music/requests', { method: 'POST', body: JSON.stringify({
         itemType: 'track', title: song.title, artist: song.artist, album: song.album,
-        musicBrainzArtistId: song.musicBrainzArtistId, musicBrainzRecordingId: song.recordingId,
-        musicBrainzReleaseGroupId: song.musicBrainzReleaseGroupId, musicBrainzReleaseId: song.musicBrainzReleaseId,
+        deezerArtistId: song.deezerArtistId,
+        deezerAlbumId: song.deezerAlbumId,
+        deezerTrackId: song.deezerTrackId,
+        isrc: song.isrc ?? null,
       }) }, token);
       if (current === generation.current) setSongs(items => items.map(item => item.recordingId === song.recordingId ? { ...item, requested: true } : item));
       useToastStore.getState().show(`Requested ${song.title}. Administrators have been notified.`, 'success');
@@ -79,7 +88,7 @@ export function MissingSongSearch({ query, onExploreArtist }: { query: string; o
   if (!enabled || search.length < 3 || search.length > 200) return null;
   return <section aria-label="Missing songs" className="border-t border-white/10 px-5 py-4">
     <h3 className="text-sm font-semibold text-white">Missing songs</h3>
-    <p className="mt-1 text-xs text-slate-400">MusicBrainz matches. Request a song for administrators to add to the library.</p>
+    <p className="mt-1 text-xs text-slate-400">Deezer matches. Request a song for administrators to add to the library.</p>
     {loading ? <p role="status" className="py-3 text-sm text-slate-400">Checking song availability…</p> : error ?
       <div role="alert" className="py-3 text-sm text-slate-400">{error} <button type="button" onClick={() => setRetry(value => value + 1)} className="min-h-11 px-3 text-cyan-400">Retry</button></div> :
       songs.length === 0 ? <p className="py-3 text-sm text-slate-400">No catalog matches. Try the song title and artist.</p> :
@@ -87,7 +96,7 @@ export function MissingSongSearch({ query, onExploreArtist }: { query: string; o
         <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-white" title={song.title}>{song.title}</p>
           <p className="truncate text-xs text-slate-400" title={`${song.artist}${song.album ? ` • ${song.album}` : ''}`}>
             <button type="button" className="text-left text-cyan-300 hover:underline" onClick={() => {
-              navigate({ type: 'missing-music', artistId: song.musicBrainzArtistId, artistName: song.artist });
+              navigate({ type: 'missing-music' });
               onExploreArtist?.();
             }} aria-label={`Find missing albums by ${song.artist}`}>{song.artist}</button>{song.album ? ` • ${song.album}` : ''}
           </p>
