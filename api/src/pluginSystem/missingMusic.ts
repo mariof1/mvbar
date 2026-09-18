@@ -13,6 +13,7 @@ import { broadcastToAdmins, broadcastToUser } from '../websocket.js';
 import { pluginsEnabledGlobally } from './registry.js';
 import type { NdpManifest, PluginDbRow } from './types.js';
 import { cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, deezerStagingConfig, listStagedAlbumFiles, searchDeezerAlbums, searchDeezerTracks, stageDeezerAlbum, stagedAlbumComplete, stagedAlbumRelativePath, stageDeezerTrack, validStagedAlbumIdentifier, validStagedFilename, verifiedDeezerAlbum, verifiedDeezerTrack, type ExistingAlbumMetadata } from './deezerStaging.js';
+import { deezerAlbum, deezerAlbumTracks, deezerAlbumsForArtist, localAlbumTitleScore, matchDeezerTrack, normalizeDeezerText, searchDeezerArtists, type LocalTrack } from './deezerCatalog.js';
 
 export const MISSING_MUSIC_PLUGIN_ID = 'mvbar.missing-music';
 const EXTENSION_TYPE = 'missing-music';
@@ -27,6 +28,7 @@ type MissingMusicConfig = {
   allowPrivateProvider?: boolean;
   requireAdminApproval?: boolean;
   autoDownloadDeezer?: boolean;
+  preferSpecialEditions?: boolean;
   musicBrainzContact?: string;
   releaseGroupTypes?: string;
   excludedSecondaryTypes?: string;
@@ -53,6 +55,10 @@ type MediaRequestRow = {
   musicbrainz_release_group_id: string | null;
   musicbrainz_release_id: string | null;
   musicbrainz_recording_id: string | null;
+  deezer_artist_id: string | null;
+  deezer_album_id: string | null;
+  deezer_track_id: string | null;
+  requested_isrc: string | null;
   status: 'requested' | 'approved' | 'submitted' | 'completed' | 'failed' | 'rejected' | 'cancelled';
   provider_request_id: string | null;
   provider_error: string | null;
@@ -92,6 +98,11 @@ type MbArtist = {
 type SavedArtistMatch = {
   musicBrainzId: string;
   musicBrainzName: string;
+};
+
+type SavedDeezerArtistMatch = {
+  deezerId: string;
+  deezerName: string;
 };
 
 function errorMessage(error: unknown) {
