@@ -716,6 +716,13 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     }
     return map;
   }, [requests]);
+  const playlistImportByDeezerId = useMemo(() => new Map(
+    playlistImports.map((item) => [item.deezerPlaylistId, item] as const)
+  ), [playlistImports]);
+  const activePlaylistImports = useMemo(
+    () => playlistImports.filter((item) => item.status === 'queued' || item.status === 'downloading'),
+    [playlistImports],
+  );
   const providerConfigured = status?.providerConfigured ?? false;
   const requestCounts = useMemo(() => ({
     action: requests.filter((request) => ['requested', 'approved', 'failed'].includes(request.status) || (request.status === 'submitted' && request.deezer?.state === 'missing')).length,
