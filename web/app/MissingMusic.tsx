@@ -432,6 +432,8 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
       album: group.title,
       deezerArtistId: artist.deezerId,
       deezerAlbumId: group.id,
+      localArtist: artist.name,
+      localAlbum: group.localAlbum ?? null,
     }, `album:${group.id}`);
   };
 
@@ -446,6 +448,8 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
       deezerAlbumId: group.id,
       deezerTrackId: track.recordingId,
       isrc: track.isrc ?? null,
+      localArtist: artist.name,
+      localAlbum: group.localAlbum ?? tracks[group.id]?.album?.localAlbum ?? null,
     }, `track:${track.recordingId}`);
   };
 
