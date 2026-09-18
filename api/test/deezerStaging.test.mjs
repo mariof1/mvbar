@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import unzipper from 'unzipper';
-import { publishStagedTrack, refreshStagedAlbumArchive, searchDeezerAlbums, searchDeezerTracks, stagedAlbumComplete, verifiedDeezerAlbum, verifiedDeezerTrack, validStagedFilename } from '../dist/pluginSystem/deezerStaging.js';
+import { cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, publishStagedTrack, searchDeezerAlbums, searchDeezerTracks, stagedAlbumComplete, validStagedAlbumIdentifier, verifiedDeezerAlbum, verifiedDeezerTrack, validStagedFilename } from '../dist/pluginSystem/deezerStaging.js';
+
+async function streamBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
 
 test('Deezer matching keeps the main recording and rejects alternate versions', async () => {
   const originalFetch = globalThis.fetch;
@@ -64,6 +71,9 @@ test('Deezer download selection validates the current catalog item', async () =>
   assert.equal(validStagedFilename('Daft Punk - Discovery [deezer-album-42].zip'), true);
   assert.equal(validStagedFilename('Daft Punk/Discovery/01-08 One More Time.mp3'), true);
   assert.equal(validStagedFilename('Daft Punk/Discovery.zip'), true);
+  assert.equal(validStagedAlbumIdentifier('Daft Punk/Discovery'), true);
+  assert.equal(validStagedAlbumIdentifier('Daft Punk/Discovery.zip'), true);
+  assert.equal(validStagedAlbumIdentifier('Discovery'), false);
   assert.equal(validStagedFilename('../secrets.mp3'), false);
   assert.equal(validStagedFilename('Daft Punk/../secrets.mp3'), false);
   assert.equal(validStagedFilename('Daft Punk\\Discovery\\song.mp3'), false);
@@ -114,7 +124,7 @@ test('Deezer album selection rejects other versions and validates every paginate
   }
 });
 
-test('album downloads are repackaged from edited staged files', async () => {
+test('album downloads are streamed from edited staged files without a persistent ZIP', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'mvbar-staged-'));
   const oldDirectory = process.env.DEEZER_DOWNLOAD_DIR;
   process.env.DEEZER_DOWNLOAD_DIR = directory;
@@ -122,13 +132,13 @@ test('album downloads are repackaged from edited staged files', async () => {
     const album = path.join(directory, 'Artist', 'Album');
     await mkdir(album, { recursive: true });
     await writeFile(path.join(album, '01-01 Song.flac'), 'before');
-    await refreshStagedAlbumArchive('Artist/Album.zip');
     await writeFile(path.join(album, '01-01 Song.flac'), 'after');
-    await refreshStagedAlbumArchive('Artist/Album.zip');
-    const archive = await unzipper.Open.file(path.join(directory, 'Artist', 'Album.zip'));
+
+    const archive = await unzipper.Open.buffer(await streamBuffer(await createStagedAlbumArchive('Artist/Album')));
     assert.deepEqual(archive.files.map(file => file.path), ['Artist/Album/01-01 Song.flac']);
     assert.equal((await archive.files[0].buffer()).toString(), 'after');
     assert.equal((await readFile(path.join(album, '01-01 Song.flac'))).toString(), 'after');
+    await assert.rejects(stat(path.join(directory, 'Artist', 'Album.zip')), error => error?.code === 'ENOENT');
   } finally {
     if (oldDirectory === undefined) delete process.env.DEEZER_DOWNLOAD_DIR;
     else process.env.DEEZER_DOWNLOAD_DIR = oldDirectory;
@@ -146,16 +156,38 @@ test('staged albums reject missing tracks even when other audio files remain', a
     await mkdir(album, { recursive: true });
     await writeFile(path.join(album, expected[0]), 'first');
     await writeFile(path.join(album, expected[1]), 'second');
-    assert.equal(await stagedAlbumComplete('Artist/Album.zip', expected, 2), true);
-    await refreshStagedAlbumArchive('Artist/Album.zip', expected, 2);
+    assert.equal(await stagedAlbumComplete('Artist/Album', expected, 2), true);
+
     await rm(path.join(album, expected[1]));
     await writeFile(path.join(album, '01-03 Extra.flac'), 'extra');
-    assert.equal(await stagedAlbumComplete('Artist/Album.zip', expected, 2), false);
-    await assert.rejects(refreshStagedAlbumArchive('Artist/Album.zip', expected, 2), /incomplete/);
+    assert.equal(await stagedAlbumComplete('Artist/Album', expected, 2), false);
+    await assert.rejects(createStagedAlbumArchive('Artist/Album', expected, 2), /incomplete/);
+
     await writeFile(path.join(album, expected[1]), 'second again');
-    await refreshStagedAlbumArchive('Artist/Album.zip', expected, 2);
-    const archive = await unzipper.Open.file(path.join(directory, 'Artist', 'Album.zip'));
+    const archive = await unzipper.Open.buffer(await streamBuffer(await createStagedAlbumArchive('Artist/Album', expected, 2)));
     assert.deepEqual(archive.files.map(file => file.path), expected.map(name => `Artist/Album/${name}`));
+  } finally {
+    if (oldDirectory === undefined) delete process.env.DEEZER_DOWNLOAD_DIR;
+    else process.env.DEEZER_DOWNLOAD_DIR = oldDirectory;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('legacy staged album ZIPs are removed only when the extracted album folder is valid', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'mvbar-staged-cleanup-'));
+  const oldDirectory = process.env.DEEZER_DOWNLOAD_DIR;
+  process.env.DEEZER_DOWNLOAD_DIR = directory;
+  try {
+    const artist = path.join(directory, 'Artist');
+    const album = path.join(artist, 'Album');
+    await mkdir(album, { recursive: true });
+    await writeFile(path.join(album, '01-01 Song.flac'), 'audio');
+    await writeFile(path.join(artist, 'Album.zip'), 'legacy duplicate');
+    await writeFile(path.join(artist, 'Orphan.zip'), 'keep me');
+
+    assert.equal(await cleanupLegacyStagedAlbumArchives(), 1);
+    await assert.rejects(stat(path.join(artist, 'Album.zip')), error => error?.code === 'ENOENT');
+    assert.equal((await readFile(path.join(artist, 'Orphan.zip'))).toString(), 'keep me');
   } finally {
     if (oldDirectory === undefined) delete process.env.DEEZER_DOWNLOAD_DIR;
     else process.env.DEEZER_DOWNLOAD_DIR = oldDirectory;
