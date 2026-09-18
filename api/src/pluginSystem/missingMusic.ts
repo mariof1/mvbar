@@ -990,6 +990,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     }
     let localArtistCount = 0;
     let taggedArtistCount = 0;
+    let deezerMatchedArtistCount = 0;
     if (installed) {
       const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
       const filter = libraryFilter(allowed, 1);
@@ -1005,6 +1006,11 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       );
       localArtistCount = Number(stats.rows[0]?.local_artist_count ?? 0);
       taggedArtistCount = Number(stats.rows[0]?.tagged_artist_count ?? 0);
+      const savedDeezer = await db().query<{ count: string | number }>(
+        "select count(*) count from plugin_kv where plugin_id=$1 and key like $2",
+        [installed.id, 'deezer-artist-match:' + req.user.userId + ':%']
+      );
+      deezerMatchedArtistCount = Number(savedDeezer.rows[0]?.count ?? 0);
     }
     return {
       ok: true,
@@ -1026,6 +1032,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       ),
       localArtistCount,
       taggedArtistCount,
+      deezerMatchedArtistCount,
     };
   });
 
