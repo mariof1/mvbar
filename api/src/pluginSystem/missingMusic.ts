@@ -964,14 +964,26 @@ async function reconcileDeezerPlaylistImport(plugin: MissingMusicPluginRow, impo
     await ensurePlaylistImportRequest(plugin, importRow, item);
   }
 
-  const counts = (await db().query<{ total: string | number; added: string | number; failed: string | number }>(
-    "select count(*) total,count(*) filter(where state='added') added,count(*) filter(where state='failed') failed " +
+  const counts = (await db().query<{
+    total: string | number;
+    added: string | number;
+    failed: string | number;
+    downloaded: string | number;
+    reused: string | number;
+  }>(
+    "select count(*) total," +
+    "count(*) filter(where state='added') added," +
+    "count(*) filter(where state='failed') failed," +
+    "count(*) filter(where state='added' and request_id is not null) downloaded," +
+    "count(*) filter(where state='added' and request_id is null) reused " +
     "from plugin_deezer_playlist_items where import_id=$1",
     [importRow.id]
   )).rows[0];
   const total = Number(counts?.total ?? 0);
   const added = Number(counts?.added ?? 0);
   const failed = Number(counts?.failed ?? 0);
+  const downloaded = Number(counts?.downloaded ?? 0);
+  const reused = Number(counts?.reused ?? 0);
   const status: DeezerPlaylistImportRow['status'] = total > 0 && added + failed >= total
     ? (failed > 0 ? 'partial' : 'completed')
     : 'downloading';
@@ -981,16 +993,26 @@ async function reconcileDeezerPlaylistImport(plugin: MissingMusicPluginRow, impo
     [importRow.id, status, total, added, failed]
   )).rows[0];
 
-  broadcastToUser(importRow.user_id, 'missing-music:update', {
-    event: 'playlist-import',
-    requestId: importRow.id,
-    userId: importRow.user_id,
-    status,
-    artist: 'Deezer',
-    title: importRow.title,
-    message: `${importRow.title}: ${added}/${total} tracks added${failed ? `, ${failed} failed` : ''}`,
-    at: new Date().toISOString(),
-  });
+  const changed = status !== importRow.status
+    || added !== Number(importRow.added_tracks)
+    || failed !== Number(importRow.failed_tracks);
+  if (changed) {
+    const final = status === 'completed' || status === 'partial';
+    const parts = [`${added}/${total} songs ready`];
+    if (downloaded > 0) parts.push(`${downloaded} downloaded`);
+    if (reused > 0) parts.push(`${reused} already in library`);
+    if (failed > 0) parts.push(`${failed} failed`);
+    broadcastToUser(importRow.user_id, 'missing-music:update', {
+      event: final ? 'playlist-import-complete' : 'playlist-import-progress',
+      requestId: importRow.id,
+      userId: importRow.user_id,
+      status,
+      artist: 'Deezer',
+      title: importRow.title,
+      message: final ? `${importRow.title}: ${parts.join(' · ')}` : undefined,
+      at: new Date().toISOString(),
+    });
+  }
   return updated;
 }
 
