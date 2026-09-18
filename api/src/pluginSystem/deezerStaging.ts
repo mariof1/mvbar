@@ -5,6 +5,7 @@ import { copyFile, link, mkdir, readdir, rename, rm, stat, unlink } from 'node:f
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ZipArchive } from 'archiver';
+import { probeWritableDirectory } from '../libraryWritability.js';
 
 const DEEZER_ORIGIN = 'https://api.deezer.com';
 const DOWNLOAD_SCRIPT = fileURLToPath(new URL('../../scripts/deezer_download.py', import.meta.url));
@@ -234,6 +235,22 @@ export function deezerStagingConfig() {
   };
 }
 
+export async function assertDeezerStagingReady() {
+  const config = deezerStagingConfig();
+  if (!config.configured) throw new Error(config.error);
+  let details;
+  try {
+    details = await stat(config.directory);
+  } catch {
+    throw new Error('Deezer staging directory is unavailable. Restore its mount before downloading.');
+  }
+  if (!details.isDirectory()) throw new Error('Deezer staging path is not a directory');
+  if (!await probeWritableDirectory(config.directory)) {
+    throw new Error('Deezer staging directory is not writable');
+  }
+  return config;
+}
+
 function safeFilePart(value: string) {
   return value.replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ').replace(/[. ]+$/g, '').replace(/\s+/g, ' ').trim().slice(0, 100) || 'Unknown';
 }
@@ -314,12 +331,10 @@ function runPython(python: string, input: object, arl: string, timeoutMs = 15 * 
 }
 
 export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: AlbumProgress): Promise<string> {
-  const config = deezerStagingConfig();
-  if (!config.configured) throw new Error(config.error);
+  const config = await assertDeezerStagingReady();
   if (album.tracks.length !== album.trackCount || album.trackCount < 1 || album.trackCount > 200) {
     throw new Error('Album track list is incomplete');
   }
-  await mkdir(config.directory, { recursive: true, mode: 0o700 });
   const working = path.join(config.directory, `.incoming-${crypto.randomUUID()}`);
   await mkdir(working, { mode: 0o700 });
   try {
@@ -439,9 +454,7 @@ export async function publishStagedTrack(directory: string, source: string, trac
 }
 
 export async function stageDeezerTrack(track: DeezerTrack, existingAlbum?: ExistingAlbumMetadata | null): Promise<string> {
-  const config = deezerStagingConfig();
-  if (!config.configured) throw new Error(config.error);
-  await mkdir(config.directory, { recursive: true, mode: 0o700 });
+  const config = await assertDeezerStagingReady();
   const working = path.join(config.directory, `.incoming-${crypto.randomUUID()}`);
   await mkdir(working, { mode: 0o700 });
   try {
