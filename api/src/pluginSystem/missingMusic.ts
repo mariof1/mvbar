@@ -160,6 +160,24 @@ function artistMatchKey(userId: string, name: string) {
   return `artist-match:${userId}:${normalizeCatalogText(name)}`;
 }
 
+function deezerArtistMatchKey(userId: string, name: string) {
+  return `deezer-artist-match:${userId}:${normalizeDeezerText(name)}`;
+}
+
+function parseSavedDeezerArtistMatch(value: Buffer): SavedDeezerArtistMatch | null {
+  try {
+    const parsed = JSON.parse(value.toString('utf8')) as Partial<SavedDeezerArtistMatch>;
+    if (!validDeezerId(parsed.deezerId) || typeof parsed.deezerName !== 'string' || !parsed.deezerName.trim()) return null;
+    return { deezerId: parsed.deezerId, deezerName: parsed.deezerName.trim() };
+  } catch {
+    return null;
+  }
+}
+
+function validDeezerId(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{1,16}$/.test(value);
+}
+
 function parseSavedArtistMatch(value: Buffer): SavedArtistMatch | null {
   try {
     const parsed = JSON.parse(value.toString('utf8')) as Partial<SavedArtistMatch>;
