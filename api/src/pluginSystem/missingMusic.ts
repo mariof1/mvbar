@@ -682,6 +682,114 @@ function serializePlaylistImport(row: DeezerPlaylistImportRow) {
   };
 }
 
+async function startDeezerPlaylistImport(
+  plugin: MissingMusicPluginRow,
+  userId: string,
+  playlistId: string,
+) {
+  const existingImport = (await db().query<DeezerPlaylistImportRow>(
+    'select * from plugin_deezer_playlist_imports where plugin_id=$1 and user_id=$2 and deezer_playlist_id=$3',
+    [plugin.id, userId, playlistId]
+  )).rows[0];
+  if (existingImport) return { alreadyImported: true, importRow: existingImport };
+
+  const { playlist, tracks } = await deezerPlaylistTracks(playlistId, 1000);
+  if (!tracks.length) throw new Error('This Deezer playlist has no downloadable tracks');
+
+  const client = await db().connect();
+  let importRow: DeezerPlaylistImportRow;
+  let mvbarPlaylistId = 0;
+  try {
+    await client.query('begin');
+
+    const sourceExisting = await client.query<{ id: number | string }>(
+      'select id from playlists where user_id=$1 and source_plugin_id=$2 and source_external_id=$3 limit 1',
+      [userId, plugin.id, 'deezer-playlist:' + playlist.id]
+    );
+    mvbarPlaylistId = sourceExisting.rows[0] ? Number(sourceExisting.rows[0].id) : 0;
+
+    if (!mvbarPlaylistId) {
+      try {
+        const created = await client.query<{ id: number | string }>(
+          'insert into playlists(user_id,name,artwork_url,source_plugin_id,source_external_id) values($1,$2,$3,$4,$5) returning id',
+          [userId, playlist.title, playlist.cover, plugin.id, 'deezer-playlist:' + playlist.id]
+        );
+        mvbarPlaylistId = Number(created.rows[0].id);
+      } catch (error) {
+        if ((error as { code?: string }).code === '23505') {
+          throw new Error('A playlist named “' + playlist.title + '” already exists. Rename or remove it before importing this Deezer playlist.');
+        }
+        throw error;
+      }
+    } else {
+      await client.query(
+        'update playlists set name=$2,artwork_url=$3 where id=$1 and user_id=$4',
+        [mvbarPlaylistId, playlist.title, playlist.cover, userId]
+      );
+    }
+
+    const importId = crypto.randomUUID();
+    importRow = (await client.query<DeezerPlaylistImportRow>(
+      "insert into plugin_deezer_playlist_imports(id,plugin_id,user_id,deezer_playlist_id,playlist_id,title,artwork_url,status,total_tracks) " +
+      "values($1,$2,$3,$4,$5,$6,$7,'queued',$8) returning *",
+      [importId, plugin.id, userId, playlist.id, mvbarPlaylistId, playlist.title, playlist.cover, tracks.length]
+    )).rows[0];
+
+    const values: string[] = [];
+    const params: unknown[] = [];
+    for (const [index, track] of tracks.entries()) {
+      const base = params.length;
+      values.push(
+        '(' + Array.from({ length: 12 }, (_, offset) => '$' + (base + offset + 1)).join(',') + ')'
+      );
+      params.push(
+        importId,
+        index,
+        track.id,
+        track.albumId,
+        track.artistId,
+        track.title,
+        track.artist,
+        track.album || null,
+        track.durationMs,
+        track.isrc,
+        track.trackNumber || null,
+        track.discNumber || null,
+      );
+    }
+    await client.query(
+      'insert into plugin_deezer_playlist_items(' +
+      'import_id,position,deezer_track_id,deezer_album_id,deezer_artist_id,title,artist,album,duration_ms,isrc,track_number,disc_number' +
+      ') values ' + values.join(','),
+      params
+    );
+
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  broadcastToUser(userId, 'playlist:created', {
+    id: mvbarPlaylistId,
+    playlistId: mvbarPlaylistId,
+    name: playlist.title,
+    by: userId,
+  });
+  await audit('plugin_deezer_playlist_import_started', {
+    pluginId: plugin.id,
+    importId: importRow.id,
+    userId,
+    deezerPlaylistId: playlist.id,
+    playlistId: mvbarPlaylistId,
+    title: playlist.title,
+    trackCount: tracks.length,
+  });
+
+  return { alreadyImported: false, importRow };
+}
 async function addImportedPlaylistTrack(
   importRow: DeezerPlaylistImportRow,
   item: DeezerPlaylistImportItemRow,
