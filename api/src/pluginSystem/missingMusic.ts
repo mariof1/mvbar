@@ -600,6 +600,267 @@ async function localTracksForAlbum(req: FastifyRequest, localArtistName: string,
   return result.rows;
 }
 
+type LocalPlaylistCandidate = LocalTrack & {
+  artist: string | null;
+  album_artist: string | null;
+  album: string | null;
+};
+
+function playlistItemAsDeezerTrack(item: DeezerPlaylistImportItemRow): DeezerTrack {
+  return {
+    id: item.deezer_track_id,
+    title: item.title,
+    artist: item.artist,
+    artistId: item.deezer_artist_id,
+    albumId: item.deezer_album_id,
+    album: item.album ?? '',
+    isrc: item.isrc,
+    durationMs: item.duration_ms,
+    discNumber: item.disc_number && item.disc_number > 0 ? item.disc_number : 1,
+    trackNumber: item.track_number && item.track_number > 0 ? item.track_number : 0,
+  };
+}
+
+function compactIsrc(value: string | null | undefined) {
+  return (value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function playlistArtistMatches(remoteArtist: string, row: LocalPlaylistCandidate) {
+  const wanted = normalizeDeezerText(remoteArtist);
+  if (!wanted) return false;
+  const credits = [row.artist, row.album_artist]
+    .filter((value): value is string => Boolean(value))
+    .flatMap(value => value.split(/\s*(?:;|•|\|)\s*/));
+  return credits.some(value => normalizeDeezerText(value) === wanted);
+}
+
+async function localCandidatesForPlaylistItems(
+  userId: string,
+  role: Role,
+  items: DeezerPlaylistImportItemRow[],
+): Promise<LocalPlaylistCandidate[]> {
+  if (!items.length) return [];
+  const allowed = await allowedLibrariesForUser(userId, role);
+  const filter = libraryFilter(allowed, 3);
+  const titles = [...new Set(items.map(item => item.title.toLocaleLowerCase('en')))];
+  const isrcs = [...new Set(items.map(item => compactIsrc(item.isrc)).filter(Boolean))];
+  const sql =
+    "select track.id,track.title,track.artist,track.album_artist,track.album,track.isrc," +
+    "track.duration_ms,track.track_number,track.disc_number from active_tracks track " +
+    "where (lower(track.title)=any($1::text[]) or " +
+    "($2::text[] <> '{}'::text[] and regexp_replace(upper(coalesce(track.isrc,'')),'[^A-Z0-9]','','g')=any($2::text[]))) " +
+    filter.sql;
+  const result = await db().query<LocalPlaylistCandidate>(sql, [titles, isrcs, ...filter.params]);
+  return result.rows;
+}
+
+function matchPlaylistImportItem(item: DeezerPlaylistImportItemRow, candidates: LocalPlaylistCandidate[]) {
+  const remote = playlistItemAsDeezerTrack(item);
+  const remoteIsrc = compactIsrc(remote.isrc);
+  const relevant = candidates.filter(row => {
+    const localIsrc = compactIsrc(row.isrc);
+    if (remoteIsrc && localIsrc === remoteIsrc) return true;
+    return playlistArtistMatches(remote.artist, row);
+  });
+  return matchDeezerTrack(remote, relevant);
+}
+
+function serializePlaylistImport(row: DeezerPlaylistImportRow) {
+  return {
+    id: row.id,
+    deezerPlaylistId: row.deezer_playlist_id,
+    playlistId: String(row.playlist_id),
+    title: row.title,
+    artworkUrl: row.artwork_url,
+    status: row.status,
+    totalTracks: Number(row.total_tracks),
+    addedTracks: Number(row.added_tracks),
+    failedTracks: Number(row.failed_tracks),
+    pendingTracks: Math.max(0, Number(row.total_tracks) - Number(row.added_tracks) - Number(row.failed_tracks)),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function addImportedPlaylistTrack(
+  importRow: DeezerPlaylistImportRow,
+  item: DeezerPlaylistImportItemRow,
+  trackId: number,
+) {
+  const client = await db().connect();
+  try {
+    await client.query('begin');
+    await client.query(
+      "insert into playlist_items(playlist_id,track_id,position,added_by) values($1,$2,$3,$4) " +
+      "on conflict(playlist_id,track_id) do update set position=excluded.position,added_by=coalesce(playlist_items.added_by,excluded.added_by)",
+      [Number(importRow.playlist_id), trackId, item.position, importRow.user_id]
+    );
+    await client.query(
+      "update plugin_deezer_playlist_items set track_id=$3,state='added',error=null where import_id=$1 and position=$2",
+      [importRow.id, item.position, trackId]
+    );
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
+  broadcastToUser(importRow.user_id, 'playlist:item_added', {
+    playlistId: Number(importRow.playlist_id),
+    trackId,
+    position: item.position,
+    by: importRow.user_id,
+  });
+}
+
+async function ensurePlaylistImportRequest(
+  plugin: MissingMusicPluginRow,
+  importRow: DeezerPlaylistImportRow,
+  item: DeezerPlaylistImportItemRow,
+) {
+  const existing = (await db().query<MediaRequestRow>(
+    "select * from plugin_media_requests where plugin_id=$1 and user_id=$2 and deezer_track_id=$3 " +
+    "and status not in ('failed','rejected','cancelled','completed') order by created_at desc limit 1",
+    [plugin.id, importRow.user_id, item.deezer_track_id]
+  )).rows[0];
+
+  if (existing) {
+    const metadata = {
+      ...existing.metadata,
+      autoDownloadDeezer: true,
+      hiddenBatch: true,
+      deezerPlaylistImportId: importRow.id,
+      playlistId: Number(importRow.playlist_id),
+      playlistPosition: item.position,
+    };
+    const updated = (await db().query<MediaRequestRow>(
+      "update plugin_media_requests set status=case when status='requested' then 'approved' else status end," +
+      "approved_by=coalesce(approved_by,$2),approved_at=coalesce(approved_at,now()),metadata=$3,updated_at=now() where id=$1 returning *",
+      [existing.id, importRow.user_id, metadata]
+    )).rows[0];
+    await db().query(
+      "update plugin_deezer_playlist_items set request_id=$3,state=$4,error=null where import_id=$1 and position=$2",
+      [importRow.id, item.position, updated.id, updated.status === 'submitted' ? 'downloading' : 'requested']
+    );
+    return updated;
+  }
+
+  const requestId = crypto.randomUUID();
+  const metadata = {
+    source: 'deezer-playlist',
+    autoDownloadDeezer: true,
+    hiddenBatch: true,
+    deezerPlaylistImportId: importRow.id,
+    playlistId: Number(importRow.playlist_id),
+    playlistPosition: item.position,
+  };
+  const request = (await db().query<MediaRequestRow>(
+    "insert into plugin_media_requests(" +
+    "id,plugin_id,user_id,item_type,artist,title,album,deezer_artist_id,deezer_album_id,deezer_track_id,requested_isrc," +
+    "status,approved_by,approved_at,metadata" +
+    ") values($1,$2,$3,'track',$4,$5,$6,$7,$8,$9,$10,'approved',$3,now(),$11) returning *",
+    [requestId, plugin.id, importRow.user_id, item.artist, item.title, item.album, item.deezer_artist_id,
+      item.deezer_album_id, item.deezer_track_id, item.isrc, metadata]
+  )).rows[0];
+  await db().query(
+    "update plugin_deezer_playlist_items set request_id=$3,state='requested',error=null where import_id=$1 and position=$2",
+    [importRow.id, item.position, request.id]
+  );
+  return request;
+}
+
+async function reconcileDeezerPlaylistImport(plugin: MissingMusicPluginRow, importId: string) {
+  const importResult = await db().query<DeezerPlaylistImportRow & { role: Role }>(
+    "select import.*, app_user.role from plugin_deezer_playlist_imports import " +
+    "join users app_user on app_user.id=import.user_id where import.id=$1 and import.plugin_id=$2",
+    [importId, plugin.id]
+  );
+  const importRow = importResult.rows[0];
+  if (!importRow || ['completed','partial','failed'].includes(importRow.status)) return importRow ?? null;
+
+  const items = (await db().query<DeezerPlaylistImportItemRow>(
+    "select * from plugin_deezer_playlist_items where import_id=$1 and state<>'added' order by position",
+    [importId]
+  )).rows;
+  const candidates = await localCandidatesForPlaylistItems(importRow.user_id, importRow.role, items);
+  const requestIds = items.map(item => item.request_id).filter((id): id is string => Boolean(id));
+  const requests = requestIds.length ? (await db().query<MediaRequestRow>(
+    "select * from plugin_media_requests where id=any($1::text[])",
+    [requestIds]
+  )).rows : [];
+  const requestsById = new Map(requests.map(request => [request.id, request]));
+
+  for (const item of items) {
+    const match = matchPlaylistImportItem(item, candidates);
+    if (match.present && match.localTrackId !== null) {
+      await addImportedPlaylistTrack(importRow, item, Number(match.localTrackId));
+      continue;
+    }
+
+    const request = item.request_id ? requestsById.get(item.request_id) : undefined;
+    if (request && ['failed','rejected','cancelled'].includes(request.status)) {
+      await db().query(
+        "update plugin_deezer_playlist_items set state='failed',error=$3 where import_id=$1 and position=$2",
+        [importRow.id, item.position, request.provider_error ?? 'Deezer download failed']
+      );
+      continue;
+    }
+    if (request) {
+      const state = (request.metadata?.deezer as { state?: string } | undefined)?.state;
+      await db().query(
+        "update plugin_deezer_playlist_items set state=$3,error=null where import_id=$1 and position=$2",
+        [importRow.id, item.position, state === 'downloading' || request.status === 'submitted' ? 'downloading' : 'requested']
+      );
+      continue;
+    }
+
+    await ensurePlaylistImportRequest(plugin, importRow, item);
+  }
+
+  const counts = (await db().query<{ total: string | number; added: string | number; failed: string | number }>(
+    "select count(*) total,count(*) filter(where state='added') added,count(*) filter(where state='failed') failed " +
+    "from plugin_deezer_playlist_items where import_id=$1",
+    [importRow.id]
+  )).rows[0];
+  const total = Number(counts?.total ?? 0);
+  const added = Number(counts?.added ?? 0);
+  const failed = Number(counts?.failed ?? 0);
+  const status: DeezerPlaylistImportRow['status'] = total > 0 && added + failed >= total
+    ? (failed > 0 ? 'partial' : 'completed')
+    : 'downloading';
+  const updated = (await db().query<DeezerPlaylistImportRow>(
+    "update plugin_deezer_playlist_imports set status=$2,total_tracks=$3,added_tracks=$4,failed_tracks=$5,updated_at=now() " +
+    "where id=$1 returning *",
+    [importRow.id, status, total, added, failed]
+  )).rows[0];
+
+  broadcastToUser(importRow.user_id, 'missing-music:update', {
+    event: 'playlist-import',
+    requestId: importRow.id,
+    userId: importRow.user_id,
+    status,
+    artist: 'Deezer',
+    title: importRow.title,
+    message: `${importRow.title}: ${added}/${total} tracks added${failed ? `, ${failed} failed` : ''}`,
+    at: new Date().toISOString(),
+  });
+  return updated;
+}
+
+async function reconcileDeezerPlaylistImports(plugin: MissingMusicPluginRow) {
+  const imports = await db().query<{ id: string }>(
+    "select id from plugin_deezer_playlist_imports where plugin_id=$1 and status in ('queued','downloading') order by updated_at limit 20",
+    [plugin.id]
+  );
+  for (const row of imports.rows) {
+    try {
+      await reconcileDeezerPlaylistImport(plugin, row.id);
+    } catch (error) {
+      logger.warn('missing-music', `Could not reconcile Deezer playlist import ${row.id}: ${errorMessage(error)}`);
+    }
+  }
+}
 function serializeRequest(row: MediaRequestRow) {
   const deezer = row.metadata?.deezer as { state?: string; filename?: string; trackId?: string; albumId?: string; trackCount?: number; completed?: number; total?: number; phase?: string; usedLocalAlbumMetadata?: boolean } | undefined;
   return {
