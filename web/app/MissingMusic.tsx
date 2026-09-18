@@ -1036,6 +1036,152 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
         </div>
       )}
 
+      {view === 'playlists' && (
+        <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
+          <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h4 className="text-lg font-semibold text-white">Deezer Playlists</h4>
+              <p className="mt-1 max-w-2xl text-sm text-white/45">
+                Pick a public Deezer playlist. MVBar downloads missing songs into their normal artist/album folders and builds a playlist with the same name and artwork.
+              </p>
+            </div>
+            <form
+              className="flex w-full max-w-xl gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void loadDeezerPlaylists(playlistQuery);
+              }}
+            >
+              <input
+                value={playlistQuery}
+                onChange={(event) => setPlaylistQuery(event.target.value)}
+                placeholder="Search Deezer playlists, e.g. Vitamin D"
+                className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400/60"
+              />
+              <button
+                type="submit"
+                disabled={playlistsLoading}
+                className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-black hover:bg-cyan-400 disabled:opacity-50"
+              >
+                {playlistsLoading ? 'Searching…' : 'Search'}
+              </button>
+              {playlistQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlaylistQuery('');
+                    void loadDeezerPlaylists('');
+                  }}
+                  className="rounded-lg border border-white/10 px-3 py-2 text-xs text-white/60 hover:bg-white/10"
+                >
+                  Featured
+                </button>
+              )}
+            </form>
+          </div>
+
+          {status && !status.playlistImportEnabled && (
+            <div className="mb-5 rounded-xl border border-amber-400/20 bg-amber-400/[0.06] px-4 py-3 text-sm text-amber-100">
+              {providerConfigured
+                ? 'Deezer playlist import is unavailable while an external request provider is configured.'
+                : !status.deezerConfigured
+                  ? 'Deezer staging must be configured before playlists can be imported.'
+                  : isAdmin
+                    ? 'Playlist import is currently unavailable.'
+                    : 'Ask an administrator to disable approval and enable Auto-download from Deezer to allow playlist imports.'}
+            </div>
+          )}
+
+          {activePlaylistImports.length > 0 && (
+            <div className="mb-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {activePlaylistImports.map((item) => {
+                const percent = item.totalTracks > 0 ? Math.round((item.addedTracks / item.totalTracks) * 100) : 0;
+                return (
+                  <div key={item.id} className="rounded-xl border border-violet-400/20 bg-violet-400/[0.06] p-3">
+                    <div className="flex items-center gap-3">
+                      <div className="relative h-12 w-12 flex-none overflow-hidden rounded-lg bg-white/10">
+                        {item.artworkUrl && <img src={item.artworkUrl} alt="" className="h-full w-full object-cover" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-white">{item.title}</div>
+                        <div className="text-xs text-white/45">{item.addedTracks}/{item.totalTracks} tracks added</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
+                      <div className="h-full rounded-full bg-violet-300 transition-all" style={{ width: `${percent}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {playlistsLoading && !playlistsLoaded ? (
+            <div className="flex items-center justify-center gap-3 py-20 text-sm text-white/50"><Spinner /> Loading Deezer playlists…</div>
+          ) : deezerPlaylists.length > 0 ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+              {deezerPlaylists.map((playlist) => {
+                const imported = playlistImportByDeezerId.get(playlist.id);
+                const active = imported?.status === 'queued' || imported?.status === 'downloading';
+                const complete = imported?.status === 'completed' || imported?.status === 'partial';
+                return (
+                  <article key={playlist.id} className="group overflow-hidden rounded-xl border border-white/10 bg-black/20 transition hover:border-white/20 hover:bg-white/[0.05]">
+                    <div className="relative aspect-square overflow-hidden bg-gradient-to-br from-violet-500/20 to-cyan-500/20">
+                      {playlist.cover ? (
+                        <img
+                          src={playlist.cover}
+                          alt=""
+                          className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+                          onError={(event) => { event.currentTarget.style.display = 'none'; }}
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-4xl text-white/20">♫</div>
+                      )}
+                      {imported && (
+                        <span className={`absolute right-2 top-2 rounded-full border px-2 py-1 text-[10px] font-semibold backdrop-blur ${complete ? 'border-emerald-300/30 bg-emerald-950/70 text-emerald-200' : 'border-violet-300/30 bg-violet-950/70 text-violet-200'}`}>
+                          {imported.status === 'completed' ? 'Imported' : imported.status === 'partial' ? 'Partial' : `${imported.addedTracks}/${imported.totalTracks}`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-3">
+                      <h5 className="truncate text-sm font-semibold text-white" title={playlist.title}>{playlist.title}</h5>
+                      <p className="mt-0.5 truncate text-xs text-white/40">
+                        {[playlist.creator ? `by ${playlist.creator}` : null, playlist.trackCount ? formatCount(playlist.trackCount, 'track') : null].filter(Boolean).join(' · ') || 'Deezer playlist'}
+                      </p>
+                      {complete && imported ? (
+                        <a
+                          href={`#/playlist/${imported.playlistId}`}
+                          className="mt-3 block rounded-lg bg-emerald-400/15 px-3 py-2 text-center text-xs font-semibold text-emerald-200 hover:bg-emerald-400/25"
+                        >
+                          Open playlist
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void importDeezerPlaylist(playlist)}
+                          disabled={!status?.playlistImportEnabled || active || playlistImportBusy !== null}
+                          className="mt-3 w-full rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-black hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          {playlistImportBusy === playlist.id
+                            ? 'Starting…'
+                            : active && imported
+                              ? `Importing ${imported.addedTracks}/${imported.totalTracks}`
+                              : 'Import playlist'}
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="py-20 text-center text-sm text-white/40">
+              {playlistsLoaded ? 'No Deezer playlists found. Try another search.' : 'Open this tab to browse Deezer playlists.'}
+            </div>
+          )}
+        </section>
+      )}
+
       {view === 'requests' && (
         <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
           <div className="mb-4 flex items-center justify-between gap-3">
