@@ -335,8 +335,8 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     setError('');
     setLoading(false);
     setBusyKey((current) => current === 'artist-match' ? null : current);
-    if (selected.musicBrainzId) {
-      await loadCatalog(selected, selected.musicBrainzId);
+    if (selected.deezerId) {
+      await loadCatalog(selected, selected.deezerId);
       return;
     }
     setBusyKey('artist-match');
@@ -363,10 +363,10 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     try {
       await apiFetch('/plugins/missing-music/artists/match', {
         method: 'PUT',
-        body: JSON.stringify({ localArtist: selected.name, musicBrainzId: match.id, musicBrainzName: match.name }),
+        body: JSON.stringify({ localArtist: selected.name, deezerId: match.id, deezerName: match.name }),
       }, token);
       if (matchRequestId !== artistMatchRequestId.current) return;
-      const matched: Artist = { ...selected, musicBrainzId: match.id, musicBrainzName: match.name, matchSource: 'saved' };
+      const matched: Artist = { ...selected, deezerId: match.id, deezerName: match.name, matchSource: 'saved' };
       setArtist(matched);
       setArtistMatches([]);
       setArtists((current) => current.map((item) => item.name === selected.name ? matched : item));
@@ -467,7 +467,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   useEffect(() => {
     if (!initialArtist?.id || !initialArtist.name || !token) return;
     setView('discover');
-    void selectArtist({ name: initialArtist.name, musicBrainzId: initialArtist.id, albumCount: 0, trackCount: 0 });
+    void selectArtist({ name: initialArtist.name, deezerId: null, musicBrainzId: initialArtist.id, albumCount: 0, trackCount: 0 });
   }, [initialArtist?.id, initialArtist?.name, selectArtist, token]);
 
   const searchCatalogArtists = async (search: string) => {
