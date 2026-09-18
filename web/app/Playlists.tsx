@@ -61,6 +61,24 @@ function Avatar({ user }: { user: SocialUser }) {
   );
 }
 
+function PlaylistArtwork({ playlist, className = 'h-10 w-10' }: { playlist: Playlist; className?: string }) {
+  return (
+    <div className={`relative flex flex-none items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 ${className}`}>
+      <svg className="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+      </svg>
+      {playlist.artwork_url && (
+        <img
+          src={playlist.artwork_url}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          onError={(event) => { event.currentTarget.style.display = 'none'; }}
+        />
+      )}
+    </div>
+  );
+}
+
 function swap<T>(arr: T[], i: number, j: number) {
   const next = arr.slice();
   const tmp = next[i];
@@ -481,6 +499,7 @@ export function Playlists(props: {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </button>
+            <PlaylistArtwork playlist={selectedPlaylist} className="h-14 w-14" />
             <div className="flex-1 min-w-0">
               <h2 className="text-xl font-bold text-white truncate">{selectedPlaylist.name}</h2>
               <p className="text-sm text-slate-400">{formatCount(items.length, 'track')}</p>
@@ -756,11 +775,7 @@ export function Playlists(props: {
                 <div key={p.id} className="flex items-center gap-2 p-3 rounded-xl bg-slate-800/30 border border-slate-700/30 hover:bg-slate-800/50 hover:border-slate-600/50 transition-all">
                   {renamingId === p.id ? (
                     <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                        </svg>
-                      </div>
+                      <PlaylistArtwork playlist={p} />
                       <div className="min-w-0 flex-1">
                         <input
                           autoFocus
@@ -785,11 +800,7 @@ export function Playlists(props: {
                       onClick={() => selectPlaylist(p.id)}
                       className="flex items-center gap-3 flex-1 min-w-0 text-left"
                     >
-                      <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                        </svg>
-                      </div>
+                      <PlaylistArtwork playlist={p} />
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-2">
                           <div className="truncate font-medium text-white">{p.name}</div>
