@@ -233,6 +233,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   const artistSearchRequestId = useRef(0);
   const localSearchRequestId = useRef(0);
   const requestsRequestId = useRef(0);
+  const playlistSearchRequestId = useRef(0);
   const deezerLookupId = useRef(0);
 
   const loadArtists = useCallback(async (search = '') => {
@@ -260,6 +261,35 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
       if (requestId === requestsRequestId.current) setError(messageForError(cause));
     } finally {
       if (requestId === requestsRequestId.current) setRequestsLoading(false);
+    }
+  }, [token]);
+
+  const loadPlaylistImports = useCallback(async () => {
+    if (!token) return;
+    try {
+      const data = await apiFetch('/plugins/missing-music/deezer-playlist-imports', {}, token) as { imports: DeezerPlaylistImport[] };
+      setPlaylistImports(data.imports ?? []);
+    } catch (cause) {
+      setError(messageForError(cause));
+    }
+  }, [token]);
+
+  const loadDeezerPlaylists = useCallback(async (search = '') => {
+    if (!token) return;
+    const requestId = ++playlistSearchRequestId.current;
+    setPlaylistsLoading(true);
+    setError('');
+    try {
+      const suffix = search.trim() ? `?q=${encodeURIComponent(search.trim())}` : '';
+      const data = await apiFetch(`/plugins/missing-music/deezer-playlists${suffix}`, {}, token) as { playlists: DeezerPlaylistCard[] };
+      if (requestId === playlistSearchRequestId.current) {
+        setDeezerPlaylists(data.playlists ?? []);
+        setPlaylistsLoaded(true);
+      }
+    } catch (cause) {
+      if (requestId === playlistSearchRequestId.current) setError(messageForError(cause));
+    } finally {
+      if (requestId === playlistSearchRequestId.current) setPlaylistsLoading(false);
     }
   }, [token]);
 
@@ -291,13 +321,20 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   useEffect(() => {
     void loadArtists();
     void loadRequests();
+    void loadPlaylistImports();
     void loadStatus();
     void loadPluginUpdate();
-  }, [loadArtists, loadPluginUpdate, loadRequests, loadStatus]);
+  }, [loadArtists, loadPluginUpdate, loadPlaylistImports, loadRequests, loadStatus]);
 
   useEffect(() => {
-    if (liveUpdate) void loadRequests();
-  }, [liveUpdate, loadRequests]);
+    if (!liveUpdate) return;
+    void loadRequests();
+    void loadPlaylistImports();
+  }, [liveUpdate, loadPlaylistImports, loadRequests]);
+
+  useEffect(() => {
+    if (view === 'playlists' && !playlistsLoaded && !playlistsLoading) void loadDeezerPlaylists();
+  }, [loadDeezerPlaylists, playlistsLoaded, playlistsLoading, view]);
 
   const updatePlugin = async () => {
     if (!token || !pluginUpdate) return;
