@@ -553,6 +553,28 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     }
   };
 
+  const retryDeezerPlaylistImport = async (item: DeezerPlaylistImport) => {
+    if (!token || playlistImportBusy) return;
+    setPlaylistImportBusy(item.deezerPlaylistId);
+    setError('');
+    try {
+      const result = await apiFetch(
+        `/plugins/missing-music/deezer-playlist-imports/${item.id}/retry`,
+        { method: 'POST' },
+        token,
+      ) as { import: DeezerPlaylistImport };
+      setPlaylistImports((current) => current.map((entry) => entry.id === result.import.id ? result.import : entry));
+      showToast(`Retrying failed tracks in ${item.title}`, 'queue', 'top-right');
+      await loadPlaylistImports();
+    } catch (cause) {
+      const message = messageForError(cause);
+      setError(message);
+      showToast(message, 'error', 'top-right');
+    } finally {
+      setPlaylistImportBusy(null);
+    }
+  };
+
   const changeRequest = async (request: RequestItem, action: 'approve' | 'reject' | 'retry' | 'complete') => {
     if (!token) return;
     setBusyKey(`${action}:${request.id}`);
@@ -1149,12 +1171,24 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                         {[playlist.creator ? `by ${playlist.creator}` : null, playlist.trackCount ? formatCount(playlist.trackCount, 'track') : null].filter(Boolean).join(' · ') || 'Deezer playlist'}
                       </p>
                       {complete && imported ? (
-                        <a
-                          href={`#/playlist/${imported.playlistId}`}
-                          className="mt-3 block rounded-lg bg-emerald-400/15 px-3 py-2 text-center text-xs font-semibold text-emerald-200 hover:bg-emerald-400/25"
-                        >
-                          Open playlist
-                        </a>
+                        <div className="mt-3 grid gap-2">
+                          <a
+                            href={`#/playlist/${imported.playlistId}`}
+                            className="block rounded-lg bg-emerald-400/15 px-3 py-2 text-center text-xs font-semibold text-emerald-200 hover:bg-emerald-400/25"
+                          >
+                            Open playlist
+                          </a>
+                          {imported.status === 'partial' && imported.failedTracks > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => void retryDeezerPlaylistImport(imported)}
+                              disabled={!status?.playlistImportEnabled || playlistImportBusy !== null}
+                              className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-400/20 disabled:opacity-45"
+                            >
+                              {playlistImportBusy === playlist.id ? 'Retrying…' : `Retry ${imported.failedTracks} failed`}
+                            </button>
+                          )}
+                        </div>
                       ) : (
                         <button
                           type="button"
