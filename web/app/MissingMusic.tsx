@@ -379,7 +379,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   };
 
   const inspectTracks = async (group: ReleaseGroup) => {
-    if (!token || !artist?.musicBrainzId) return;
+    if (!token || !artist?.deezerId) return;
     const catalogId = catalogRequestId.current;
     if (expanded === group.id) {
       setExpanded(null);
@@ -391,10 +391,10 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     setError('');
     try {
       const data = await apiFetch(
-        `/plugins/missing-music/release-groups/${group.id}/tracks?artistMbid=${artist.musicBrainzId}&album=${encodeURIComponent(group.title)}&localArtist=${encodeURIComponent(artist.name)}`,
+        `/plugins/missing-music/deezer-albums/${group.id}/tracks?localArtist=${encodeURIComponent(artist.name)}`,
         {},
         token,
-      ) as { releaseId: string; tracks: CatalogTrack[] };
+      ) as { album: { id: string; title: string; localAlbum: string | null; matchConfidence: number }; tracks: CatalogTrack[] };
       if (catalogId === catalogRequestId.current) setTracks((current) => ({ ...current, [group.id]: data }));
     } catch (cause) {
       if (catalogId === catalogRequestId.current) {
