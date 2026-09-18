@@ -73,16 +73,22 @@ function permissionSummary(manifest: NdpManifest) {
     } else if (key === 'storage') {
       detail = 'Read/write access to this plugin’s isolated data directory';
     } else if (key === 'catalog') {
-      detail = 'Read-only access to MusicBrainz identifiers and titles in the enabled music libraries';
+      detail = 'Read metadata from the enabled music libraries to compare local tracks with external catalog items';
     } else if (key === 'requests') {
-      detail = 'Create request records and hand approved requests to the configured external service';
+      detail = 'Create and manage Missing Music request records';
+    } else if (key === 'playlists') {
+      detail = 'Create and populate user-owned playlists from imported catalog playlists';
+    } else if (key === 'staging') {
+      detail = 'Download and stage media in the server-configured Missing Music staging library';
+    } else if (key === 'libraryAccess') {
+      detail = 'Grant the requesting user access to the Missing Music staging library';
     }
     return {
       key,
       reason: typeof value.reason === 'string' ? value.reason : null,
       detail: detail ?? null,
       broad: key === 'http' && Array.isArray(value.requiredHosts) && value.requiredHosts.includes('*'),
-      supported: ['config', 'http', 'kvstore', 'storage', 'catalog', 'requests'].includes(key),
+      supported: ['config', 'http', 'kvstore', 'storage', 'catalog', 'requests', 'playlists', 'staging', 'libraryAccess'].includes(key),
     };
   });
 }
