@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
-import { constants, createWriteStream } from 'node:fs';
+import { constants } from 'node:fs';
 import { copyFile, link, mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -245,7 +245,7 @@ function trackFileName(track: DeezerTrack, extension: string) {
 }
 
 type DownloadResult = { extension?: string; extensions?: string[] };
-type AlbumProgress = (completed: number, total: number, phase: 'downloading' | 'packaging') => Promise<void> | void;
+type AlbumProgress = (completed: number, total: number, phase: 'downloading' | 'publishing') => Promise<void> | void;
 
 function runPython(python: string, input: object, arl: string, timeoutMs = 15 * 60_000, onProgress?: AlbumProgress): Promise<DownloadResult> {
   return new Promise((resolve, reject) => {
@@ -313,29 +313,6 @@ function runPython(python: string, input: object, arl: string, timeoutMs = 15 * 
   });
 }
 
-async function zipAlbum(working: string, album: VerifiedDeezerAlbum, extensions: string[]) {
-  const archivePath = path.join(working, 'album.zip');
-  await new Promise<void>((resolve, reject) => {
-    const output = createWriteStream(archivePath);
-    const archive = new ZipArchive({ store: true });
-    output.on('close', resolve);
-    output.on('error', reject);
-    archive.on('error', reject);
-    archive.on('warning', reject);
-    archive.pipe(output);
-    const folder = `${safeFilePart(album.artist)}/${safeFilePart(album.title)}`;
-    const names = new Set<string>();
-    album.tracks.forEach((track, index) => {
-      let name = trackFileName(track, extensions[index]);
-      if (names.has(name.toLowerCase())) name = name.replace(`.${extensions[index]}`, ` [deezer-${track.id}].${extensions[index]}`);
-      names.add(name.toLowerCase());
-      archive.file(path.join(working, `track-${String(index + 1).padStart(3, '0')}.${extensions[index]}`), { name: `${folder}/${name}` });
-    });
-    void archive.finalize().catch(reject);
-  });
-  return archivePath;
-}
-
 export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: AlbumProgress): Promise<string> {
   const config = deezerStagingConfig();
   if (!config.configured) throw new Error(config.error);
@@ -348,7 +325,20 @@ export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: 
   try {
     await onProgress?.(0, album.trackCount, 'downloading');
     const timeout = Math.min(2 * 60 * 60_000, 15 * 60_000 + album.trackCount * 2 * 60_000);
-    const result = await runPython(config.python, { directory: working, quality: config.quality, tracks: album.tracks, albumArtist: album.artist, releaseDate: album.releaseDate, coverUrl: album.artwork }, config.arl, timeout, onProgress);
+    const result = await runPython(
+      config.python,
+      {
+        directory: working,
+        quality: config.quality,
+        tracks: album.tracks,
+        albumArtist: album.artist,
+        releaseDate: album.releaseDate,
+        coverUrl: album.artwork,
+      },
+      config.arl,
+      timeout,
+      onProgress,
+    );
     const extensions = result.extensions;
     if (!Array.isArray(extensions) || extensions.length !== album.trackCount || extensions.some(ext => !['mp3', 'flac'].includes(ext))) {
       throw new Error('Deezer returned an incomplete album download');
@@ -358,47 +348,48 @@ export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: 
       const details = await stat(file);
       if (!details.isFile() || details.size < 10_000) throw new Error('Deezer returned an incomplete album track');
     }
-    await onProgress?.(album.trackCount, album.trackCount, 'packaging');
-    const source = await zipAlbum(working, album, extensions);
-    const details = await stat(source);
-    if (!details.isFile() || details.size < 10_000) throw new Error('Album archive is incomplete');
-    const artistDirectory = path.join(config.directory, safeFilePart(album.artist));
+
+    await onProgress?.(album.trackCount, album.trackCount, 'publishing');
+
+    const names = new Set<string>();
+    for (const [index, track] of album.tracks.entries()) {
+      const extension = extensions[index];
+      let name = trackFileName(track, extension);
+      if (names.has(name.toLowerCase())) {
+        name = name.replace(`.${extension}`, ` [deezer-${track.id}].${extension}`);
+      }
+      names.add(name.toLowerCase());
+      await rename(
+        path.join(working, `track-${String(index + 1).padStart(3, '0')}.${extension}`),
+        path.join(working, name),
+      );
+    }
+
+    const artist = safeFilePart(album.artist);
+    const artistDirectory = path.join(config.directory, artist);
     await mkdir(artistDirectory, { recursive: true, mode: 0o700 });
-    const base = safeFilePart(album.title);
+    let base = safeFilePart(album.title);
+    // A directory ending in .zip is ambiguous with the legacy archive identifier.
+    if (base.toLowerCase().endsWith('.zip')) base = `${base} [deezer-album-${album.id}]`;
+
     for (let attempt = 0; attempt < 20; attempt++) {
       const stem = `${base}${attempt ? ` [deezer-album-${album.id}${attempt > 1 ? `-${attempt}` : ''}]` : ''}`;
-      const filename = `${safeFilePart(album.artist)}/${stem}.zip`;
-      const albumDirectory = path.join(artistDirectory, stem);
+      const relative = `${artist}/${stem}`;
+      const albumDirectory = path.join(config.directory, relative);
       try {
         await stat(albumDirectory);
         continue;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
+
       try {
-        await copyFile(source, path.join(config.directory, filename), constants.COPYFILE_EXCL);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
-        throw error;
-      }
-      try {
-        await unlink(source);
-        const names = new Set<string>();
-        for (const [index, track] of album.tracks.entries()) {
-          const extension = extensions[index];
-          let name = trackFileName(track, extension);
-          if (names.has(name.toLowerCase())) name = name.replace(`.${extension}`, ` [deezer-${track.id}].${extension}`);
-          names.add(name.toLowerCase());
-          await rename(
-            path.join(working, `track-${String(index + 1).padStart(3, '0')}.${extension}`),
-            path.join(working, name)
-          );
-        }
-        // Publishing the complete folder is atomic; the scanner ignores .incoming-*.
+        // Publishing the complete directory is atomic; the scanner ignores .incoming-*.
         await rename(working, albumDirectory);
-        return filename;
+        return relative;
       } catch (error) {
-        await unlink(path.join(config.directory, filename)).catch(() => {});
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'EEXIST' || code === 'ENOTEMPTY') continue;
         throw error;
       }
     }
@@ -472,21 +463,42 @@ export async function stageDeezerTrack(track: DeezerTrack, existingAlbum?: Exist
   }
 }
 
+function validStagedRelativePath(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length <= 400
+    && !path.isAbsolute(value)
+    && value.split('/').every(part =>
+      part.length > 0
+      && part.length <= 160
+      && !part.startsWith('.')
+      && part !== '..'
+      && !/[<>:"\\|?*\x00-\x1f]/.test(part)
+    );
+}
+
 export function validStagedFilename(filename: unknown): filename is string {
-  return typeof filename === 'string'
-    && filename.length <= 400
-    && filename.split('/').every(part => part.length > 0 && part.length <= 160 && !part.startsWith('.') && !/[<>:"\\|?*\x00-\x1f]/.test(part))
-    && /\.(mp3|flac|zip)$/i.test(filename);
+  return validStagedRelativePath(filename) && /\.(mp3|flac|zip)$/i.test(filename);
+}
+
+export function validStagedAlbumIdentifier(filename: unknown): filename is string {
+  return validStagedRelativePath(filename)
+    && filename.split('/').length >= 2
+    && !/\.(mp3|flac)$/i.test(filename);
+}
+
+export function stagedAlbumRelativePath(filename: string) {
+  return filename.toLowerCase().endsWith('.zip') ? filename.slice(0, -4) : filename;
 }
 
 export async function listStagedAlbumFiles(filename: string): Promise<string[]> {
-  if (!validStagedFilename(filename) || !filename.toLowerCase().endsWith('.zip')) throw new Error('Invalid album archive');
+  if (!validStagedAlbumIdentifier(filename)) throw new Error('Invalid staged album');
   const directory = deezerStagingConfig().directory;
-  const albumRelative = filename.slice(0, -4);
+  const albumRelative = stagedAlbumRelativePath(filename);
   const albumDirectory = path.join(directory, albumRelative);
   return (await readdir(albumDirectory, { withFileTypes: true }))
     .filter(entry => entry.isFile() && /\.(mp3|flac)$/i.test(entry.name))
-    .map(entry => entry.name).sort((a, b) => a.localeCompare(b));
+    .map(entry => entry.name)
+    .sort((a, b) => a.localeCompare(b));
 }
 
 export async function stagedAlbumComplete(filename: string, trackFiles?: string[], trackCount?: number): Promise<boolean> {
@@ -503,28 +515,56 @@ export async function stagedAlbumComplete(filename: string, trackFiles?: string[
   }
 }
 
-export async function refreshStagedAlbumArchive(filename: string, trackFiles?: string[], trackCount?: number): Promise<void> {
+export async function createStagedAlbumArchive(filename: string, trackFiles?: string[], trackCount?: number) {
   if (!await stagedAlbumComplete(filename, trackFiles, trackCount)) throw new Error('Staged album is incomplete');
   const directory = deezerStagingConfig().directory;
-  const albumRelative = filename.slice(0, -4);
+  const albumRelative = stagedAlbumRelativePath(filename);
   const albumDirectory = path.join(directory, albumRelative);
   const files = trackFiles?.length ? trackFiles : await listStagedAlbumFiles(filename);
   if (!files.length) throw new Error('Staged album has no audio files');
-  const pending = path.join(directory, `.incoming-${crypto.randomUUID()}.zip`);
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const output = createWriteStream(pending, { flags: 'wx' });
-      const archive = new ZipArchive({ store: true });
-      output.on('close', resolve);
-      output.on('error', reject);
-      archive.on('error', reject);
-      archive.on('warning', reject);
-      archive.pipe(output);
-      for (const name of files) archive.file(path.join(albumDirectory, name), { name: `${albumRelative}/${name}` });
-      void archive.finalize().catch(reject);
-    });
-    await rename(pending, path.join(directory, filename));
-  } finally {
-    await rm(pending, { force: true });
+
+  const archive = new ZipArchive({ store: true });
+  for (const name of files) {
+    archive.file(path.join(albumDirectory, name), { name: `${albumRelative}/${name}` });
   }
+  void archive.finalize().catch(error => archive.destroy(error as Error));
+  return archive;
+}
+
+export async function cleanupLegacyStagedAlbumArchives(): Promise<number> {
+  const directory = deezerStagingConfig().directory;
+  if (!directory) return 0;
+
+  let artists;
+  try {
+    artists = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  let removed = 0;
+  for (const artist of artists) {
+    if (!artist.isDirectory() || artist.name.startsWith('.')) continue;
+    const artistDirectory = path.join(directory, artist.name);
+    let entries;
+    try {
+      entries = await readdir(artistDirectory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.zip')) continue;
+      const legacyIdentifier = `${artist.name}/${entry.name}`;
+      try {
+        const files = await listStagedAlbumFiles(legacyIdentifier);
+        if (!files.length) continue;
+        await unlink(path.join(directory, legacyIdentifier));
+        removed += 1;
+      } catch {
+        // Keep orphaned/invalid archives; only remove archives backed by a valid album folder.
+      }
+    }
+  }
+  return removed;
 }
