@@ -807,6 +807,12 @@ async function addImportedPlaylistTrack(
       "update plugin_deezer_playlist_items set track_id=$3,state='added',error=null where import_id=$1 and position=$2",
       [importRow.id, item.position, trackId]
     );
+    if (item.request_id) {
+      await client.query(
+        "update plugin_media_requests set status='completed',completed_at=coalesce(completed_at,now()),provider_error=null,updated_at=now() where id=$1",
+        [item.request_id]
+      );
+    }
     await client.query('commit');
   } catch (error) {
     await client.query('rollback');
@@ -880,8 +886,8 @@ async function ensurePlaylistImportRequest(
 
 async function reconcileDeezerPlaylistImport(plugin: MissingMusicPluginRow, importId: string) {
   const importResult = await db().query<DeezerPlaylistImportRow & { role: Role }>(
-    "select import.*, app_user.role from plugin_deezer_playlist_imports import " +
-    "join users app_user on app_user.id=import.user_id where import.id=$1 and import.plugin_id=$2",
+    "select imp.*, app_user.role from plugin_deezer_playlist_imports imp " +
+    "join users app_user on app_user.id=imp.user_id where imp.id=$1 and imp.plugin_id=$2",
     [importId, plugin.id]
   );
   const importRow = importResult.rows[0];
@@ -1279,13 +1285,14 @@ export async function runMissingMusicJobs() {
     const plugin = await getMissingMusicPlugin(true);
     if (!plugin) return;
 
-    await reconcileDeezerPlaylistImports(plugin);
-
     const providerConfigured = Boolean(plugin.config.providerBaseUrl?.trim());
+    if (!providerConfigured) await reconcileDeezerPlaylistImports(plugin);
+
     const jobs = providerConfigured
       ? await db().query<MediaRequestRow>(
         `select * from plugin_media_requests
           where plugin_id=$1 and status in ('approved','submitted') and not (metadata ? 'deezer')
+            and metadata->>'hiddenBatch' is distinct from 'true'
           order by updated_at,id limit 3`,
         [plugin.id]
       )
