@@ -937,44 +937,67 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       return reply.code(400).send({ ok: false, error: 'Enter between 3 and 200 characters' });
     }
     try {
-      // Treat user text as literal terms, not MusicBrainz/Lucene operators.
-      const query = songSearchQuery(q);
-      const result = await musicBrainzFetch<{ recordings?: Array<{
-        id?: string; title?: string; disambiguation?: string; video?: boolean | null; score?: number;
-        'artist-credit'?: Array<{ name?: string; joinphrase?: string; artist?: { id?: string; name?: string } }>;
-        releases?: SongRelease[];
-      }> }>(plugin, `song-search:${query}`, 'recording', { query, limit: '100' });
-      const songs: SongCandidate[] = [];
-      const bestScore = Math.max(0, ...(result.recordings ?? []).map(recording => Number(recording.score ?? 0)));
-      const candidates = (result.recordings ?? []).filter(recording => Number(recording.score ?? bestScore) >= bestScore - 10).map(recording => ({ recording, release: standardSongRelease(recording) }))
-        .filter(candidate => candidate.release !== undefined)
-        .sort((a, b) => songReleaseRank(a.release!) - songReleaseRank(b.release!));
-      const seenSongs = new Set<string>();
-      for (const { recording, release } of candidates) {
-        const credits = recording['artist-credit'] ?? [];
-        const artistId = credits.find(credit => validMbid(credit.artist?.id))?.artist?.id;
-        if (!validMbid(recording.id) || !recording.title || !artistId || songs.some(song => song.recordingId === recording.id)) continue;
-        const songKey = `${songMatchKey(recording.title)}:${credits.map(credit => credit.artist?.id ?? '').join(',')}`;
-        if (seenSongs.has(songKey)) continue;
-        seenSongs.add(songKey);
-        if (songs.length >= 20) break;
-        songs.push({ recordingId: recording.id, title: recording.title, version: recording.disambiguation ?? null,
-          artist: credits.map(credit => `${credit.name ?? credit.artist?.name ?? ''}${credit.joinphrase ?? ''}`).join(''),
-          artistNames: credits.flatMap(credit => [credit.name, credit.artist?.name].filter((name): name is string => Boolean(name))),
-          musicBrainzArtistId: artistId, album: release?.title ?? null,
-          musicBrainzReleaseGroupId: validMbid(release?.['release-group']?.id) ? release!['release-group']!.id! : null,
-          musicBrainzReleaseId: validMbid(release?.id) ? release!.id! : null });
-      }
-      const present = await songPresence(req, songs);
-      const requested = await db().query<{ musicbrainz_recording_id: string }>(
-        `select musicbrainz_recording_id from plugin_media_requests where plugin_id=$1 and user_id=$2
-          and item_type='track' and musicbrainz_recording_id=any($3::text[]) and status not in ('failed','rejected','cancelled')`,
-        [plugin.id, req.user.userId, songs.map(song => song.recordingId)]);
-      const requestedIds = new Set(requested.rows.map(row => row.musicbrainz_recording_id));
-      return { ok: true, enabled: true, songs: songs.map((song, index) => ({ ...song, present: present[index], requested: requestedIds.has(song.recordingId) })) };
+      const songs = await searchDeezerSongs(q);
+      if (!songs.length) return { ok: true, enabled: true, songs: [] };
+
+      const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
+      const filter = libraryFilter(allowed, 3);
+      const titles = [...new Set(songs.map(song => song.title.toLocaleLowerCase('en')))];
+      const isrcs = [...new Set(songs.map(song => (song.isrc ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '')).filter(Boolean))];
+      const localSql =
+        "select track.id,track.title,track.artist,track.album_artist,track.album,track.isrc,track.duration_ms,track.track_number,track.disc_number " +
+        "from active_tracks track where (lower(track.title)=any($1::text[]) " +
+        "or regexp_replace(upper(coalesce(track.isrc,'')),'[^A-Z0-9]','','g')=any($2::text[])) " +
+        filter.sql;
+      const local = await db().query<LocalTrack & { artist: string | null; album_artist: string | null }>(
+        localSql,
+        [titles, isrcs, ...filter.params]
+      );
+
+      const requested = await db().query<{ deezer_track_id: string }>(
+        "select deezer_track_id from plugin_media_requests where plugin_id=$1 and user_id=$2 " +
+        "and item_type='track' and deezer_track_id=any($3::text[]) and status not in ('failed','rejected','cancelled')",
+        [plugin.id, req.user.userId, songs.map(song => song.id)]
+      );
+      const requestedIds = new Set(requested.rows.map(row => row.deezer_track_id));
+
+      return {
+        ok: true,
+        enabled: true,
+        songs: songs.map(song => {
+          const remoteArtist = normalizeDeezerText(song.artist);
+          const remoteIsrc = (song.isrc ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const relevant = local.rows.filter(row => {
+            const localIsrc = (row.isrc ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+            if (remoteIsrc && localIsrc === remoteIsrc) return true;
+            const credits = [row.artist, row.album_artist].filter(Boolean).flatMap(value => String(value).split(/\s*(?:;|•|\|)\s*/));
+            return credits.some(value => normalizeDeezerText(value) === remoteArtist);
+          });
+          const match = matchDeezerTrack(song, relevant);
+          return {
+            recordingId: song.id,
+            title: song.title,
+            artist: song.artist,
+            artistNames: [song.artist],
+            album: song.album,
+            version: null,
+            deezerArtistId: song.artistId,
+            deezerAlbumId: song.albumId,
+            deezerTrackId: song.id,
+            isrc: song.isrc,
+            durationMs: song.durationMs,
+            musicBrainzArtistId: null,
+            musicBrainzReleaseGroupId: null,
+            musicBrainzReleaseId: null,
+            present: match.present,
+            matchConfidence: match.confidence,
+            requested: requestedIds.has(song.id),
+          };
+        }),
+      };
     } catch (error) {
-      logger.warn('missing-music', `Song search failed: ${errorMessage(error)}`);
-      return reply.code(502).send({ ok: false, error: 'Could not check the song catalog. Please try again.' });
+      logger.warn('missing-music', 'Deezer song search failed: ' + errorMessage(error));
+      return reply.code(502).send({ ok: false, error: 'Could not check the Deezer song catalog. Please try again.' });
     }
   });
 
