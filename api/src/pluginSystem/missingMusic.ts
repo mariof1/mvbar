@@ -12,7 +12,7 @@ import logger from '../logger.js';
 import { broadcastToAdmins, broadcastToUser } from '../websocket.js';
 import { pluginsEnabledGlobally } from './registry.js';
 import type { NdpManifest, PluginDbRow } from './types.js';
-import { deezerStagingConfig, listStagedAlbumFiles, refreshStagedAlbumArchive, searchDeezerAlbums, searchDeezerTracks, stageDeezerAlbum, stagedAlbumComplete, stageDeezerTrack, validStagedFilename, verifiedDeezerAlbum, verifiedDeezerTrack, type ExistingAlbumMetadata } from './deezerStaging.js';
+import { cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, deezerStagingConfig, listStagedAlbumFiles, searchDeezerAlbums, searchDeezerTracks, stageDeezerAlbum, stagedAlbumComplete, stagedAlbumRelativePath, stageDeezerTrack, validStagedAlbumIdentifier, validStagedFilename, verifiedDeezerAlbum, verifiedDeezerTrack, type ExistingAlbumMetadata } from './deezerStaging.js';
 
 export const MISSING_MUSIC_PLUGIN_ID = 'mvbar.missing-music';
 const EXTENSION_TYPE = 'missing-music';
@@ -524,16 +524,21 @@ function serializeRequest(row: MediaRequestRow) {
 
 async function stagedMediaAvailable(row: MediaRequestRow): Promise<boolean> {
   const deezer = row.metadata?.deezer as { filename?: unknown; trackFiles?: unknown; trackCount?: unknown } | undefined;
-  if (!validStagedFilename(deezer?.filename)) return false;
   const directory = deezerStagingConfig().directory;
   if (!directory) return false;
+
   if (row.item_type === 'album') {
-    if (!deezer.filename.toLowerCase().endsWith('.zip')) return false;
-    if (deezer.trackFiles !== undefined && (!Array.isArray(deezer.trackFiles) || !deezer.trackFiles.every(name => typeof name === 'string'))) return false;
+    if (!validStagedAlbumIdentifier(deezer?.filename)) return false;
+    if (deezer.trackFiles !== undefined && (!Array.isArray(deezer.trackFiles) || !deezer.trackFiles.every(name => typeof name === 'string'))) {
+      return false;
+    }
     const expectedCount = typeof deezer.trackCount === 'number' && Number.isSafeInteger(deezer.trackCount) && deezer.trackCount > 0
-      ? deezer.trackCount : undefined;
+      ? deezer.trackCount
+      : undefined;
     return stagedAlbumComplete(deezer.filename, deezer.trackFiles as string[] | undefined, expectedCount);
   }
+
+  if (!validStagedFilename(deezer?.filename)) return false;
   try {
     const file = await stat(path.join(directory, deezer.filename));
     return file.isFile();
@@ -566,7 +571,7 @@ async function downloadDeezerRequest(request: MediaRequestRow, itemId: string, l
   try {
     const album = request.item_type === 'album'
       ? await verifiedDeezerAlbum(itemId, request.artist, request.title) : null;
-    const reportProgress = async (completed: number, total: number, phase: 'downloading' | 'packaging') => {
+    const reportProgress = async (completed: number, total: number, phase: 'downloading' | 'publishing') => {
       try {
         const row = (await db().query<MediaRequestRow>(`update plugin_media_requests
           set metadata=jsonb_set(metadata,'{deezer}',coalesce(metadata->'deezer','{}'::jsonb)
@@ -764,6 +769,11 @@ export function startMissingMusicScheduler() {
     logger.error('missing-music', `Scheduler failed: ${errorMessage(error)}`);
   }), 30_000);
   schedulerTimer.unref();
+  void cleanupLegacyStagedAlbumArchives()
+    .then((removed) => {
+      if (removed > 0) logger.info('missing-music', `Removed ${removed} legacy staged album ZIP archive${removed === 1 ? '' : 's'}`);
+    })
+    .catch((error) => logger.warn('missing-music', `Could not clean legacy staged album ZIPs: ${errorMessage(error)}`));
   void recoverInterruptedDeezerJobs().then(() => runMissingMusicJobs()).catch((error) => {
     logger.warn('missing-music', `Could not recover interrupted Deezer jobs: ${errorMessage(error)}`);
   });
@@ -1169,22 +1179,41 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     const { id } = req.params as { id: string };
     const request = (await db().query<MediaRequestRow>('select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id])).rows[0];
     const deezer = request?.metadata?.deezer as { state?: string; filename?: unknown; trackFiles?: unknown; trackCount?: unknown } | undefined;
-    if (deezer?.state !== 'staged' || !validStagedFilename(deezer.filename)) return reply.code(404).send({ ok: false, error: 'No staged file for this request' });
+    if (deezer?.state !== 'staged') return reply.code(404).send({ ok: false, error: 'No staged file for this request' });
     const directory = deezerStagingConfig().directory;
     if (!directory) return reply.code(404).send({ ok: false, error: 'Staging directory is not configured' });
+
+    if (request?.item_type === 'album') {
+      if (!validStagedAlbumIdentifier(deezer.filename)) return reply.code(404).send({ ok: false, error: 'No staged album for this request' });
+      if (deezer.trackFiles !== undefined && (!Array.isArray(deezer.trackFiles) || !deezer.trackFiles.every(name => typeof name === 'string'))) {
+        return reply.code(404).send({ ok: false, error: 'Invalid staged album manifest' });
+      }
+      try {
+        const archive = await createStagedAlbumArchive(
+          deezer.filename,
+          deezer.trackFiles as string[] | undefined,
+          typeof deezer.trackCount === 'number' ? deezer.trackCount : undefined,
+        );
+        const downloadName = `${path.basename(stagedAlbumRelativePath(deezer.filename))}.zip`;
+        return reply
+          .header('Content-Type', 'application/zip')
+          .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}`)
+          .send(archive);
+      } catch {
+        return reply.code(404).send({ ok: false, error: 'Staged album files are missing or could not be packaged' });
+      }
+    }
+
+    if (!validStagedFilename(deezer.filename)) return reply.code(404).send({ ok: false, error: 'No staged file for this request' });
     const file = path.join(directory, deezer.filename);
     try {
-      if (request?.item_type === 'album') {
-        if (deezer.trackFiles !== undefined && (!Array.isArray(deezer.trackFiles) || !deezer.trackFiles.every(name => typeof name === 'string'))) throw new Error('Invalid staged album manifest');
-        await refreshStagedAlbumArchive(deezer.filename, deezer.trackFiles as string[] | undefined,
-          typeof deezer.trackCount === 'number' ? deezer.trackCount : undefined);
-      }
       const details = await stat(file);
       if (!details.isFile()) throw new Error('Not a file');
     } catch {
-      return reply.code(404).send({ ok: false, error: 'Staged files are missing or could not be packaged' });
+      return reply.code(404).send({ ok: false, error: 'Staged file is missing' });
     }
-    return reply.header('Content-Type', deezer.filename.endsWith('.zip') ? 'application/zip' : deezer.filename.endsWith('.flac') ? 'audio/flac' : 'audio/mpeg')
+    return reply
+      .header('Content-Type', deezer.filename.endsWith('.flac') ? 'audio/flac' : 'audio/mpeg')
       .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(deezer.filename))}`)
       .send(createReadStream(file));
   });
@@ -1198,10 +1227,15 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       'select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id]
     )).rows[0];
     const filename = (request?.metadata?.deezer as { filename?: unknown } | undefined)?.filename;
-    if (!request || !validStagedFilename(filename)) return reply.code(404).send({ ok: false, error: 'Staged download not found' });
+    if (!request || typeof filename !== 'string') return reply.code(404).send({ ok: false, error: 'Staged download not found' });
 
     const isAlbum = request.item_type === 'album';
-    const relative = isAlbum ? `${filename.slice(0, -4)}/` : filename;
+    if (isAlbum ? !validStagedAlbumIdentifier(filename) : !validStagedFilename(filename)) {
+      return reply.code(404).send({ ok: false, error: 'Staged download not found' });
+    }
+
+    const albumRelative = isAlbum ? stagedAlbumRelativePath(filename) : null;
+    const relative = isAlbum ? `${albumRelative}/` : filename;
     const normalizedPath = "ltrim(replace(t.path, chr(92), '/'), '/')";
     const current = await db().query<{ album: string; artist: string }>(
       `select coalesce(nullif(btrim(t.album), ''), 'Unknown Album — ' ||
@@ -1215,9 +1249,11 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       [MISSING_MUSIC_PLUGIN_ID, deezerStagingConfig().directory, relative]
     );
     if (current.rows[0]) return { ok: true, ...current.rows[0] };
-    const parts = filename.split('/');
+
+    const parts = (albumRelative ?? filename).split('/');
     const artist = parts.length >= 2 ? parts[0] : request.artist;
-    const album = isAlbum ? (parts.length >= 2 ? parts[1].replace(/\.zip$/i, '') : request.title)
+    const album = isAlbum
+      ? (parts.length >= 2 ? parts[1] : request.title)
       : (parts.length >= 3 ? parts[1] : request.album);
     if (!album) return reply.code(404).send({ ok: false, error: 'Album not found in the library yet' });
     return { ok: true, artist, album };
