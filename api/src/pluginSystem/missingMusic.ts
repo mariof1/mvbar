@@ -1846,6 +1846,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       `select request.*, app_user.email user_email
          from plugin_media_requests request join users app_user on app_user.id=request.user_id
         where request.plugin_id=$1 ${all ? '' : 'and request.user_id=$2'}
+          and request.metadata->>'hiddenBatch' is distinct from 'true'
         order by request.created_at desc limit 500`,
       all ? [plugin.id] : [plugin.id, req.user!.userId]
     );
