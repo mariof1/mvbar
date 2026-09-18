@@ -2250,7 +2250,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       const itemType = body.itemType === 'album' || body.itemType === 'track' ? body.itemType : null;
       if (!itemType) throw new Error('itemType must be album or track');
 
-      const artist = safeText(body.artist, 'artist');
+      let artist = safeText(body.artist, 'artist');
       let title = safeText(body.title, 'title');
       let album = optionalText(body.album);
       const localArtist = optionalText(body.localArtist, 500) ?? artist;
@@ -2272,6 +2272,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
           const remote = await deezerAlbum(deezerAlbumId);
           deezerArtistId ??= remote.artistId;
           if (!deezerArtistId) throw new Error('A valid Deezer artist id is required');
+          artist = remote.artist;
           title = remote.title;
           album = remote.title;
         } else {
@@ -2281,6 +2282,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
           if (!track) throw new Error('The selected Deezer track does not belong to this album');
           deezerArtistId ??= track.artistId ?? remote.album.artistId;
           if (!deezerArtistId) throw new Error('A valid Deezer artist id is required');
+          artist = track.artist || remote.album.artist;
           title = track.title;
           album = remote.album.title;
           requestedIsrc = track.isrc;
