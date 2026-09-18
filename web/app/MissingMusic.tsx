@@ -508,11 +508,13 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
 
   const downloadStagedFile = async (request: RequestItem) => {
     if (!token || !request.deezer?.filename) return;
+    const stagedName = request.deezer.filename.replace(/\.zip$/i, '').split('/').at(-1) || request.deezer.filename;
+    const downloadName = request.itemType === 'album' ? `${stagedName}.zip` : stagedName;
     const fileUrl = `${API_BASE}/plugins/missing-music/requests/${request.id}/deezer-file`;
     if (token === 'cookie') {
       const anchor = document.createElement('a');
       anchor.href = fileUrl;
-      anchor.download = request.deezer.filename.split('/').at(-1) || request.deezer.filename;
+      anchor.download = downloadName;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -529,7 +531,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = request.deezer.filename.split('/').at(-1) || request.deezer.filename;
+      anchor.download = downloadName;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -930,7 +932,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate font-medium">{request.title}</span>
-                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${request.deezer?.state === 'missing' ? 'border-amber-400/30 bg-amber-400/10 text-amber-200' : statusClasses(request.status)}`}>{request.deezer?.state === 'downloading' ? request.deezer.phase === 'packaging' ? 'Packaging album ZIP' : request.deezer.total ? `Downloading ${request.deezer.completed ?? 0}/${request.deezer.total} tracks` : `Downloading ${request.itemType} from Deezer` : request.deezer?.state === 'missing' ? 'Missing from staging' : request.deezer?.state === 'staged' && request.status !== 'completed' ? 'Downloaded to plugin library' : statusLabel(request.status, providerConfigured)}</span>
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${request.deezer?.state === 'missing' ? 'border-amber-400/30 bg-amber-400/10 text-amber-200' : statusClasses(request.status)}`}>{request.deezer?.state === 'downloading' ? request.deezer.phase === 'publishing' ? 'Finalizing album' : request.deezer.total ? `Downloading ${request.deezer.completed ?? 0}/${request.deezer.total} tracks` : `Downloading ${request.itemType} from Deezer` : request.deezer?.state === 'missing' ? 'Missing from staging' : request.deezer?.state === 'staged' && request.status !== 'completed' ? 'Downloaded to plugin library' : statusLabel(request.status, providerConfigured)}</span>
                       <span className="text-[11px] uppercase tracking-wide text-white/35">{request.itemType}</span>
                     </div>
                     <p className="mt-1 truncate text-sm text-white/50">{request.artist}{request.album && request.album !== request.title ? ` · ${request.album}` : ''}</p>
