@@ -13,7 +13,7 @@ import { broadcastToAdmins, broadcastToUser } from '../websocket.js';
 import { pluginsEnabledGlobally } from './registry.js';
 import type { NdpManifest, PluginDbRow } from './types.js';
 import { cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, deezerStagingConfig, listStagedAlbumFiles, searchDeezerAlbums, searchDeezerTracks, stageDeezerAlbum, stagedAlbumComplete, stagedAlbumRelativePath, stageDeezerTrack, validStagedAlbumIdentifier, validStagedFilename, verifiedDeezerAlbum, verifiedDeezerTrack, type ExistingAlbumMetadata } from './deezerStaging.js';
-import { deezerAlbum, deezerAlbumTracks, deezerAlbumsForArtist, deezerArtist, localAlbumTitleScore, matchDeezerTrack, normalizeDeezerText, searchDeezerArtists, searchDeezerSongs, type LocalTrack } from './deezerCatalog.js';
+import { deezerAlbum, deezerAlbumTracks, deezerAlbumsForArtist, deezerArtist, deezerFeaturedPlaylists, deezerPlaylistTracks, localAlbumTitleScore, matchDeezerTrack, normalizeDeezerText, searchDeezerArtists, searchDeezerPlaylists, searchDeezerSongs, type DeezerTrack, type LocalTrack } from './deezerCatalog.js';
 
 export const MISSING_MUSIC_PLUGIN_ID = 'mvbar.missing-music';
 const EXTENSION_TYPE = 'missing-music';
@@ -69,6 +69,41 @@ type MediaRequestRow = {
   completed_at: string | Date | null;
   created_at: string | Date;
   updated_at: string | Date;
+};
+
+type DeezerPlaylistImportRow = {
+  id: string;
+  plugin_id: string;
+  user_id: string;
+  deezer_playlist_id: string;
+  playlist_id: number | string;
+  title: string;
+  artwork_url: string | null;
+  status: 'queued' | 'downloading' | 'completed' | 'partial' | 'failed';
+  total_tracks: number;
+  added_tracks: number;
+  failed_tracks: number;
+  created_at: string | Date;
+  updated_at: string | Date;
+};
+
+type DeezerPlaylistImportItemRow = {
+  import_id: string;
+  position: number;
+  deezer_track_id: string;
+  deezer_album_id: string;
+  deezer_artist_id: string | null;
+  title: string;
+  artist: string;
+  album: string | null;
+  duration_ms: number | null;
+  isrc: string | null;
+  track_number: number | null;
+  disc_number: number | null;
+  request_id: string | null;
+  track_id: number | string | null;
+  state: 'pending' | 'requested' | 'downloading' | 'added' | 'failed';
+  error: string | null;
 };
 
 type MbReleaseGroup = {
