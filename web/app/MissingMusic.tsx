@@ -835,8 +835,10 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                   <div className="space-y-2">
                     {visibleCatalog.map((group) => {
                       const detail = tracks[group.id];
-                      const incomplete = group.present && Boolean(detail?.tracks.some((track) => track.missing));
-                      const checkedComplete = group.present && Boolean(detail?.tracks.length) && !incomplete;
+                      const detailedMissing = detail?.tracks.filter((track) => track.missing).length;
+                      const incomplete = detail ? Boolean(detailedMissing) : Boolean(group.partial);
+                      const checkedComplete = Boolean(detail?.tracks.length) && detailedMissing === 0;
+                      const missingTracks = detailedMissing ?? group.missingTrackCount ?? null;
                       const albumRequest = requestByCatalogId.get(`album:${group.id}`);
                       return (
                         <div key={group.id} className="overflow-hidden rounded-xl border border-white/10 bg-black/20">
@@ -845,11 +847,11 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="truncate font-medium text-white">{group.title}</span>
                                 <span className={`rounded-full border px-2 py-0.5 text-[11px] ${incomplete ? 'border-amber-400/25 bg-amber-400/10 text-amber-300' : group.present ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-amber-400/25 bg-amber-400/10 text-amber-300'}`}>
-                                  {incomplete ? `${detail?.tracks.filter((track) => track.missing).length} tracks missing` : checkedComplete ? 'Complete' : group.present ? 'Album found' : 'Missing'}
+                                  {incomplete ? `${missingTracks ?? 'Some'} tracks missing` : checkedComplete || group.present ? 'Complete' : 'Missing'}
                                 </span>
                               </div>
                               <div className="mt-1 text-xs text-white/40">
-                                {[group.primaryType, ...group.secondaryTypes, group.firstReleaseDate?.slice(0, 4)].filter(Boolean).join(' · ')}
+                                {[group.primaryType, ...group.secondaryTypes, group.firstReleaseDate?.slice(0, 4), group.partial && group.trackCount ? `${group.localTrackCount ?? 0}/${group.trackCount} local tracks` : null].filter(Boolean).join(' · ')}
                               </div>
                             </div>
                             <div className="flex flex-wrap gap-2">
@@ -889,7 +891,12 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                                         {busyKey === `track:${track.recordingId}` ? 'Requesting…' : trackRequest ? statusLabel(trackRequest.status, providerConfigured) : 'Request'}
                                       </button>
                                     ) : (
-                                      <span className="px-2.5 text-xs text-emerald-300/70">Present</span>
+                                      <span
+                                        className="px-2.5 text-xs text-emerald-300/70"
+                                        title={track.matchReason ? `Matched by ${track.matchReason}${track.matchConfidence ? ` · ${track.matchConfidence}%` : ''}` : undefined}
+                                      >
+                                        Present{track.matchConfidence && track.matchConfidence < 100 ? ` ${track.matchConfidence}%` : ''}
+                                      </span>
                                     )}
                                   </div>
                                 );
