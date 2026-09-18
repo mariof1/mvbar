@@ -589,7 +589,7 @@ async function localAlbumsForArtist(req: FastifyRequest, localArtistName: string
   const allowed = await allowedLibrariesForUser(req.user!.userId, req.user!.role);
   const filter = libraryFilter(allowed, 2);
   const sql =
-    "select track.album, count(*) track_count, min(track.year) filter (where track.year is not null) year " +
+    "select track.album, count(*) track_count " +
     "from active_tracks track where track.album is not null and btrim(track.album) <> '' " +
     "and lower(coalesce(nullif(track.album_artist,''),track.artist,'')) = lower($1) " +
     filter.sql + " group by track.album";
