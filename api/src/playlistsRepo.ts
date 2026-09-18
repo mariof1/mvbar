@@ -14,6 +14,9 @@ export type Playlist = {
   id: number;
   name: string;
   created_at: string;
+  artwork_url?: string | null;
+  source_plugin_id?: string | null;
+  source_external_id?: string | null;
   shared_at?: string | null;
   item_count?: number;
   owner?: PublicUser;
@@ -56,7 +59,7 @@ function toPublicUser(row: PublicUserRow): PublicUser {
 
 export async function createPlaylist(userId: string, name: string) {
   const r = await db().query<Playlist>(
-    'insert into playlists(user_id, name) values ($1, $2) returning id, name, created_at, 0::int as item_count',
+    'insert into playlists(user_id, name) values ($1, $2) returning id, name, created_at, artwork_url, source_plugin_id, source_external_id, 0::int as item_count',
     [userId, name]
   );
   return r.rows[0]!;
@@ -70,6 +73,9 @@ export async function listPlaylists(userId: string, allowedLibraries: number[] |
        p.id,
        p.name,
        p.created_at,
+       p.artwork_url,
+       p.source_plugin_id,
+       p.source_external_id,
        coalesce((
          select count(*)::int
            from playlist_items item
@@ -227,7 +233,7 @@ export async function setPosition(
 export async function renamePlaylist(userId: string, playlistId: number, name: string) {
   const r = await db().query<Playlist>(
     `update playlists set name=$1 where id=$2 and user_id=$3
-     returning id, name, created_at,
+     returning id, name, created_at, artwork_url, source_plugin_id, source_external_id,
        (select coalesce(count(*),0)::int from playlist_items where playlist_id=playlists.id) as item_count`,
     [name, playlistId, userId]
   );
