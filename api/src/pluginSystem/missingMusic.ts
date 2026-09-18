@@ -1835,29 +1835,55 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
         excludedTypes: configuredExcludedSecondaryTypes(plugin),
         preferSpecial: plugin.config.preferSpecialEditions === true,
       });
+      const catalog = await mapWithConcurrency(albums, 4, async (album) => {
+        const matched = bestLocalAlbum(album.title, localAlbums);
+        const localTrackCount = matched ? Number(matched.row.track_count) : 0;
+        let present = false;
+        let partial = Boolean(matched);
+        let missingTrackCount: number | null = matched && album.trackCount > 0 && localTrackCount < album.trackCount
+          ? null
+          : matched ? null : album.trackCount || null;
+        let verified = !matched;
+
+        if (matched && album.trackCount > 0 && localTrackCount >= album.trackCount) {
+          try {
+            const [{ tracks: remoteTracks }, localTracks] = await Promise.all([
+              deezerAlbumTracks(album.id),
+              localTracksForAlbum(req, localArtist, matched.row.album),
+            ]);
+            missingTrackCount = remoteTracks.filter((track) => !matchDeezerTrack(track, localTracks).present).length;
+            present = missingTrackCount === 0;
+            partial = !present;
+            verified = true;
+          } catch (error) {
+            logger.warn('missing-music', `Could not verify local album ${album.id}: ${errorMessage(error)}`);
+            present = false;
+            partial = true;
+            missingTrackCount = null;
+          }
+        }
+
+        return {
+          id: album.id,
+          title: album.title,
+          primaryType: album.recordType,
+          secondaryTypes: album.secondaryTypes,
+          firstReleaseDate: album.releaseDate,
+          cover: album.cover,
+          trackCount: album.trackCount,
+          present,
+          partial,
+          localAlbum: matched?.row.album ?? null,
+          localTrackCount,
+          missingTrackCount,
+          matchConfidence: matched?.score ?? 0,
+          verified,
+        };
+      });
       return {
         ok: true,
         artist: remoteArtist,
-        albums: albums.map((album) => {
-          const matched = bestLocalAlbum(album.title, localAlbums);
-          const localTrackCount = matched ? Number(matched.row.track_count) : 0;
-          const complete = Boolean(matched && album.trackCount > 0 && localTrackCount >= album.trackCount);
-          return {
-            id: album.id,
-            title: album.title,
-            primaryType: album.recordType,
-            secondaryTypes: album.secondaryTypes,
-            firstReleaseDate: album.releaseDate,
-            cover: album.cover,
-            trackCount: album.trackCount,
-            present: complete,
-            partial: Boolean(matched) && !complete,
-            localAlbum: matched?.row.album ?? null,
-            localTrackCount,
-            missingTrackCount: album.trackCount > 0 ? Math.max(0, album.trackCount - localTrackCount) : null,
-            matchConfidence: matched?.score ?? 0,
-          };
-        }),
+        albums: catalog,
       };
     } catch (error) {
       logger.warn('missing-music', 'Deezer artist catalog failed: ' + errorMessage(error));
