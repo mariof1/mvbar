@@ -1388,7 +1388,7 @@ export async function runMissingMusicJobs() {
     const providerConfigured = Boolean(plugin.config.providerBaseUrl?.trim());
     if (!providerConfigured) await reconcileDeezerPlaylistImports(plugin);
 
-    const availableSlots = availableDeezerDownloadSlots(deezerJobs.size);
+    const availableSlots = availableDeezerDownloadSlots(deezerJobs.size + deezerStarting);
     const jobs = providerConfigured
       ? await db().query<MediaRequestRow>(
         `select * from plugin_media_requests
