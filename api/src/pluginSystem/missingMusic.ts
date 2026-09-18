@@ -1522,8 +1522,12 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     const staging = deezerStagingConfig();
     let stagingAvailable = staging.configured;
     if (stagingAvailable) {
-      try { stagingAvailable = (await stat(staging.directory)).isDirectory(); }
-      catch { stagingAvailable = false; }
+      try {
+        await assertDeezerStagingReady();
+        stagingAvailable = true;
+      } catch {
+        stagingAvailable = false;
+      }
     }
     let localArtistCount = 0;
     let taggedArtistCount = 0;
@@ -1673,12 +1677,10 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (plugin.config.providerBaseUrl?.trim()) {
       return reply.code(409).send({ ok: false, error: 'Disable the external request provider before importing Deezer playlists' });
     }
-    const staging = deezerStagingConfig();
-    if (!staging.configured) return reply.code(409).send({ ok: false, error: staging.error });
     try {
-      if (!(await stat(staging.directory)).isDirectory()) throw new Error('Not a directory');
-    } catch {
-      return reply.code(409).send({ ok: false, error: 'Deezer staging directory is unavailable. Restore its mount before importing a playlist.' });
+      await assertDeezerStagingReady();
+    } catch (error) {
+      return reply.code(409).send({ ok: false, error: errorMessage(error) });
     }
 
     const canImport = req.user!.role === 'admin' || (
