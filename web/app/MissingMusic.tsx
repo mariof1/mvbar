@@ -747,7 +747,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
           <div>
             <h3 className="text-xl font-semibold text-white">Missing Music</h3>
             <p className="mt-1 text-sm text-white/55">
-              Explore artist catalogs, find albums missing from your library, and keep a server-side wanted list.
+              Explore Deezer artists and curated playlists, fill gaps in your library, and keep a server-side wanted list.
             </p>
             {status && (
               <div className="mt-3 flex flex-wrap gap-2 text-xs">
@@ -756,17 +756,22 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                 <span className={`rounded-full border px-2.5 py-1 ${providerConfigured ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-cyan-400/25 bg-cyan-400/10 text-cyan-200'}`}>
                   {providerConfigured ? 'Automatic provider hand-off' : 'Wanted-list mode'}
                 </span>
+                {activePlaylistImports.length > 0 && (
+                  <span className="rounded-full border border-violet-400/25 bg-violet-400/10 px-2.5 py-1 text-violet-200">
+                    {formatCount(activePlaylistImports.length, 'playlist import')} running
+                  </span>
+                )}
               </div>
             )}
           </div>
           <div className="flex rounded-xl border border-white/10 bg-black/20 p-1">
-            {(['discover', 'requests'] as const).map((item) => (
+            {(['discover', 'playlists', 'requests'] as const).map((item) => (
               <button
                 key={item}
                 onClick={() => setView(item)}
-                className={`rounded-lg px-4 py-2 text-sm font-medium capitalize transition ${view === item ? 'bg-cyan-500 text-black' : 'text-white/60 hover:text-white'}`}
+                className={`rounded-lg px-3 py-2 text-sm font-medium transition sm:px-4 ${view === item ? 'bg-cyan-500 text-black' : 'text-white/60 hover:text-white'}`}
               >
-                {item === 'requests' && isAdmin ? 'Request queue' : item}
+                {item === 'discover' ? 'Artists' : item === 'playlists' ? 'Deezer Playlists' : isAdmin ? 'Request queue' : 'My requests'}
               </button>
             ))}
           </div>
