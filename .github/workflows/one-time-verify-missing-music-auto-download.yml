@@ -1,4 +1,5 @@
 name: One-time verify Missing Music auto-download
+# rerun after restoring bundled fallback
 
 on:
   push:
