@@ -54,7 +54,9 @@ export function isSpecialEdition(value: string) {
   return EDITION_SUFFIXES.some(suffix => lower.includes(suffix));
 }
 function cover(raw: RawArtist | RawAlbum) {
-  const items = 'picture_xl' in raw ? [raw.picture_xl, raw.picture_big, raw.picture_medium] : [raw.cover_xl, raw.cover_big, raw.cover_medium];
+  const items = 'picture_xl' in raw
+    ? [(raw as RawArtist).picture_xl, (raw as RawArtist).picture_big, (raw as RawArtist).picture_medium]
+    : [(raw as RawAlbum).cover_xl, (raw as RawAlbum).cover_big, (raw as RawAlbum).cover_medium];
   for (const item of items) {
     if (!item) continue;
     try { const u = new URL(item); if (u.protocol === 'https:' && u.hostname === 'cdn-images.dzcdn.net') return u.toString(); } catch {}
