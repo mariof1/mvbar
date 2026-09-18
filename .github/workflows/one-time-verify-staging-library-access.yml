@@ -1,0 +1,37 @@
+name: One-time verify staging library access
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - '.github/workflows/one-time-verify-staging-library-access.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - name: Verify API
+        working-directory: api
+        run: |
+          npm ci
+          npm run lint
+          npm test
+      - name: Remove verification workflow
+        run: |
+          git rm .github/workflows/one-time-verify-staging-library-access.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Remove staging library access verification workflow"
+          git push origin HEAD:dev
