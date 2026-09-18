@@ -656,6 +656,9 @@ export type Playlist = {
   id: string;
   name: string;
   created_at: string;
+  artwork_url?: string | null;
+  source_plugin_id?: string | null;
+  source_external_id?: string | null;
   shared_at: string | null;
   item_count: number;
   owner: SocialUser;
