@@ -143,3 +143,18 @@ test('private request providers need the explicit administrator option', async (
     () => validateMissingMusicConfig({ providerBaseUrl: 'http://10.10.100.50:6595', allowPrivateProvider: true }),
   );
 });
+
+test('automatic Deezer downloads require auto-approval and cannot use an external provider', async () => {
+  await assert.rejects(
+    () => validateMissingMusicConfig({ autoDownloadDeezer: true, requireAdminApproval: true }),
+    /approval to be disabled/,
+  );
+  await assert.rejects(
+    () => validateMissingMusicConfig({
+      autoDownloadDeezer: true,
+      requireAdminApproval: false,
+      providerBaseUrl: 'https://requests.example.com',
+    }),
+    /external request provider/,
+  );
+});
