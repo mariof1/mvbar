@@ -816,6 +816,12 @@ async function processRequest(plugin: MissingMusicPluginRow, request: MediaReque
           releaseId: request.musicbrainz_release_id,
           recordingId: request.musicbrainz_recording_id,
         },
+        deezer: {
+          artistId: request.deezer_artist_id,
+          albumId: request.deezer_album_id,
+          trackId: request.deezer_track_id,
+          isrc: request.requested_isrc,
+        },
       }),
     });
     const status = providerStatus(result.status);
