@@ -64,8 +64,11 @@ test('the bundled Missing Music package is a valid request-only extension', asyn
   const parsed = await parsePluginPackage(await fs.readFile(packageUrl), 'mvbar-missing-music.ndp');
   assert.equal(parsed.id, 'mvbar.missing-music');
   assert.equal(parsed.manifest.mvbar.extension.type, 'missing-music');
-  assert.equal(parsed.manifest.version, '1.1.0');
-  assert.match(parsed.manifest.config.schema.properties.excludedSecondaryTypes.default, /Compilation/);
+  assert.equal(parsed.manifest.version, '1.8.0');
+  assert.equal(parsed.manifest.config.schema.properties.excludedSecondaryTypes.default, 'Compilation,Live,Remix,Soundtrack');
+  assert.equal(parsed.manifest.permissions.playlists?.reason?.length > 0, true);
+  assert.equal(parsed.manifest.permissions.staging?.reason?.length > 0, true);
+  assert.equal(parsed.manifest.permissions.libraryAccess?.reason?.length > 0, true);
   assert.equal('storage' in parsed.manifest.permissions, false);
   assert.equal('http' in parsed.manifest.permissions, false);
 });
@@ -73,7 +76,7 @@ test('the bundled Missing Music package is a valid request-only extension', asyn
 test('the Missing Music package is bundled into production builds for one-click installation', async () => {
   const bundled = await getBundledPluginPackage('missing-music', { bundledOnly: true });
   assert.equal(bundled.parsed.id, 'mvbar.missing-music');
-  assert.equal(bundled.parsed.manifest.version, '1.1.0');
+  assert.equal(bundled.parsed.manifest.version, '1.8.0');
   assert.ok(bundled.buffer.length > 100);
   assert.deepEqual((await listBundledPluginPackages()).map((plugin) => plugin.key), ['missing-music']);
 });
