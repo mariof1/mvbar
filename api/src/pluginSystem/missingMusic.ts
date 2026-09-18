@@ -13,7 +13,7 @@ import type { Role } from '../store.js';
 import { broadcastToAdmins, broadcastToUser } from '../websocket.js';
 import { pluginsEnabledGlobally } from './registry.js';
 import type { NdpManifest, PluginDbRow } from './types.js';
-import { cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, deezerStagingConfig, listStagedAlbumFiles, searchDeezerAlbums, searchDeezerTracks, stageDeezerAlbum, stagedAlbumComplete, stagedAlbumRelativePath, stageDeezerTrack, validStagedAlbumIdentifier, validStagedFilename, verifiedDeezerAlbum, verifiedDeezerTrack, type ExistingAlbumMetadata } from './deezerStaging.js';
+import { assertDeezerStagingReady, cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, deezerStagingConfig, listStagedAlbumFiles, searchDeezerAlbums, searchDeezerTracks, stageDeezerAlbum, stagedAlbumComplete, stagedAlbumRelativePath, stageDeezerTrack, validStagedAlbumIdentifier, validStagedFilename, verifiedDeezerAlbum, verifiedDeezerTrack, type ExistingAlbumMetadata } from './deezerStaging.js';
 import { deezerAlbum, deezerAlbumTracks, deezerAlbumsForArtist, deezerArtist, deezerFeaturedPlaylists, deezerPlaylistTracks, localAlbumTitleScore, matchDeezerTrack, normalizeDeezerText, searchDeezerArtists, searchDeezerPlaylists, searchDeezerSongs, type DeezerTrack, type LocalTrack } from './deezerCatalog.js';
 
 export const MISSING_MUSIC_PLUGIN_ID = 'mvbar.missing-music';
@@ -22,6 +22,14 @@ const MUSICBRAINZ_ORIGIN = 'https://musicbrainz.org';
 const MUSICBRAINZ_CACHE_TTL_MS = 24 * 60 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const MUSICBRAINZ_MAX_ATTEMPTS = 3;
+const DEEZER_DOWNLOAD_CONCURRENCY = Math.max(
+  1,
+  Math.min(8, Number(process.env.MISSING_MUSIC_DEEZER_CONCURRENCY ?? 3) || 3),
+);
+
+export function availableDeezerDownloadSlots(active: number, limit = DEEZER_DOWNLOAD_CONCURRENCY) {
+  return Math.max(0, Math.max(1, Math.trunc(limit)) - Math.max(0, Math.trunc(active)));
+}
 
 type MissingMusicConfig = {
   providerBaseUrl?: string;
