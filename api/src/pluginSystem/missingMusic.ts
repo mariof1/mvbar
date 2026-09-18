@@ -808,17 +808,25 @@ export async function runMissingMusicJobs() {
       && plugin.config.autoDownloadDeezer === true;
     if (!providerConfigured && !autoDownloadDeezer) return;
 
-    const jobs = await db().query<MediaRequestRow>(
-      `select * from plugin_media_requests
-        where plugin_id=$1 and status in ('approved','submitted') and not (metadata ? 'deezer')
-        order by updated_at,id limit 3`,
-      [plugin.id]
-    );
+    const jobs = providerConfigured
+      ? await db().query<MediaRequestRow>(
+        `select * from plugin_media_requests
+          where plugin_id=$1 and status in ('approved','submitted') and not (metadata ? 'deezer')
+          order by updated_at,id limit 3`,
+        [plugin.id]
+      )
+      : await db().query<MediaRequestRow>(
+        `select * from plugin_media_requests
+          where plugin_id=$1 and status='approved'
+            and metadata->>'autoDownloadDeezer'='true' and not (metadata ? 'deezer')
+          order by updated_at,id limit 3`,
+        [plugin.id]
+      );
     for (const request of jobs.rows) {
       try {
         if (providerConfigured) {
           await processRequest(plugin, request);
-        } else if (autoDownloadDeezer && request.status === 'approved') {
+        } else if (autoDownloadDeezer) {
           await startAutomaticDeezerDownload(plugin, request);
         }
       } catch (error) {
@@ -1358,6 +1366,9 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       const keyColumn = itemType === 'album' ? 'musicbrainz_release_group_id' : 'musicbrainz_recording_id';
       const keyValue = itemType === 'album' ? releaseGroupMbid : recordingMbid;
       const status = plugin.config.requireAdminApproval === false ? 'approved' : 'requested';
+      const autoDownloadOnCreate = status === 'approved'
+        && plugin.config.autoDownloadDeezer === true
+        && !plugin.config.providerBaseUrl?.trim();
       const id = crypto.randomUUID();
       const client = await db().connect();
       let row: MediaRequestRow;
@@ -1384,7 +1395,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
             id, plugin.id, req.user!.userId, itemType, artist, title, album, artistMbid,
             releaseGroupMbid, releaseMbid, recordingMbid, status,
             status === 'approved' ? req.user!.userId : null, status === 'approved' ? new Date() : null,
-            { source: 'musicbrainz' },
+            { source: 'musicbrainz', ...(autoDownloadOnCreate ? { autoDownloadDeezer: true } : {}) },
           ]
         );
         row = result.rows[0];
