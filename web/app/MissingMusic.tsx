@@ -18,9 +18,11 @@ import { showConfirm } from './ConfirmModal';
 
 type Artist = {
   name: string;
-  musicBrainzId: string | null;
+  deezerId: string | null;
+  deezerName?: string | null;
+  musicBrainzId?: string | null;
   musicBrainzName?: string | null;
-  matchSource?: 'tags' | 'saved' | null;
+  matchSource?: 'saved' | null;
   albumCount: number;
   trackCount: number;
 };
@@ -33,6 +35,9 @@ type ArtistMatch = {
   country: string | null;
   type: string | null;
   score: number | null;
+  cover?: string | null;
+  link?: string | null;
+  source?: 'deezer';
 };
 
 type MissingMusicStatus = {
@@ -54,17 +59,29 @@ type ReleaseGroup = {
   primaryType: string | null;
   secondaryTypes: string[];
   firstReleaseDate: string | null;
+  cover?: string | null;
+  trackCount?: number;
   present: boolean;
+  partial?: boolean;
+  localAlbum?: string | null;
+  localTrackCount?: number;
+  missingTrackCount?: number | null;
+  matchConfidence?: number;
 };
 
 type CatalogTrack = {
+  id?: string;
   recordingId: string | null;
   title: string;
   discNumber: number;
   trackNumber: number | null;
   number: string | null;
   durationMs: number | null;
+  isrc?: string | null;
   missing: boolean;
+  matchConfidence?: number;
+  matchReason?: string | null;
+  localTrackId?: number | string | null;
 };
 
 type RequestItem = {
@@ -79,6 +96,10 @@ type RequestItem = {
   musicBrainzReleaseGroupId: string | null;
   musicBrainzReleaseId: string | null;
   musicBrainzRecordingId: string | null;
+  deezerArtistId: string | null;
+  deezerAlbumId: string | null;
+  deezerTrackId: string | null;
+  requestedIsrc: string | null;
   status: 'requested' | 'approved' | 'submitted' | 'completed' | 'failed' | 'rejected' | 'cancelled';
   providerRequestId: string | null;
   error: string | null;
