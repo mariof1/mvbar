@@ -522,6 +522,37 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     }, `track:${track.recordingId}`);
   };
 
+  const importDeezerPlaylist = async (playlist: DeezerPlaylistCard) => {
+    if (!token || playlistImportBusy) return;
+    setPlaylistImportBusy(playlist.id);
+    setError('');
+    try {
+      const result = await apiFetch(
+        `/plugins/missing-music/deezer-playlists/${playlist.id}/import`,
+        { method: 'POST' },
+        token,
+      ) as { alreadyImported?: boolean; import: DeezerPlaylistImport };
+      setPlaylistImports((current) => {
+        const filtered = current.filter((item) => item.deezerPlaylistId !== result.import.deezerPlaylistId);
+        return [result.import, ...filtered];
+      });
+      showToast(
+        result.alreadyImported
+          ? `${playlist.title} is already in your MVBar playlists`
+          : `Importing ${playlist.title} · ${playlist.trackCount} tracks`,
+        result.alreadyImported ? 'queue' : 'success',
+        'top-right',
+      );
+      await loadPlaylistImports();
+    } catch (cause) {
+      const message = messageForError(cause);
+      setError(message);
+      showToast(message, 'error', 'top-right');
+    } finally {
+      setPlaylistImportBusy(null);
+    }
+  };
+
   const changeRequest = async (request: RequestItem, action: 'approve' | 'reject' | 'retry' | 'complete') => {
     if (!token) return;
     setBusyKey(`${action}:${request.id}`);
