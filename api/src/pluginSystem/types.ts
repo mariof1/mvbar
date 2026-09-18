@@ -55,6 +55,11 @@ export type NdpManifest = {
     http?: PluginHttpPermission;
     kvstore?: PluginKVPermission;
     storage?: PluginPermission;
+    catalog?: PluginPermission;
+    requests?: PluginPermission;
+    playlists?: PluginPermission;
+    staging?: PluginPermission;
+    libraryAccess?: PluginPermission;
     [key: string]: unknown;
   };
   mvbar?: {
