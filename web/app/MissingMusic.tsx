@@ -423,28 +423,28 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   };
 
   const requestAlbum = (group: ReleaseGroup) => {
-    if (!artist) return;
+    if (!artist?.deezerId) return;
     return createRequest({
       itemType: 'album',
-      artist: artist.musicBrainzName ?? artist.name,
+      artist: artist.deezerName ?? artist.name,
       title: group.title,
       album: group.title,
-      musicBrainzArtistId: artist.musicBrainzId,
-      musicBrainzReleaseGroupId: group.id,
+      deezerArtistId: artist.deezerId,
+      deezerAlbumId: group.id,
     }, `album:${group.id}`);
   };
 
   const requestTrack = (group: ReleaseGroup, track: CatalogTrack) => {
-    if (!artist || !track.recordingId) return;
+    if (!artist?.deezerId || !track.recordingId) return;
     return createRequest({
       itemType: 'track',
-      artist: artist.musicBrainzName ?? artist.name,
+      artist: artist.deezerName ?? artist.name,
       title: track.title,
       album: group.title,
-      musicBrainzArtistId: artist.musicBrainzId,
-      musicBrainzReleaseGroupId: group.id,
-      musicBrainzReleaseId: tracks[group.id]?.releaseId,
-      musicBrainzRecordingId: track.recordingId,
+      deezerArtistId: artist.deezerId,
+      deezerAlbumId: group.id,
+      deezerTrackId: track.recordingId,
+      isrc: track.isrc ?? null,
     }, `track:${track.recordingId}`);
   };
 
