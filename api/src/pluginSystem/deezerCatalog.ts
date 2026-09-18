@@ -17,6 +17,17 @@ export type LocalTrack = {
   track_number?: number | null; disc_number?: number | null;
 };
 
+export type DeezerPlaylist = {
+  id: string;
+  title: string;
+  description: string | null;
+  creator: string | null;
+  trackCount: number;
+  cover: string | null;
+  link: string | null;
+};
+
+
 type RawArtist = { id?: number; name?: string; link?: string; picture_xl?: string; picture_big?: string; picture_medium?: string };
 type RawAlbum = {
   id?: number; title?: string; cover_xl?: string; cover_big?: string; cover_medium?: string; nb_tracks?: number;
@@ -27,6 +38,19 @@ type RawTrack = {
   artist?: { id?: number; name?: string };
   album?: { id?: number; title?: string };
 };
+
+type RawPlaylist = {
+  id?: number;
+  title?: string;
+  description?: string;
+  link?: string;
+  picture_xl?: string;
+  picture_big?: string;
+  picture_medium?: string;
+  nb_tracks?: number;
+  creator?: { id?: number; name?: string };
+};
+
 
 const EDITION_SUFFIXES = [
   'super deluxe edition','super deluxe version','collectors edition',"collector's edition",'anniversary edition',
@@ -67,6 +91,17 @@ function cover(raw: RawArtist | RawAlbum) {
   }
   return null;
 }
+function playlistCover(raw: RawPlaylist) {
+  for (const item of [raw.picture_xl, raw.picture_big, raw.picture_medium]) {
+    if (!item) continue;
+    try {
+      const url = new URL(item);
+      if (url.protocol === 'https:' && url.hostname === 'cdn-images.dzcdn.net') return url.toString();
+    } catch {}
+  }
+  return null;
+}
+
 async function json(url: URL): Promise<any> {
   const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'MVBar-MissingMusic/2.0' }, signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (!response.ok) throw new Error('Deezer catalog returned ' + response.status);
@@ -196,6 +231,98 @@ export async function searchDeezerSongs(query: string): Promise<DeezerTrack[]> {
       trackNumber: Number.isSafeInteger(r.track_position) && r.track_position! > 0 ? r.track_position! : 0,
     }];
   }).slice(0, 20);
+}
+
+function mapPlaylist(raw: RawPlaylist): DeezerPlaylist | null {
+  if (!raw.id || !raw.title?.trim()) return null;
+  const link = typeof raw.link === 'string' && raw.link.startsWith('https://www.deezer.com/')
+    ? raw.link
+    : `https://www.deezer.com/playlist/${raw.id}`;
+  return {
+    id: String(raw.id),
+    title: raw.title.trim(),
+    description: typeof raw.description === 'string' && raw.description.trim() ? raw.description.trim().slice(0, 1000) : null,
+    creator: typeof raw.creator?.name === 'string' && raw.creator.name.trim() ? raw.creator.name.trim() : null,
+    trackCount: Number.isSafeInteger(raw.nb_tracks) && (raw.nb_tracks ?? 0) >= 0 ? Number(raw.nb_tracks) : 0,
+    cover: playlistCover(raw),
+    link,
+  };
+}
+
+export async function searchDeezerPlaylists(query: string): Promise<DeezerPlaylist[]> {
+  const q = query.trim();
+  if (!q) return [];
+  const url = new URL('/search/playlist', ORIGIN);
+  url.searchParams.set('q', q);
+  url.searchParams.set('limit', '30');
+  const data = await json(url);
+  const seen = new Set<string>();
+  return (Array.isArray(data.data) ? data.data : [])
+    .map((raw: RawPlaylist) => mapPlaylist(raw))
+    .filter((playlist: DeezerPlaylist | null): playlist is DeezerPlaylist => Boolean(playlist))
+    .filter((playlist: DeezerPlaylist) => {
+      if (seen.has(playlist.id)) return false;
+      seen.add(playlist.id);
+      return true;
+    })
+    .slice(0, 24);
+}
+
+export async function deezerFeaturedPlaylists(): Promise<DeezerPlaylist[]> {
+  try {
+    const url = new URL('/chart/0/playlists', ORIGIN);
+    url.searchParams.set('limit', '24');
+    const data = await json(url);
+    return (Array.isArray(data.data) ? data.data : [])
+      .map((raw: RawPlaylist) => mapPlaylist(raw))
+      .filter((playlist: DeezerPlaylist | null): playlist is DeezerPlaylist => Boolean(playlist))
+      .slice(0, 24);
+  } catch {
+    return searchDeezerPlaylists('Deezer');
+  }
+}
+
+export async function deezerPlaylist(id: string): Promise<DeezerPlaylist> {
+  if (!/^\d{1,16}$/.test(id)) throw new Error('Invalid Deezer playlist id');
+  const raw = await json(new URL('/playlist/' + id, ORIGIN)) as RawPlaylist;
+  const playlist = mapPlaylist(raw);
+  if (!playlist || playlist.id !== id) throw new Error('Deezer playlist is unavailable');
+  return playlist;
+}
+
+export async function deezerPlaylistTracks(id: string, maxTracks = 1000): Promise<{ playlist: DeezerPlaylist; tracks: DeezerTrack[] }> {
+  const playlist = await deezerPlaylist(id);
+  const max = Math.max(1, Math.min(maxTracks, 1000));
+  if (playlist.trackCount > max) throw new Error(`Deezer playlist has ${playlist.trackCount} tracks; MVBar currently supports up to ${max}`);
+  const tracks: DeezerTrack[] = [];
+  for (let index = 0; index < Math.max(playlist.trackCount, 1); index += 100) {
+    const url = new URL('/playlist/' + id + '/tracks', ORIGIN);
+    url.searchParams.set('limit', '100');
+    url.searchParams.set('index', String(index));
+    const page = await json(url);
+    const rows = Array.isArray(page.data) ? page.data : [];
+    if (!rows.length) break;
+    for (const r of rows as RawTrack[]) {
+      if (!r.id || !r.title || !r.artist?.name || !r.album?.id || !r.album?.title) continue;
+      tracks.push({
+        id: String(r.id),
+        title: r.title,
+        artist: r.artist.name.trim(),
+        artistId: r.artist.id ? String(r.artist.id) : null,
+        albumId: String(r.album.id),
+        album: r.album.title,
+        isrc: typeof r.isrc === 'string' && r.isrc.trim() ? r.isrc.trim().toUpperCase() : null,
+        durationMs: typeof r.duration === 'number' && r.duration > 0 ? r.duration * 1000 : null,
+        discNumber: Number.isSafeInteger(r.disk_number) && (r.disk_number ?? 0) > 0 ? Number(r.disk_number) : 1,
+        trackNumber: Number.isSafeInteger(r.track_position) && (r.track_position ?? 0) > 0 ? Number(r.track_position) : 0,
+      });
+    }
+    if (rows.length < 100 || tracks.length >= Number(page.total ?? playlist.trackCount)) break;
+  }
+  if (playlist.trackCount > 0 && tracks.length < Math.min(playlist.trackCount, max)) {
+    throw new Error(`Deezer returned an incomplete playlist track list (${tracks.length}/${playlist.trackCount})`);
+  }
+  return { playlist, tracks };
 }
 
 export function localAlbumTitleScore(remote:string,local:string) {
