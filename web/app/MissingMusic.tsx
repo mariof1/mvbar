@@ -43,6 +43,7 @@ type MissingMusicStatus = {
   deezerStagingDirectory: string | null;
   mode: 'provider' | 'wanted-list';
   requireAdminApproval: boolean;
+  autoDownloadDeezer: boolean;
   localArtistCount: number;
   taggedArtistCount: number;
 };
@@ -669,9 +670,11 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
 
       {status && !providerConfigured && isAdmin && (
         <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/[0.07] px-4 py-3 text-sm text-cyan-100">
-          Missing Music is ready in wanted-list mode. {status?.deezerConfigured
+          Missing Music is ready in wanted-list mode. {status.autoDownloadDeezer
+            ? 'New requests are automatically matched against Deezer and staged when a confident match is available.'
+            : status.deezerConfigured
               ? 'Administrators can stage matching Deezer songs and albums. They are scanned into a separate library automatically.'
-            : 'Administrators can approve requests and mark them fulfilled after importing the music.'} An external provider can be configured in Admin → Plugins.
+              : 'Administrators can approve requests and mark them fulfilled after importing the music.'} An external provider can be configured in Admin → Plugins.
         </div>
       )}
 
