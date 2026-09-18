@@ -1359,9 +1359,17 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     const request = (await db().query<MediaRequestRow>('select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id])).rows[0];
     if (!request) return reply.code(404).send({ ok: false, error: 'Request not found' });
     try {
-      return { ok: true, localAlbumMetadata: await existingAlbumMetadata(request), candidates: request.item_type === 'album'
-        ? await searchDeezerAlbums(request.artist, request.title)
-        : await searchDeezerTracks(request.artist, request.title, request.album) };
+      let candidates;
+      if (request.item_type === 'album' && request.deezer_album_id) {
+        candidates = [await verifiedDeezerAlbum(request.deezer_album_id, request.artist, request.title)];
+      } else if (request.item_type === 'track' && request.deezer_track_id) {
+        candidates = [await verifiedDeezerTrack(request.deezer_track_id, request.artist, request.title, request.album)];
+      } else {
+        candidates = request.item_type === 'album'
+          ? await searchDeezerAlbums(request.artist, request.title)
+          : await searchDeezerTracks(request.artist, request.title, request.album);
+      }
+      return { ok: true, localAlbumMetadata: await existingAlbumMetadata(request), candidates };
     } catch (error) {
       logger.warn('missing-music', `Deezer catalog lookup failed: ${errorMessage(error)}`);
       return reply.code(502).send({ ok: false, error: 'Could not search Deezer. Please try again.' });
