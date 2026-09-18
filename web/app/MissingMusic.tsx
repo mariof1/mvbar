@@ -49,6 +49,7 @@ type MissingMusicStatus = {
   mode: 'provider' | 'wanted-list';
   requireAdminApproval: boolean;
   autoDownloadDeezer: boolean;
+  playlistImportEnabled: boolean;
   localArtistCount: number;
   taggedArtistCount: number;
   deezerMatchedArtistCount: number;
@@ -123,6 +124,31 @@ type DeezerCandidate = {
   score: number;
 };
 
+type DeezerPlaylistCard = {
+  id: string;
+  title: string;
+  description: string | null;
+  creator: string | null;
+  trackCount: number;
+  cover: string | null;
+  link: string | null;
+};
+
+type DeezerPlaylistImport = {
+  id: string;
+  deezerPlaylistId: string;
+  playlistId: string;
+  title: string;
+  artworkUrl: string | null;
+  status: 'queued' | 'downloading' | 'completed' | 'partial' | 'failed';
+  totalTracks: number;
+  addedTracks: number;
+  failedTracks: number;
+  pendingTracks: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type PluginUpdate = {
   available: BundledAdminPlugin;
   installed: AdminPlugin;
@@ -168,10 +194,16 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   const isAdmin = user?.role === 'admin';
   const showToast = useToastStore((state) => state.show);
   const liveUpdate = useMissingMusicUpdates((state) => state.lastUpdate);
-  const [view, setView] = useState<'discover' | 'requests'>('discover');
+  const [view, setView] = useState<'discover' | 'playlists' | 'requests'>('discover');
   const [query, setQuery] = useState('');
   const [artists, setArtists] = useState<Artist[]>([]);
   const [catalogArtists, setCatalogArtists] = useState<ArtistMatch[]>([]);
+  const [playlistQuery, setPlaylistQuery] = useState('');
+  const [deezerPlaylists, setDeezerPlaylists] = useState<DeezerPlaylistCard[]>([]);
+  const [playlistImports, setPlaylistImports] = useState<DeezerPlaylistImport[]>([]);
+  const [playlistsLoading, setPlaylistsLoading] = useState(false);
+  const [playlistsLoaded, setPlaylistsLoaded] = useState(false);
+  const [playlistImportBusy, setPlaylistImportBusy] = useState<string | null>(null);
   const [catalogSearching, setCatalogSearching] = useState(false);
   const [catalogSearched, setCatalogSearched] = useState(false);
   const [artist, setArtist] = useState<Artist | null>(null);
