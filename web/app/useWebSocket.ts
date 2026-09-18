@@ -658,10 +658,14 @@ export function useWebSocket(authIdentity: string | null) {
             } else if (msg.type === 'missing-music:update') {
               useMissingMusicUpdates.getState().setEvent(msg);
               if (!['download-progress', 'playlist-import-progress'].includes(msg.data.event)) {
-                const failed = msg.data.status === 'failed' || msg.data.status === 'rejected' || msg.data.status === 'partial';
+                const tone = msg.data.status === 'failed' || msg.data.status === 'rejected'
+                  ? 'error'
+                  : msg.data.status === 'partial'
+                    ? 'queue'
+                    : 'success';
                 useToastStore.getState().show(
                   msg.data.message || `${msg.data.title}: ${msg.data.status}`,
-                  failed ? 'error' : 'success',
+                  tone,
                   'top-right',
                 );
               }
