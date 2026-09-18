@@ -694,7 +694,13 @@ async function startDeezerPlaylistImport(
   if (existingImport) return { alreadyImported: true, importRow: existingImport };
 
   const { playlist, tracks } = await deezerPlaylistTracks(playlistId, 1000);
-  if (!tracks.length) throw new Error('This Deezer playlist has no downloadable tracks');
+  const seenTrackIds = new Set<string>();
+  const uniqueTracks = tracks.filter((track) => {
+    if (seenTrackIds.has(track.id)) return false;
+    seenTrackIds.add(track.id);
+    return true;
+  });
+  if (!uniqueTracks.length) throw new Error('This Deezer playlist has no downloadable tracks');
 
   const client = await db().connect();
   let importRow: DeezerPlaylistImportRow;
@@ -732,12 +738,12 @@ async function startDeezerPlaylistImport(
     importRow = (await client.query<DeezerPlaylistImportRow>(
       "insert into plugin_deezer_playlist_imports(id,plugin_id,user_id,deezer_playlist_id,playlist_id,title,artwork_url,status,total_tracks) " +
       "values($1,$2,$3,$4,$5,$6,$7,'queued',$8) returning *",
-      [importId, plugin.id, userId, playlist.id, mvbarPlaylistId, playlist.title, playlist.cover, tracks.length]
+      [importId, plugin.id, userId, playlist.id, mvbarPlaylistId, playlist.title, playlist.cover, uniqueTracks.length]
     )).rows[0];
 
     const values: string[] = [];
     const params: unknown[] = [];
-    for (const [index, track] of tracks.entries()) {
+    for (const [index, track] of uniqueTracks.entries()) {
       const base = params.length;
       values.push(
         '(' + Array.from({ length: 12 }, (_, offset) => '$' + (base + offset + 1)).join(',') + ')'
@@ -785,7 +791,7 @@ async function startDeezerPlaylistImport(
     deezerPlaylistId: playlist.id,
     playlistId: mvbarPlaylistId,
     title: playlist.title,
-    trackCount: tracks.length,
+    trackCount: uniqueTracks.length,
   });
 
   return { alreadyImported: false, importRow };
