@@ -165,6 +165,12 @@ function PluginCard({ token, plugin, refresh, draft, onDraftChange, clearDraft }
     Object.entries(plugin.configSchema?.properties ?? {}).map(([key, property]) => [key, plugin.config[key] ?? property.default ?? (property.type === 'boolean' ? false : '')])
   ), [plugin]);
   const config = draft ?? defaults;
+  const configEntries = Object.entries(plugin.configSchema?.properties ?? {}).filter(([key]) => {
+    if (!isMissingMusic || key !== 'autoDownloadDeezer') return true;
+    const approvalDisabled = config.requireAdminApproval === false;
+    const providerEmpty = typeof config.providerBaseUrl !== 'string' || !config.providerBaseUrl.trim();
+    return approvalDisabled && providerEmpty;
+  });
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<AdminPluginRun[] | null>(null);
@@ -354,7 +360,7 @@ function PluginCard({ token, plugin, refresh, draft, onDraftChange, clearDraft }
             </div>
           </div>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
-            {Object.entries(plugin.configSchema.properties ?? {}).map(([key, property]) => (
+            {configEntries.map(([key, property]) => (
               <SchemaField
                 key={key}
                 name={key}
@@ -363,6 +369,12 @@ function PluginCard({ token, plugin, refresh, draft, onDraftChange, clearDraft }
                 configuredSecret={plugin.configuredSecrets.includes(key)}
                 onChange={(value) => {
                   const next = { ...config, [key]: value };
+                  if (isMissingMusic && key === 'requireAdminApproval' && value !== false) {
+                    next.autoDownloadDeezer = false;
+                  }
+                  if (isMissingMusic && key === 'providerBaseUrl' && typeof value === 'string' && value.trim()) {
+                    next.autoDownloadDeezer = false;
+                  }
                   if (Object.keys(defaults).every(field => Object.is(next[field], defaults[field]))) clearDraft();
                   else onDraftChange(next);
                 }}
