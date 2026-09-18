@@ -1520,25 +1520,67 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       const body = req.body as Record<string, unknown>;
       const itemType = body.itemType === 'album' || body.itemType === 'track' ? body.itemType : null;
       if (!itemType) throw new Error('itemType must be album or track');
-      const artist = safeText(body.artist, 'artist');
-      const title = safeText(body.title, 'title');
-      const album = optionalText(body.album);
+
+      let artist = safeText(body.artist, 'artist');
+      let title = safeText(body.title, 'title');
+      let album = optionalText(body.album);
       const artistMbid = validMbid(body.musicBrainzArtistId) ? body.musicBrainzArtistId : null;
       const releaseGroupMbid = validMbid(body.musicBrainzReleaseGroupId) ? body.musicBrainzReleaseGroupId : null;
       const releaseMbid = validMbid(body.musicBrainzReleaseId) ? body.musicBrainzReleaseId : null;
       const recordingMbid = validMbid(body.musicBrainzRecordingId) ? body.musicBrainzRecordingId : null;
-      if (!artistMbid) throw new Error('A MusicBrainz artist id is required');
-      if (itemType === 'album' && !releaseGroupMbid) throw new Error('A MusicBrainz release-group id is required');
-      if (itemType === 'track' && !recordingMbid) {
-        throw new Error('A MusicBrainz recording id is required');
+      const deezerArtistId = validDeezerId(body.deezerArtistId) ? body.deezerArtistId : null;
+      const deezerAlbumId = validDeezerId(body.deezerAlbumId) ? body.deezerAlbumId : null;
+      const deezerTrackId = validDeezerId(body.deezerTrackId) ? body.deezerTrackId : null;
+      let requestedIsrc = optionalText(body.isrc, 64);
+      const deezerMode = Boolean(deezerArtistId || deezerAlbumId || deezerTrackId);
+
+      if (deezerMode) {
+        if (!deezerArtistId) throw new Error('A valid Deezer artist id is required');
+        if (!deezerAlbumId) throw new Error('A valid Deezer album id is required');
+
+        if (itemType === 'album') {
+          const remote = await deezerAlbum(deezerAlbumId);
+          title = remote.title;
+          album = remote.title;
+        } else {
+          if (!deezerTrackId) throw new Error('A valid Deezer track id is required');
+          const remote = await deezerAlbumTracks(deezerAlbumId);
+          const track = remote.tracks.find(candidate => candidate.id === deezerTrackId);
+          if (!track) throw new Error('The selected Deezer track does not belong to this album');
+          title = track.title;
+          album = remote.album.title;
+          requestedIsrc = track.isrc;
+
+          const localAlbums = await localAlbumsForArtist(req, artist);
+          const matchedAlbum = bestLocalAlbum(album, localAlbums);
+          if (matchedAlbum) {
+            const localTracks = await localTracksForAlbum(req, artist, matchedAlbum.row.album);
+            if (matchDeezerTrack(track, localTracks).present) {
+              return reply.code(409).send({ ok: false, error: 'This song is already in your library', present: true });
+            }
+          }
+        }
+      } else {
+        if (!artistMbid) throw new Error('A MusicBrainz or Deezer artist id is required');
+        if (itemType === 'album' && !releaseGroupMbid) throw new Error('A MusicBrainz release-group id is required');
+        if (itemType === 'track' && !recordingMbid) throw new Error('A MusicBrainz recording id is required');
+        if (itemType === 'track' && (await songPresence(req, [{
+          recordingId: recordingMbid!, title, artist, artistNames: [artist],
+          musicBrainzArtistId: artistMbid, album,
+          musicBrainzReleaseGroupId: releaseGroupMbid, musicBrainzReleaseId: releaseMbid
+        }]))[0]) {
+          return reply.code(409).send({ ok: false, error: 'This song is already in your library', present: true });
+        }
       }
-      if (itemType === 'track' && (await songPresence(req, [{ recordingId: recordingMbid!, title, artist,
-        artistNames: [artist], musicBrainzArtistId: artistMbid, album,
-        musicBrainzReleaseGroupId: releaseGroupMbid, musicBrainzReleaseId: releaseMbid }]))[0]) {
-        return reply.code(409).send({ ok: false, error: 'This song is already in your library', present: true });
-      }
-      const keyColumn = itemType === 'album' ? 'musicbrainz_release_group_id' : 'musicbrainz_recording_id';
-      const keyValue = itemType === 'album' ? releaseGroupMbid : recordingMbid;
+
+      const keyColumn = deezerMode
+        ? (itemType === 'album' ? 'deezer_album_id' : 'deezer_track_id')
+        : (itemType === 'album' ? 'musicbrainz_release_group_id' : 'musicbrainz_recording_id');
+      const keyValue = deezerMode
+        ? (itemType === 'album' ? deezerAlbumId : deezerTrackId)
+        : (itemType === 'album' ? releaseGroupMbid : recordingMbid);
+      if (!keyValue) throw new Error('Request catalog identifier is missing');
+
       const status = plugin.config.requireAdminApproval === false ? 'approved' : 'requested';
       const autoDownloadOnCreate = status === 'approved'
         && plugin.config.autoDownloadDeezer === true
@@ -1548,30 +1590,38 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       let row: MediaRequestRow;
       try {
         await client.query('begin');
-        await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`${plugin.id}:${req.user!.userId}:${itemType}:${keyValue}`]);
+        await client.query(
+          'select pg_advisory_xact_lock(hashtextextended($1,0))',
+          [plugin.id + ':' + req.user!.userId + ':' + itemType + ':' + keyValue]
+        );
+        const duplicateSql =
+          'select id from plugin_media_requests where plugin_id=$1 and user_id=$2 and item_type=$3 and ' +
+          keyColumn + "=$4 and status not in ('failed','rejected','cancelled') limit 1";
         const duplicate = await client.query<{ id: string }>(
-          `select id from plugin_media_requests
-            where plugin_id=$1 and user_id=$2 and item_type=$3 and ${keyColumn}=$4
-              and status not in ('failed','rejected','cancelled') limit 1`,
+          duplicateSql,
           [plugin.id, req.user!.userId, itemType, keyValue]
         );
         if (duplicate.rows[0]) {
           await client.query('rollback');
           return reply.code(409).send({ ok: false, error: 'This item is already requested' });
         }
-        const result = await client.query<MediaRequestRow>(
-          `insert into plugin_media_requests(
-             id,plugin_id,user_id,item_type,artist,title,album,musicbrainz_artist_id,
-             musicbrainz_release_group_id,musicbrainz_release_id,musicbrainz_recording_id,status,
-             approved_by,approved_at,metadata
-           ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
-          [
-            id, plugin.id, req.user!.userId, itemType, artist, title, album, artistMbid,
-            releaseGroupMbid, releaseMbid, recordingMbid, status,
-            status === 'approved' ? req.user!.userId : null, status === 'approved' ? new Date() : null,
-            { source: 'musicbrainz', ...(autoDownloadOnCreate ? { autoDownloadDeezer: true } : {}) },
-          ]
-        );
+
+        const insertSql =
+          'insert into plugin_media_requests(' +
+          'id,plugin_id,user_id,item_type,artist,title,album,musicbrainz_artist_id,' +
+          'musicbrainz_release_group_id,musicbrainz_release_id,musicbrainz_recording_id,' +
+          'deezer_artist_id,deezer_album_id,deezer_track_id,requested_isrc,status,' +
+          'approved_by,approved_at,metadata' +
+          ') values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) returning *';
+        const result = await client.query<MediaRequestRow>(insertSql, [
+          id, plugin.id, req.user!.userId, itemType, artist, title, album,
+          artistMbid, releaseGroupMbid, releaseMbid, recordingMbid,
+          deezerArtistId, deezerAlbumId, deezerTrackId, requestedIsrc,
+          status,
+          status === 'approved' ? req.user!.userId : null,
+          status === 'approved' ? new Date() : null,
+          { source: deezerMode ? 'deezer' : 'musicbrainz', ...(autoDownloadOnCreate ? { autoDownloadDeezer: true } : {}) },
+        ]);
         row = result.rows[0];
         await client.query('commit');
       } catch (error) {
@@ -1580,7 +1630,15 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       } finally {
         client.release();
       }
-      await audit('plugin_media_requested', { pluginId: plugin.id, requestId: id, userId: req.user!.userId, itemType, keyValue });
+
+      await audit('plugin_media_requested', {
+        pluginId: plugin.id,
+        requestId: id,
+        userId: req.user!.userId,
+        itemType,
+        keyValue,
+        catalog: deezerMode ? 'deezer' : 'musicbrainz',
+      });
       await notifyRequest(row, status, status === 'requested' ? 'Request is waiting for administrator approval' : 'Request approved automatically');
       if (status === 'approved') void runMissingMusicJobs().catch(() => undefined);
       return reply.code(201).send({ ok: true, request: serializeRequest(row) });
