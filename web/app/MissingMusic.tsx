@@ -178,7 +178,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   const [catalog, setCatalog] = useState<ReleaseGroup[]>([]);
   const [catalogFilter, setCatalogFilter] = useState<'missing' | 'all' | 'present'>('missing');
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [tracks, setTracks] = useState<Record<string, { releaseId: string; tracks: CatalogTrack[] }>>({});
+  const [tracks, setTracks] = useState<Record<string, { releaseId?: string; album?: { id: string; title: string; localAlbum: string | null; matchConfidence: number }; tracks: CatalogTrack[] }>>({});
   const [requests, setRequests] = useState<RequestItem[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(true);
   const [requestFilter, setRequestFilter] = useState<'all' | 'action' | 'progress' | 'staged' | 'history'>('all');
@@ -300,7 +300,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     }
   };
 
-  const loadCatalog = useCallback(async (selected: Artist, musicBrainzId: string) => {
+  const loadCatalog = useCallback(async (selected: Artist, deezerId: string) => {
     if (!token) return;
     const requestId = ++catalogRequestId.current;
     setCatalog([]);
@@ -311,11 +311,11 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
     setError('');
     try {
       const data = await apiFetch(
-        `/plugins/missing-music/artists/${musicBrainzId}/catalog?localArtist=${encodeURIComponent(selected.name)}`,
+        `/plugins/missing-music/deezer-artists/${deezerId}/catalog?localArtist=${encodeURIComponent(selected.name)}`,
         {},
         token,
-      ) as { releaseGroups: ReleaseGroup[] };
-      if (requestId === catalogRequestId.current) setCatalog(data.releaseGroups);
+      ) as { albums: ReleaseGroup[] };
+      if (requestId === catalogRequestId.current) setCatalog(data.albums);
     } catch (cause) {
       if (requestId === catalogRequestId.current) setError(messageForError(cause));
     } finally {
