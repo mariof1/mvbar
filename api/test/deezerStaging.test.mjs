@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import unzipper from 'unzipper';
-import { cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, publishStagedTrack, searchDeezerAlbums, searchDeezerTracks, stagedAlbumComplete, validStagedAlbumIdentifier, verifiedDeezerAlbum, verifiedDeezerTrack, validStagedFilename } from '../dist/pluginSystem/deezerStaging.js';
+import { assertDeezerStagingReady, cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, publishStagedTrack, searchDeezerAlbums, searchDeezerTracks, stagedAlbumComplete, validStagedAlbumIdentifier, verifiedDeezerAlbum, verifiedDeezerTrack, validStagedFilename } from '../dist/pluginSystem/deezerStaging.js';
 
 async function streamBuffer(stream) {
   const chunks = [];
@@ -12,6 +12,29 @@ async function streamBuffer(stream) {
   return Buffer.concat(chunks);
 }
 
+
+test('Deezer staging refuses to recreate a missing mount path', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'mvbar-staging-mount-'));
+  const missing = path.join(root, 'missing-mount');
+  const oldDirectory = process.env.DEEZER_DOWNLOAD_DIR;
+  const oldArl = process.env.DEEZER_ARL;
+  const oldMusicDir = process.env.MUSIC_DIR;
+  process.env.DEEZER_DOWNLOAD_DIR = missing;
+  process.env.DEEZER_ARL = 'test-arl';
+  process.env.MUSIC_DIR = path.join(root, 'music');
+  try {
+    await assert.rejects(assertDeezerStagingReady(), /staging directory is unavailable/i);
+    await assert.rejects(stat(missing), error => error?.code === 'ENOENT');
+  } finally {
+    if (oldDirectory === undefined) delete process.env.DEEZER_DOWNLOAD_DIR;
+    else process.env.DEEZER_DOWNLOAD_DIR = oldDirectory;
+    if (oldArl === undefined) delete process.env.DEEZER_ARL;
+    else process.env.DEEZER_ARL = oldArl;
+    if (oldMusicDir === undefined) delete process.env.MUSIC_DIR;
+    else process.env.MUSIC_DIR = oldMusicDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('Deezer matching keeps the main recording and rejects alternate versions', async () => {
   const originalFetch = globalThis.fetch;
