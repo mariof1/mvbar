@@ -3,6 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs/promises';
 import {
   albumTrackIsMissing,
+  availableDeezerDownloadSlots,
   isPrivateNetworkAddress,
   normalizeCatalogText,
   normalizeLocalAlbumTitle,
@@ -13,6 +14,13 @@ import {
   sameProviderOrigin,
   validateMissingMusicConfig,
 } from '../dist/pluginSystem/missingMusic.js';
+
+test('Deezer download slots enforce a global concurrency ceiling', () => {
+  assert.equal(availableDeezerDownloadSlots(0, 3), 3);
+  assert.equal(availableDeezerDownloadSlots(1, 3), 2);
+  assert.equal(availableDeezerDownloadSlots(3, 3), 0);
+  assert.equal(availableDeezerDownloadSlots(9, 3), 0);
+});
 
 test('song search prefers main albums, then EPs and singles, excluding alternate recordings', () => {
   const release = (type, secondary = [], status = 'Official') => ({ title: type, status, 'release-group': { 'primary-type': type, 'secondary-types': secondary } });
