@@ -633,7 +633,12 @@ async function stagedMediaAvailable(row: MediaRequestRow): Promise<boolean> {
 const deezerJobs = new Map<string, Promise<void>>();
 
 async function existingAlbumMetadata(request: MediaRequestRow): Promise<ExistingAlbumMetadata | null> {
-  if (request.item_type !== 'track' || !request.album?.trim()) return null;
+  if (request.item_type !== 'track') return null;
+  const localAlbum = typeof request.metadata?.localAlbum === 'string' && request.metadata.localAlbum.trim()
+    ? request.metadata.localAlbum.trim() : request.album?.trim();
+  const localArtist = typeof request.metadata?.localArtist === 'string' && request.metadata.localArtist.trim()
+    ? request.metadata.localArtist.trim() : request.artist.trim();
+  if (!localAlbum) return null;
   const result = await db().query<ExistingAlbumMetadata>(
     `select t.album, t.album_artist, t.year, t.genre, t.country, t.language
        from active_tracks t
@@ -645,7 +650,7 @@ async function existingAlbumMetadata(request: MediaRequestRow): Promise<Existing
              + (t.genre is not null)::int + (t.country is not null)::int + (t.language is not null)::int desc,
                t.id asc
       limit 1`,
-    [request.album.trim(), request.artist.trim()]
+    [localAlbum, localArtist]
   );
   return result.rows[0] ?? null;
 }
@@ -1560,6 +1565,8 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       let artist = safeText(body.artist, 'artist');
       let title = safeText(body.title, 'title');
       let album = optionalText(body.album);
+      const localArtist = optionalText(body.localArtist, 500) ?? artist;
+      const localAlbumHint = optionalText(body.localAlbum, 500);
       const artistMbid = validMbid(body.musicBrainzArtistId) ? body.musicBrainzArtistId : null;
       const releaseGroupMbid = validMbid(body.musicBrainzReleaseGroupId) ? body.musicBrainzReleaseGroupId : null;
       const releaseMbid = validMbid(body.musicBrainzReleaseId) ? body.musicBrainzReleaseId : null;
@@ -1587,10 +1594,13 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
           album = remote.album.title;
           requestedIsrc = track.isrc;
 
-          const localAlbums = await localAlbumsForArtist(req, artist);
-          const matchedAlbum = bestLocalAlbum(album, localAlbums);
+          const localAlbums = await localAlbumsForArtist(req, localArtist);
+          const hintedAlbum = localAlbumHint
+            ? localAlbums.find(candidate => candidate.album.toLocaleLowerCase('en') === localAlbumHint.toLocaleLowerCase('en')) ?? null
+            : null;
+          const matchedAlbum = hintedAlbum ? { row: hintedAlbum, score: 100 } : bestLocalAlbum(album, localAlbums);
           if (matchedAlbum) {
-            const localTracks = await localTracksForAlbum(req, artist, matchedAlbum.row.album);
+            const localTracks = await localTracksForAlbum(req, localArtist, matchedAlbum.row.album);
             if (matchDeezerTrack(track, localTracks).present) {
               return reply.code(409).send({ ok: false, error: 'This song is already in your library', present: true });
             }
@@ -1656,7 +1666,11 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
           status,
           status === 'approved' ? req.user!.userId : null,
           status === 'approved' ? new Date() : null,
-          { source: deezerMode ? 'deezer' : 'musicbrainz', ...(autoDownloadOnCreate ? { autoDownloadDeezer: true } : {}) },
+          {
+            source: deezerMode ? 'deezer' : 'musicbrainz',
+            ...(deezerMode ? { localArtist, localAlbum: localAlbumHint } : {}),
+            ...(autoDownloadOnCreate ? { autoDownloadDeezer: true } : {}),
+          },
         ]);
         row = result.rows[0];
         await client.query('commit');
