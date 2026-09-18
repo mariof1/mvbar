@@ -581,7 +581,6 @@ async function localCatalog(req: FastifyRequest, artistMbid: string, localArtist
 type LocalAlbumSummary = {
   album: string;
   track_count: string | number;
-  year: number | null;
 };
 
 async function localAlbumsForArtist(req: FastifyRequest, localArtistName: string): Promise<LocalAlbumSummary[]> {
@@ -2075,18 +2074,19 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       const releaseGroupMbid = validMbid(body.musicBrainzReleaseGroupId) ? body.musicBrainzReleaseGroupId : null;
       const releaseMbid = validMbid(body.musicBrainzReleaseId) ? body.musicBrainzReleaseId : null;
       const recordingMbid = validMbid(body.musicBrainzRecordingId) ? body.musicBrainzRecordingId : null;
-      const deezerArtistId = validDeezerId(body.deezerArtistId) ? body.deezerArtistId : null;
+      let deezerArtistId = validDeezerId(body.deezerArtistId) ? body.deezerArtistId : null;
       const deezerAlbumId = validDeezerId(body.deezerAlbumId) ? body.deezerAlbumId : null;
       const deezerTrackId = validDeezerId(body.deezerTrackId) ? body.deezerTrackId : null;
       let requestedIsrc = optionalText(body.isrc, 64);
       const deezerMode = Boolean(deezerArtistId || deezerAlbumId || deezerTrackId);
 
       if (deezerMode) {
-        if (!deezerArtistId) throw new Error('A valid Deezer artist id is required');
         if (!deezerAlbumId) throw new Error('A valid Deezer album id is required');
 
         if (itemType === 'album') {
           const remote = await deezerAlbum(deezerAlbumId);
+          deezerArtistId ??= remote.artistId;
+          if (!deezerArtistId) throw new Error('A valid Deezer artist id is required');
           title = remote.title;
           album = remote.title;
         } else {
@@ -2094,6 +2094,8 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
           const remote = await deezerAlbumTracks(deezerAlbumId);
           const track = remote.tracks.find(candidate => candidate.id === deezerTrackId);
           if (!track) throw new Error('The selected Deezer track does not belong to this album');
+          deezerArtistId ??= track.artistId ?? remote.album.artistId;
+          if (!deezerArtistId) throw new Error('A valid Deezer artist id is required');
           title = track.title;
           album = remote.album.title;
           requestedIsrc = track.isrc;
