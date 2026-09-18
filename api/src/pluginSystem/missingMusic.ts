@@ -537,6 +537,43 @@ async function localCatalog(req: FastifyRequest, artistMbid: string, localArtist
   return result.rows;
 }
 
+type LocalAlbumSummary = {
+  album: string;
+  track_count: string | number;
+  year: number | null;
+};
+
+async function localAlbumsForArtist(req: FastifyRequest, localArtistName: string): Promise<LocalAlbumSummary[]> {
+  if (!localArtistName.trim()) return [];
+  const allowed = await allowedLibrariesForUser(req.user!.userId, req.user!.role);
+  const filter = libraryFilter(allowed, 2);
+  const sql =
+    "select track.album, count(*) track_count, min(track.year) filter (where track.year is not null) year " +
+    "from active_tracks track where track.album is not null and btrim(track.album) <> '' " +
+    "and lower(coalesce(nullif(track.album_artist,''),track.artist,'')) = lower($1) " +
+    filter.sql + " group by track.album";
+  const result = await db().query<LocalAlbumSummary>(sql, [localArtistName.trim(), ...filter.params]);
+  return result.rows;
+}
+
+function bestLocalAlbum(remoteTitle: string, local: LocalAlbumSummary[]) {
+  return local.map(row => ({ row, score: localAlbumTitleScore(remoteTitle, row.album) }))
+    .filter(candidate => candidate.score > 0)
+    .sort((a, b) => b.score - a.score || Number(b.row.track_count) - Number(a.row.track_count))[0] ?? null;
+}
+
+async function localTracksForAlbum(req: FastifyRequest, localArtistName: string, album: string): Promise<LocalTrack[]> {
+  const allowed = await allowedLibrariesForUser(req.user!.userId, req.user!.role);
+  const filter = libraryFilter(allowed, 3);
+  const sql =
+    "select track.id, track.title, track.isrc, track.duration_ms, track.track_number, track.disc_number " +
+    "from active_tracks track where lower(track.album)=lower($1) " +
+    "and lower(coalesce(nullif(track.album_artist,''),track.artist,''))=lower($2) " +
+    filter.sql + " order by coalesce(track.disc_number,1), coalesce(track.track_number,0), track.id";
+  const result = await db().query<LocalTrack>(sql, [album, localArtistName.trim(), ...filter.params]);
+  return result.rows;
+}
+
 function serializeRequest(row: MediaRequestRow) {
   const deezer = row.metadata?.deezer as { state?: string; filename?: string; trackId?: string; albumId?: string; trackCount?: number; completed?: number; total?: number; phase?: string; usedLocalAlbumMetadata?: boolean } | undefined;
   return {
