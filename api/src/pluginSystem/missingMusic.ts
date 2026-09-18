@@ -1347,6 +1347,15 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
         && installed?.config.autoDownloadDeezer === true
         && !providerConfigured
       ),
+      playlistImportEnabled: Boolean(
+        installed
+        && !providerConfigured
+        && stagingAvailable
+        && (req.user.role === 'admin' || (
+          installed.config.requireAdminApproval === false
+          && installed.config.autoDownloadDeezer === true
+        ))
+      ),
       localArtistCount,
       taggedArtistCount,
       deezerMatchedArtistCount,
