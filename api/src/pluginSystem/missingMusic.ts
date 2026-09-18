@@ -1961,49 +1961,65 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!plugin) return;
     if (req.user!.role !== 'admin') return reply.code(403).send({ ok: false, error: 'Administrator access required' });
     if (plugin.config.providerBaseUrl) return reply.code(409).send({ ok: false, error: 'Disable the external request provider before using Deezer staging' });
-    if (!deezerStagingConfig().configured) return reply.code(409).send({ ok: false, error: deezerStagingConfig().error });
-    const body = req.body as { trackId?: unknown; albumId?: unknown; useLocalAlbumMetadata?: unknown } | null;
-    if (body?.albumId !== undefined && body.trackId !== undefined) return reply.code(400).send({ ok: false, error: 'Choose one Deezer item' });
-    const itemType = body?.albumId !== undefined ? 'album' : 'track';
-    const itemId = itemType === 'album' ? body?.albumId : body?.trackId;
-    if (typeof itemId !== 'string' || !/^\d{1,16}$/.test(itemId)) return reply.code(400).send({ ok: false, error: 'Invalid Deezer item id' });
+
     try {
-      if (!(await stat(deezerStagingConfig().directory)).isDirectory()) throw new Error('Not a directory');
-    } catch {
-      return reply.code(409).send({ ok: false, error: 'Deezer staging directory is unavailable. Restore its mount before downloading.' });
+      await assertDeezerStagingReady();
+    } catch (error) {
+      return reply.code(409).send({ ok: false, error: errorMessage(error) });
     }
-    const { id } = req.params as { id: string };
-    const existing = (await db().query<MediaRequestRow>(
-      'select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id]
-    )).rows[0];
-    if (body?.useLocalAlbumMetadata !== undefined && typeof body.useLocalAlbumMetadata !== 'boolean') {
-      return reply.code(400).send({ ok: false, error: 'Invalid album metadata choice' });
+    if (!reserveDeezerDownloadSlot()) {
+      return reply.code(429).send({ ok: false, error: `Deezer download limit reached (${DEEZER_DOWNLOAD_CONCURRENCY} active jobs). Try again shortly.` });
     }
-    if (body?.useLocalAlbumMetadata && itemType !== 'track') return reply.code(400).send({ ok: false, error: 'Album metadata reuse is only available for songs' });
-    const localAlbum = body?.useLocalAlbumMetadata && existing ? await existingAlbumMetadata(existing) : null;
-    if (body?.useLocalAlbumMetadata && !localAlbum) return reply.code(409).send({ ok: false, error: 'Matching album metadata is no longer available' });
-    const previous = existing?.metadata?.deezer as { state?: string; filename?: string } | undefined;
-    const missingStaged = existing?.item_type === itemType && existing.status === 'submitted'
-      && previous?.state === 'staged' && !await stagedMediaAvailable(existing);
-    const request = (await db().query<MediaRequestRow>(
-      `update plugin_media_requests set status='submitted', submitted_at=now(), approved_by=coalesce(approved_by,$3),
-        approved_at=coalesce(approved_at,now()), provider_error=null,
-        metadata=jsonb_set(metadata,'{deezer}',jsonb_build_object('state','downloading',
-          case when item_type='album' then 'albumId' else 'trackId' end,$4::text)), updated_at=now()
-       where id=$1 and plugin_id=$2 and item_type=$5 and (
-         (status in ('requested','approved','failed') and coalesce(metadata->'deezer'->>'state','') not in ('downloading','staged'))
-         or ($6::boolean and status='submitted' and metadata->'deezer'->>'state'='staged'
-           and metadata->'deezer'->>'filename'=$7)
-       ) returning *`,
-      [id, plugin.id, req.user!.userId, itemId, itemType, missingStaged, missingStaged ? previous?.filename : null]
-    )).rows[0];
-    if (!request) return reply.code(409).send({ ok: false, error: 'Request is not available for Deezer staging' });
-    const job = downloadDeezerRequest(request, itemId, localAlbum);
-    deezerJobs.set(id, job);
-    void audit('plugin_media_deezer_download_started', { pluginId: plugin.id, requestId: id, by: req.user!.userId,
-      itemType, deezerId: itemId }).catch(error => logger.warn('missing-music', `Could not audit Deezer start: ${errorMessage(error)}`));
-    await notifyRequest(request, 'downloading', 'An administrator started a Deezer download');
-    return reply.code(202).send({ ok: true, request: serializeRequest(request) });
+
+    try {
+      const body = req.body as { trackId?: unknown; albumId?: unknown; useLocalAlbumMetadata?: unknown } | null;
+      if (body?.albumId !== undefined && body.trackId !== undefined) return reply.code(400).send({ ok: false, error: 'Choose one Deezer item' });
+      const itemType = body?.albumId !== undefined ? 'album' : 'track';
+      const itemId = itemType === 'album' ? body?.albumId : body?.trackId;
+      if (typeof itemId !== 'string' || !/^\d{1,16}$/.test(itemId)) return reply.code(400).send({ ok: false, error: 'Invalid Deezer item id' });
+
+      const { id } = req.params as { id: string };
+      const existing = (await db().query<MediaRequestRow>(
+        'select * from plugin_media_requests where id=$1 and plugin_id=$2', [id, plugin.id]
+      )).rows[0];
+      if (!existing) return reply.code(404).send({ ok: false, error: 'Request not found' });
+      if (body?.useLocalAlbumMetadata !== undefined && typeof body.useLocalAlbumMetadata !== 'boolean') {
+        return reply.code(400).send({ ok: false, error: 'Invalid album metadata choice' });
+      }
+      if (body?.useLocalAlbumMetadata && itemType !== 'track') return reply.code(400).send({ ok: false, error: 'Album metadata reuse is only available for songs' });
+      const localAlbum = body?.useLocalAlbumMetadata ? await existingAlbumMetadata(existing) : null;
+      if (body?.useLocalAlbumMetadata && !localAlbum) return reply.code(409).send({ ok: false, error: 'Matching album metadata is no longer available' });
+      const previous = existing.metadata?.deezer as { state?: string; filename?: string } | undefined;
+      const missingStaged = existing.item_type === itemType && existing.status === 'submitted'
+        && previous?.state === 'staged' && !await stagedMediaAvailable(existing);
+      const request = (await db().query<MediaRequestRow>(
+        `update plugin_media_requests set status='submitted', submitted_at=now(), approved_by=coalesce(approved_by,$3),
+          approved_at=coalesce(approved_at,now()), provider_error=null,
+          metadata=jsonb_set(metadata,'{deezer}',jsonb_build_object('state','downloading',
+            case when item_type='album' then 'albumId' else 'trackId' end,$4::text)), updated_at=now()
+         where id=$1 and plugin_id=$2 and item_type=$5 and (
+           (status in ('requested','approved','failed') and coalesce(metadata->'deezer'->>'state','') not in ('downloading','staged'))
+           or ($6::boolean and status='submitted' and metadata->'deezer'->>'state'='staged'
+             and metadata->'deezer'->>'filename'=$7)
+         ) returning *`,
+        [id, plugin.id, req.user!.userId, itemId, itemType, missingStaged, missingStaged ? previous?.filename : null]
+      )).rows[0];
+      if (!request) return reply.code(409).send({ ok: false, error: 'Request is not available for Deezer staging' });
+
+      const job = downloadDeezerRequest(request, itemId, localAlbum);
+      deezerJobs.set(id, job);
+      void audit('plugin_media_deezer_download_started', {
+        pluginId: plugin.id,
+        requestId: id,
+        by: req.user!.userId,
+        itemType,
+        deezerId: itemId,
+      }).catch(error => logger.warn('missing-music', `Could not audit Deezer start: ${errorMessage(error)}`));
+      await notifyRequest(request, 'downloading', 'An administrator started a Deezer download');
+      return reply.code(202).send({ ok: true, request: serializeRequest(request) });
+    } finally {
+      releaseDeezerDownloadSlot();
+    }
   });
 
   app.get('/api/plugins/missing-music/requests/:id/deezer-file', async (req, reply) => {
