@@ -1362,6 +1362,28 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     };
   });
 
+  app.get('/api/plugins/missing-music/deezer-playlists', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    const q = optionalText((req.query as { q?: string }).q, 200) ?? '';
+    try {
+      const playlists = q ? await searchDeezerPlaylists(q) : await deezerFeaturedPlaylists();
+      return { ok: true, playlists };
+    } catch (error) {
+      logger.warn('missing-music', 'Deezer playlist discovery failed: ' + errorMessage(error));
+      return reply.code(502).send({ ok: false, error: 'Could not load Deezer playlists. Please try again.' });
+    }
+  });
+
+  app.get('/api/plugins/missing-music/deezer-playlist-imports', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    const result = await db().query<DeezerPlaylistImportRow>(
+      "select * from plugin_deezer_playlist_imports where plugin_id=$1 and user_id=$2 order by created_at desc limit 50",
+      [plugin.id, req.user!.userId]
+    );
+    return { ok: true, imports: result.rows.map(serializePlaylistImport) };
+  });
   app.get('/api/plugins/missing-music/artists', async (req, reply) => {
     const plugin = await requireExtension(req, reply);
     if (!plugin) return;
