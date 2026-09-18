@@ -627,9 +627,21 @@ async function loadDeletedTracks(libraryId: number): Promise<Set<string>> {
 
 // Get or create library
 async function getOrCreateLibrary(mountPath: string): Promise<number> {
-  const r = await db().query<{ id: number }>('SELECT id FROM libraries WHERE mount_path = $1', [mountPath]);
-  if (r.rows.length > 0) return Number(r.rows[0].id);
   const staging = STAGING_DIR === mountPath;
+  const r = await db().query<{ id: number; source_plugin_id: string | null }>(
+    'SELECT id, source_plugin_id FROM libraries WHERE mount_path = $1',
+    [mountPath]
+  );
+  if (r.rows.length > 0) {
+    const row = r.rows[0];
+    if (staging && row.source_plugin_id !== DEEZER_SOURCE_PLUGIN_ID) {
+      await db().query(
+        'UPDATE libraries SET source_plugin_id=$2, media_type=\'music\', enabled=true WHERE id=$1',
+        [row.id, DEEZER_SOURCE_PLUGIN_ID]
+      );
+    }
+    return Number(row.id);
+  }
   const ins = await db().query<{ id: number }>(
     `INSERT INTO libraries(mount_path, media_type, source_plugin_id) VALUES ($1, 'music', $2)
      ON CONFLICT (mount_path) DO UPDATE SET source_plugin_id = EXCLUDED.source_plugin_id RETURNING id`,
