@@ -1091,28 +1091,22 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       return reply.code(400).send({ ok: false, error: errorMessage(error) });
     }
     try {
-      const normalizedQuery = normalizeCatalogText(query);
-      const result = await musicBrainzFetch<{ artists?: MbArtist[] }>(
-        plugin,
-        `artist-search:${normalizedQuery}`,
-        'artist',
-        { query, limit: '10' }
-      );
-      const matches = (result.artists ?? [])
-        .filter((candidate) => validMbid(candidate.id) && typeof candidate.name === 'string' && candidate.name.trim()
-          && (Number(candidate.score) >= 60 || normalizeCatalogText(candidate.name).includes(normalizedQuery)))
-        .map((candidate) => ({
-          id: candidate.id!,
-          name: candidate.name!.trim(),
-          sortName: candidate['sort-name']?.trim() || null,
-          disambiguation: candidate.disambiguation?.trim() || null,
-          country: candidate.country?.trim() || null,
-          type: candidate.type?.trim() || null,
-          score: Number.isFinite(Number(candidate.score)) ? Number(candidate.score) : null,
-        }));
+      const matches = (await searchDeezerArtists(query)).map((candidate) => ({
+        id: candidate.id,
+        name: candidate.name,
+        sortName: candidate.name.split(/\s+/).reverse().join(', '),
+        disambiguation: null,
+        country: null,
+        type: 'Artist',
+        score: candidate.score,
+        cover: candidate.cover,
+        link: candidate.link,
+        source: 'deezer',
+      }));
       return { ok: true, matches };
     } catch (error) {
-      return reply.code(502).send({ ok: false, error: errorMessage(error) });
+      logger.warn('missing-music', 'Deezer artist search failed: ' + errorMessage(error));
+      return reply.code(502).send({ ok: false, error: 'Could not search Deezer artists. Please try again.' });
     }
   });
 
@@ -1122,26 +1116,123 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     try {
       const body = req.body as Record<string, unknown>;
       const localArtist = safeText(body.localArtist, 'Local artist', 500);
-      const musicBrainzId = validMbid(body.musicBrainzId) ? body.musicBrainzId : null;
-      if (!musicBrainzId) throw new Error('A valid MusicBrainz artist id is required');
-      const musicBrainzName = safeText(body.musicBrainzName, 'MusicBrainz artist name', 500);
-      const value = Buffer.from(JSON.stringify({ musicBrainzId, musicBrainzName }));
+      const deezerId = validDeezerId(body.deezerId) ? body.deezerId : null;
+      if (!deezerId) throw new Error('A valid Deezer artist id is required');
+      const verified = await deezerArtist(deezerId);
+      const deezerName = verified.name;
+      const value = Buffer.from(JSON.stringify({ deezerId, deezerName }));
       await db().query(
-        `insert into plugin_kv(plugin_id,key,value,expires_at,updated_at)
-         values($1,$2,$3,null,now())
-         on conflict(plugin_id,key) do update set value=excluded.value,expires_at=null,updated_at=now()`,
-        [plugin.id, artistMatchKey(req.user!.userId, localArtist), value]
+        "insert into plugin_kv(plugin_id,key,value,expires_at,updated_at) values($1,$2,$3,null,now()) " +
+        "on conflict(plugin_id,key) do update set value=excluded.value,expires_at=null,updated_at=now()",
+        [plugin.id, deezerArtistMatchKey(req.user!.userId, localArtist), value]
       );
-      await audit('plugin_artist_match_saved', {
+      await audit('plugin_deezer_artist_match_saved', {
         pluginId: plugin.id,
         localArtist,
-        musicBrainzId,
-        musicBrainzName,
+        deezerId,
+        deezerName,
         by: req.user!.userId,
       });
-      return { ok: true, match: { localArtist, musicBrainzId, musicBrainzName } };
+      return { ok: true, match: { localArtist, deezerId, deezerName } };
     } catch (error) {
       return reply.code(400).send({ ok: false, error: errorMessage(error) });
+    }
+  });
+
+  app.get('/api/plugins/missing-music/deezer-artists/:artistId/catalog', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    const { artistId } = req.params as { artistId: string };
+    const localArtist = optionalText((req.query as { localArtist?: string }).localArtist, 500) ?? '';
+    if (!validDeezerId(artistId)) return reply.code(400).send({ ok: false, error: 'Invalid Deezer artist id' });
+    try {
+      const [remoteArtist, localAlbums] = await Promise.all([
+        deezerArtist(artistId),
+        localAlbumsForArtist(req, localArtist),
+      ]);
+      const albums = await deezerAlbumsForArtist(artistId, {
+        artistName: remoteArtist.name,
+        releaseTypes: configuredReleaseTypes(plugin),
+        excludedTypes: configuredExcludedSecondaryTypes(plugin),
+        preferSpecial: plugin.config.preferSpecialEditions === true,
+      });
+      return {
+        ok: true,
+        artist: remoteArtist,
+        albums: albums.map((album) => {
+          const matched = bestLocalAlbum(album.title, localAlbums);
+          const localTrackCount = matched ? Number(matched.row.track_count) : 0;
+          const complete = Boolean(matched && album.trackCount > 0 && localTrackCount >= album.trackCount);
+          return {
+            id: album.id,
+            title: album.title,
+            primaryType: album.recordType,
+            secondaryTypes: album.secondaryTypes,
+            firstReleaseDate: album.releaseDate,
+            cover: album.cover,
+            trackCount: album.trackCount,
+            present: complete,
+            partial: Boolean(matched) && !complete,
+            localAlbum: matched?.row.album ?? null,
+            localTrackCount,
+            missingTrackCount: album.trackCount > 0 ? Math.max(0, album.trackCount - localTrackCount) : null,
+            matchConfidence: matched?.score ?? 0,
+          };
+        }),
+      };
+    } catch (error) {
+      logger.warn('missing-music', 'Deezer artist catalog failed: ' + errorMessage(error));
+      return reply.code(502).send({ ok: false, error: errorMessage(error) });
+    }
+  });
+
+  app.get('/api/plugins/missing-music/deezer-albums/:albumId/tracks', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    const { albumId } = req.params as { albumId: string };
+    const localArtist = optionalText((req.query as { localArtist?: string }).localArtist, 500) ?? '';
+    if (!validDeezerId(albumId)) return reply.code(400).send({ ok: false, error: 'Invalid Deezer album id' });
+    try {
+      const [{ album, tracks }, localAlbums] = await Promise.all([
+        deezerAlbumTracks(albumId),
+        localAlbumsForArtist(req, localArtist),
+      ]);
+      const matchedAlbum = bestLocalAlbum(album.title, localAlbums);
+      const localTracks = matchedAlbum
+        ? await localTracksForAlbum(req, localArtist, matchedAlbum.row.album)
+        : [];
+      return {
+        ok: true,
+        album: {
+          id: album.id,
+          title: album.title,
+          artist: album.artist,
+          releaseDate: album.releaseDate,
+          trackCount: album.trackCount,
+          localAlbum: matchedAlbum?.row.album ?? null,
+          matchConfidence: matchedAlbum?.score ?? 0,
+        },
+        tracks: tracks.map((track) => {
+          const match = matchDeezerTrack(track, localTracks);
+          return {
+            id: track.id,
+            recordingId: track.id,
+            title: track.title,
+            discNumber: track.discNumber,
+            trackNumber: track.trackNumber,
+            number: String(track.trackNumber),
+            durationMs: track.durationMs,
+            isrc: track.isrc,
+            missing: !match.present,
+            matchConfidence: match.confidence,
+            matchReason: match.reason,
+            localTrackId: match.localTrackId,
+          };
+        }),
+      };
+    } catch (error) {
+      logger.warn('missing-music', 'Deezer album track lookup failed: ' + errorMessage(error));
+      return reply.code(502).send({ ok: false, error: errorMessage(error) });
     }
   });
 
