@@ -1143,6 +1143,12 @@ export async function initDb() {
   await pool.query(
     'create index if not exists plugin_media_requests_user_created_idx on plugin_media_requests(user_id, created_at desc)'
   );
+  await pool.query('alter table plugin_media_requests add column if not exists deezer_artist_id text');
+  await pool.query('alter table plugin_media_requests add column if not exists deezer_album_id text');
+  await pool.query('alter table plugin_media_requests add column if not exists deezer_track_id text');
+  await pool.query('alter table plugin_media_requests add column if not exists requested_isrc text');
+  await pool.query('create index if not exists plugin_media_requests_deezer_album_idx on plugin_media_requests(plugin_id, deezer_album_id)');
+  await pool.query('create index if not exists plugin_media_requests_deezer_track_idx on plugin_media_requests(plugin_id, deezer_track_id)');
 
   // ========================================================================
   // USER PREFERENCES
