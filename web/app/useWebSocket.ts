@@ -657,8 +657,8 @@ export function useWebSocket(authIdentity: string | null) {
             }
             } else if (msg.type === 'missing-music:update') {
               useMissingMusicUpdates.getState().setEvent(msg);
-              if (msg.data.event !== 'download-progress') {
-                const failed = msg.data.status === 'failed' || msg.data.status === 'rejected';
+              if (!['download-progress', 'playlist-import-progress'].includes(msg.data.event)) {
+                const failed = msg.data.status === 'failed' || msg.data.status === 'rejected' || msg.data.status === 'partial';
                 useToastStore.getState().show(
                   msg.data.message || `${msg.data.title}: ${msg.data.status}`,
                   failed ? 'error' : 'success',
