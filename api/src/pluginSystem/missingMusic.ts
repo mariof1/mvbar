@@ -351,6 +351,21 @@ async function requireExtension(req: FastifyRequest, reply: FastifyReply) {
   return plugin;
 }
 
+async function ensureMissingMusicLibraryAccess(userId: string) {
+  const staging = deezerStagingConfig();
+  if (!staging.directory) return null;
+  const library = (await db().query<{ id: number | string }>(
+    "insert into libraries(mount_path,media_type,enabled,source_plugin_id) values($1,'music',true,$2) " +
+    "on conflict(mount_path) do update set enabled=true,source_plugin_id=excluded.source_plugin_id returning id",
+    [staging.directory, MISSING_MUSIC_PLUGIN_ID]
+  )).rows[0];
+  const libraryId = Number(library.id);
+  await db().query(
+    'insert into user_libraries(user_id,library_id) values($1,$2) on conflict(user_id,library_id) do nothing',
+    [userId, libraryId]
+  );
+  return libraryId;
+}
 function libraryFilter(allowed: number[] | null, startParameter: number) {
   return allowed === null
     ? { sql: '', params: [] as unknown[] }
@@ -691,8 +706,12 @@ async function startDeezerPlaylistImport(
     'select * from plugin_deezer_playlist_imports where plugin_id=$1 and user_id=$2 and deezer_playlist_id=$3',
     [plugin.id, userId, playlistId]
   )).rows[0];
-  if (existingImport) return { alreadyImported: true, importRow: existingImport };
+  if (existingImport) {
+    await ensureMissingMusicLibraryAccess(userId);
+    return { alreadyImported: true, importRow: existingImport };
+  }
 
+  await ensureMissingMusicLibraryAccess(userId);
   const { playlist, tracks } = await deezerPlaylistTracks(playlistId, 1000);
   const seenTrackIds = new Set<string>();
   const uniqueTracks = tracks.filter((track) => {
@@ -1067,6 +1086,7 @@ async function startAutomaticDeezerDownload(plugin: MissingMusicPluginRow, reque
 
   const staging = deezerStagingConfig();
   if (!staging.configured) throw new Error(staging.error);
+  await ensureMissingMusicLibraryAccess(request.user_id);
 
   let itemId = request.item_type === 'album' ? request.deezer_album_id : request.deezer_track_id;
   if (!itemId) {
