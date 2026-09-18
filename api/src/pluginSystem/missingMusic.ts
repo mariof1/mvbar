@@ -681,16 +681,18 @@ async function localCandidatesForPlaylistItems(
 ): Promise<LocalPlaylistCandidate[]> {
   if (!items.length) return [];
   const allowed = await allowedLibrariesForUser(userId, role);
-  const filter = libraryFilter(allowed, 3);
+  const filter = libraryFilter(allowed, 4);
   const titles = [...new Set(items.map(item => item.title.toLocaleLowerCase('en')))];
+  const titleKeys = [...new Set(items.map(item => songMatchKey(item.title)).filter(Boolean))];
   const isrcs = [...new Set(items.map(item => compactIsrc(item.isrc)).filter(Boolean))];
   const sql =
     "select track.id,track.title,track.artist,track.album_artist,track.album,track.isrc," +
     "track.duration_ms,track.track_number,track.disc_number from active_tracks track " +
     "where (lower(track.title)=any($1::text[]) or " +
-    "($2::text[] <> '{}'::text[] and regexp_replace(upper(coalesce(track.isrc,'')),'[^A-Z0-9]','','g')=any($2::text[]))) " +
+    "regexp_replace(lower(normalize(coalesce(track.title,''), NFKD)), '[^[:alnum:]]', '', 'g')=any($2::text[]) or " +
+    "regexp_replace(upper(coalesce(track.isrc,'')),'[^A-Z0-9]','','g')=any($3::text[])) " +
     filter.sql;
-  const result = await db().query<LocalPlaylistCandidate>(sql, [titles, isrcs, ...filter.params]);
+  const result = await db().query<LocalPlaylistCandidate>(sql, [titles, titleKeys, isrcs, ...filter.params]);
   return result.rows;
 }
 
@@ -1451,17 +1453,19 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       if (!songs.length) return { ok: true, enabled: true, songs: [] };
 
       const allowed = await allowedLibrariesForUser(req.user.userId, req.user.role);
-      const filter = libraryFilter(allowed, 3);
+      const filter = libraryFilter(allowed, 4);
       const titles = [...new Set(songs.map(song => song.title.toLocaleLowerCase('en')))];
+      const titleKeys = [...new Set(songs.map(song => songMatchKey(song.title)).filter(Boolean))];
       const isrcs = [...new Set(songs.map(song => (song.isrc ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '')).filter(Boolean))];
       const localSql =
         "select track.id,track.title,track.artist,track.album_artist,track.album,track.isrc,track.duration_ms,track.track_number,track.disc_number " +
         "from active_tracks track where (lower(track.title)=any($1::text[]) " +
-        "or regexp_replace(upper(coalesce(track.isrc,'')),'[^A-Z0-9]','','g')=any($2::text[])) " +
+        "or regexp_replace(lower(normalize(coalesce(track.title,''), NFKD)), '[^[:alnum:]]', '', 'g')=any($2::text[]) " +
+        "or regexp_replace(upper(coalesce(track.isrc,'')),'[^A-Z0-9]','','g')=any($3::text[])) " +
         filter.sql;
       const local = await db().query<LocalTrack & { artist: string | null; album_artist: string | null }>(
         localSql,
-        [titles, isrcs, ...filter.params]
+        [titles, titleKeys, isrcs, ...filter.params]
       );
 
       const requested = await db().query<{ deezer_track_id: string }>(
