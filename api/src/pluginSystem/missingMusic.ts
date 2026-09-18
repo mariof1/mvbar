@@ -26,6 +26,7 @@ type MissingMusicConfig = {
   providerApiToken?: string;
   allowPrivateProvider?: boolean;
   requireAdminApproval?: boolean;
+  autoDownloadDeezer?: boolean;
   musicBrainzContact?: string;
   releaseGroupTypes?: string;
   excludedSecondaryTypes?: string;
@@ -223,8 +224,20 @@ async function validateProviderBaseUrl(raw: unknown, allowPrivate: boolean) {
 }
 
 export async function validateMissingMusicConfig(config: Record<string, unknown>) {
-  if (config.providerBaseUrl) {
+  const providerConfigured = typeof config.providerBaseUrl === 'string' && config.providerBaseUrl.trim().length > 0;
+  const autoDownloadDeezer = config.autoDownloadDeezer === true;
+
+  if (providerConfigured) {
     await validateProviderBaseUrl(config.providerBaseUrl, config.allowPrivateProvider === true);
+  }
+  if (autoDownloadDeezer && config.requireAdminApproval !== false) {
+    throw new Error('Automatic Deezer downloads require administrator approval to be disabled');
+  }
+  if (autoDownloadDeezer && providerConfigured) {
+    throw new Error('Automatic Deezer downloads cannot be used with an external request provider');
+  }
+  if (autoDownloadDeezer && !deezerStagingConfig().configured) {
+    throw new Error('Configure Deezer staging before enabling automatic downloads');
   }
 }
 
@@ -567,6 +580,49 @@ async function existingAlbumMetadata(request: MediaRequestRow): Promise<Existing
   return result.rows[0] ?? null;
 }
 
+async function startAutomaticDeezerDownload(plugin: MissingMusicPluginRow, request: MediaRequestRow) {
+  if (request.status !== 'approved' || deezerJobs.has(request.id)) return;
+
+  const staging = deezerStagingConfig();
+  if (!staging.configured) throw new Error(staging.error);
+
+  const candidates = request.item_type === 'album'
+    ? await searchDeezerAlbums(request.artist, request.title)
+    : await searchDeezerTracks(request.artist, request.title, request.album);
+  const candidate = candidates[0];
+  if (!candidate) {
+    throw new Error('No confident Deezer match was found for automatic download');
+  }
+
+  const key = request.item_type === 'album' ? 'albumId' : 'trackId';
+  const claimed = (await db().query<MediaRequestRow>(
+    `update plugin_media_requests
+        set status='submitted', submitted_at=now(), provider_error=null,
+            metadata=jsonb_set(metadata,'{deezer}',
+              jsonb_build_object('state','downloading',$2::text,$3::text,'automatic',true)),
+            updated_at=now()
+      where id=$1 and plugin_id=$4 and status='approved' and not (metadata ? 'deezer')
+      returning *`,
+    [request.id, key, candidate.id, plugin.id]
+  )).rows[0];
+  if (!claimed) return;
+
+  const localAlbum = claimed.item_type === 'track' ? await existingAlbumMetadata(claimed) : null;
+  const job = downloadDeezerRequest(claimed, candidate.id, localAlbum);
+  deezerJobs.set(claimed.id, job);
+  void job;
+
+  void audit('plugin_media_deezer_download_started', {
+    pluginId: plugin.id,
+    requestId: claimed.id,
+    by: claimed.user_id,
+    itemType: claimed.item_type,
+    deezerId: candidate.id,
+    automatic: true,
+  }).catch(error => logger.warn('missing-music', `Could not audit automatic Deezer start: ${errorMessage(error)}`));
+  await notifyRequest(claimed, 'downloading', 'Automatic Deezer download started');
+}
+
 async function downloadDeezerRequest(request: MediaRequestRow, itemId: string, localAlbum: ExistingAlbumMetadata | null) {
   try {
     const album = request.item_type === 'album'
@@ -744,7 +800,14 @@ export async function runMissingMusicJobs() {
   schedulerBusy = true;
   try {
     const plugin = await getMissingMusicPlugin(true);
-    if (!plugin || !plugin.config.providerBaseUrl) return;
+    if (!plugin) return;
+
+    const providerConfigured = Boolean(plugin.config.providerBaseUrl?.trim());
+    const autoDownloadDeezer = !providerConfigured
+      && plugin.config.requireAdminApproval === false
+      && plugin.config.autoDownloadDeezer === true;
+    if (!providerConfigured && !autoDownloadDeezer) return;
+
     const jobs = await db().query<MediaRequestRow>(
       `select * from plugin_media_requests
         where plugin_id=$1 and status in ('approved','submitted') and not (metadata ? 'deezer')
@@ -753,7 +816,11 @@ export async function runMissingMusicJobs() {
     );
     for (const request of jobs.rows) {
       try {
-        await processRequest(plugin, request);
+        if (providerConfigured) {
+          await processRequest(plugin, request);
+        } else if (autoDownloadDeezer && request.status === 'approved') {
+          await startAutomaticDeezerDownload(plugin, request);
+        }
       } catch (error) {
         await failRequest(request, error);
       }
@@ -871,6 +938,11 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       deezerStagingDirectory: req.user.role === 'admin' ? staging.directory || null : null,
       mode: providerConfigured ? 'provider' : 'wanted-list',
       requireAdminApproval: installed?.config.requireAdminApproval !== false,
+      autoDownloadDeezer: Boolean(
+        installed?.config.requireAdminApproval === false
+        && installed?.config.autoDownloadDeezer === true
+        && !providerConfigured
+      ),
       localArtistCount,
       taggedArtistCount,
     };
