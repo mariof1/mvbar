@@ -713,7 +713,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         from track_artists ta
         join active_tracks t on t.id = ta.track_id
         where ta.artist_id = $1
-          and (ta.role = 'albumartist' or (ta.role = 'artist' and nullif(btrim(t.album), '') is null and not exists (select 1 from track_artists credit where credit.track_id=t.id and credit.role='albumartist')))
+          and (ta.role = 'albumartist' or (ta.role = 'artist' and not exists (select 1 from track_artists credit where credit.track_id=t.id and credit.role='albumartist')))
           ${libFilter}
         order by ${albumNameSql}, t.path
       ),
@@ -723,7 +723,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         from track_artists ta
         join active_tracks t on t.id = ta.track_id
         where ta.artist_id = $1
-          and (ta.role = 'albumartist' or (ta.role = 'artist' and nullif(btrim(t.album), '') is null and not exists (select 1 from track_artists credit where credit.track_id=t.id and credit.role='albumartist')))
+          and (ta.role = 'albumartist' or (ta.role = 'artist' and not exists (select 1 from track_artists credit where credit.track_id=t.id and credit.role='albumartist')))
           ${libFilter}
         group by ${albumNameSql}
       )
@@ -758,7 +758,7 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         from track_artists ta
         join active_tracks t on t.id = ta.track_id
         where ta.artist_id = $1
-          and (ta.role = 'albumartist' or (ta.role = 'artist' and nullif(btrim(t.album), '') is null and not exists (select 1 from track_artists credit where credit.track_id=t.id and credit.role='albumartist')))
+          and (ta.role = 'albumartist' or (ta.role = 'artist' and not exists (select 1 from track_artists credit where credit.track_id=t.id and credit.role='albumartist')))
           ${libFilter}
       ),
       album_tracks as (
