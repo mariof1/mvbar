@@ -28,6 +28,8 @@ type PlayerState = {
   queue: QueueTrack[];
   index: number;
   isOpen: boolean;
+  isPlaying: boolean;
+  setIsPlaying: (playing: boolean) => void;
   setQueueAndPlay: (tracks: QueueTrack[], startIndex: number, play?: boolean) => Promise<void> | null;
   playTrackNow: (t: QueueTrack) => void;
   playIndex: (idx: number) => Promise<void> | null;
@@ -69,12 +71,14 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   queue: [],
   index: 0,
   isOpen: false,
+  isPlaying: false,
+  setIsPlaying: (playing) => set({ isPlaying: playing }),
   setQueueAndPlay: (tracks, startIndex, play = true) => {
     closePodcastPlayer();
     closeAudiobookPlayer();
     if (tracks.length === 0) {
       stopMusicPlayback(true);
-      set({ queue: [], index: 0, isOpen: false });
+      set({ queue: [], index: 0, isOpen: false, isPlaying: false });
       return null;
     }
     const normalizedTracks = tracks.map(normalizeQueueTrack);
@@ -178,7 +182,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       newIndex = Math.max(0, newQueue.length - 1);
     }
     if (newQueue.length === 0) {
-      set({ queue: [], index: 0, isOpen: false });
+      set({ queue: [], index: 0, isOpen: false, isPlaying: false });
       stopMusicPlayback(true);
     } else {
       set({ queue: newQueue, index: newIndex });
@@ -228,10 +232,10 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
   close: () => {
     stopMusicPlayback(true);
-    set({ isOpen: false });
+    set({ isOpen: false, isPlaying: false });
   },
   reset: () => {
     stopMusicPlayback(true);
-    set({ queue: [], index: 0, isOpen: false });
+    set({ queue: [], index: 0, isOpen: false, isPlaying: false });
   },
 }));
