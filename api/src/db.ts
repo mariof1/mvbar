@@ -1217,14 +1217,14 @@ export async function initDb() {
     update plugin_deezer_playlist_items item
        set unavailable=true,
            error='Unavailable on Deezer for this account or region'
-      from plugin_media_requests request
-     where item.request_id=request.id
+      from plugin_media_requests req
+     where item.request_id=req.id
        and item.state='failed'
        and item.unavailable=false
-       and request.provider_error like '%NonStreamableError%'
+       and req.provider_error like '%NonStreamableError%'
   `);
   await pool.query(`
-    update plugin_deezer_playlist_imports import
+    update plugin_deezer_playlist_imports imp
        set unavailable_tracks=summary.unavailable,
            failed_tracks=summary.failed,
            updated_at=now()
@@ -1235,7 +1235,7 @@ export async function initDb() {
           from plugin_deezer_playlist_items
          group by import_id
       ) summary
-     where import.id=summary.import_id
+     where imp.id=summary.import_id
   `);
   await pool.query('alter table plugin_media_requests add column if not exists deezer_artist_id text');
   await pool.query('alter table plugin_media_requests add column if not exists deezer_album_id text');
