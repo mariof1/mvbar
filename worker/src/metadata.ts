@@ -149,7 +149,7 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const bpm = Number.isFinite(bpmNumber) && bpmNumber > 0 ? Math.round(bpmNumber) : null;
   
   // Initial key (musical key)
-  const initialKey = sanitize(nativeValues(m, ['tkey', 'TKEY', 'key', 'initialkey', 'INITIALKEY'])[0] ?? commonAny.key);
+  const initialKey = sanitize(nativeValues(m, ['tkey', 'TKEY', 'key', 'initialkey', 'INITIALKEY', '----:com.apple.iTunes:INITIALKEY'])[0] ?? commonAny.key);
   
   // Composer
   const composerRaw = [
@@ -161,13 +161,13 @@ export async function readTags(filePath: string): Promise<TagResult> {
   // Conductor
   const conductorRaw = [
     ...(commonAny.conductor ? (Array.isArray(commonAny.conductor) ? commonAny.conductor : [commonAny.conductor]) : []),
-    ...nativeValues(m, ['tpe3', 'TPE3', 'conductor', 'CONDUCTOR'])
+    ...nativeValues(m, ['tpe3', 'TPE3', 'conductor', 'CONDUCTOR', '----:com.apple.iTunes:CONDUCTOR'])
   ];
   const conductor = conductorRaw.length ? sanitize(conductorRaw.join('; ')) : null;
   
   // Publisher/Label (may be array in music-metadata)
   const publisherRaw = firstOf(commonAny.label) ?? firstOf(commonAny.publisher) ?? 
-    nativeValues(m, ['tpub', 'TPUB', 'label', 'LABEL', 'publisher', 'PUBLISHER'])[0];
+    nativeValues(m, ['tpub', 'TPUB', 'label', 'LABEL', 'publisher', 'PUBLISHER', '----:com.apple.iTunes:PUBLISHER'])[0];
   const publisher = sanitize(publisherRaw);
   
   // Copyright
@@ -181,7 +181,7 @@ export async function readTags(filePath: string): Promise<TagResult> {
   
   // Mood
   const mood = sanitize(
-    nativeValues(m, ['tmoo', 'TMOO', 'mood', 'MOOD', 'TXXX:MOOD', 'TXXX:mood'])[0]
+    nativeValues(m, ['tmoo', 'TMOO', 'mood', 'MOOD', 'TXXX:MOOD', 'TXXX:mood', '----:com.apple.iTunes:MOOD'])[0]
   );
   
   // Grouping
@@ -191,7 +191,7 @@ export async function readTags(filePath: string): Promise<TagResult> {
   
   // ISRC (may be array in music-metadata)
   const isrc = sanitize(
-    firstOf(commonAny.isrc) ?? nativeValues(m, ['tsrc', 'TSRC', 'isrc', 'ISRC'])[0]
+    firstOf(commonAny.isrc) ?? nativeValues(m, ['tsrc', 'TSRC', 'isrc', 'ISRC', '----:com.apple.iTunes:ISRC'])[0]
   );
   
   // Release date (full date if available)
@@ -201,7 +201,7 @@ export async function readTags(filePath: string): Promise<TagResult> {
   
   // Original year
   const originalYearRaw = commonAny.originalyear ?? commonAny.originaldate 
-    ?? nativeValues(m, ['tory', 'TORY', 'tdor', 'TDOR', 'originalyear', 'ORIGINALYEAR'])[0];
+    ?? nativeValues(m, ['tory', 'TORY', 'tdor', 'TDOR', 'originalyear', 'ORIGINALYEAR', '----:com.apple.iTunes:ORIGINALYEAR'])[0];
   const originalYear = originalYearRaw ? parseInt(String(originalYearRaw).slice(0, 4), 10) || null : null;
   
   // Compilation flag
@@ -225,19 +225,19 @@ export async function readTags(filePath: string): Promise<TagResult> {
   // MusicBrainz IDs
   const musicbrainzTrackId = sanitize(
     commonAny.musicbrainz_trackid ?? commonAny.musicbrainz_recordingid 
-    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_TRACKID', 'TXXX:MusicBrainz Track Id', 'TXXX:MUSICBRAINZ_RECORDINGID'])[0]
+    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_TRACKID', 'TXXX:MusicBrainz Track Id', 'TXXX:MUSICBRAINZ_RECORDINGID', '----:com.apple.iTunes:MusicBrainz Track Id'])[0]
   );
   const musicbrainzReleaseId = sanitize(
     commonAny.musicbrainz_albumid 
-    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_ALBUMID', 'TXXX:MusicBrainz Album Id'])[0]
+    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_ALBUMID', 'TXXX:MusicBrainz Album Id', '----:com.apple.iTunes:MusicBrainz Album Id'])[0]
   );
   const musicbrainzArtistId = sanitize(
     commonAny.musicbrainz_artistid?.[0] ?? commonAny.musicbrainz_artistid
-    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_ARTISTID', 'TXXX:MusicBrainz Artist Id'])[0]
+    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_ARTISTID', 'TXXX:MusicBrainz Artist Id', '----:com.apple.iTunes:MusicBrainz Artist Id'])[0]
   );
   const musicbrainzAlbumArtistId = sanitize(
     commonAny.musicbrainz_albumartistid?.[0] ?? commonAny.musicbrainz_albumartistid
-    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_ALBUMARTISTID', 'TXXX:MusicBrainz Album Artist Id'])[0]
+    ?? nativeValues(m, ['TXXX:MUSICBRAINZ_ALBUMARTISTID', 'TXXX:MusicBrainz Album Artist Id', '----:com.apple.iTunes:MusicBrainz Album Artist Id'])[0]
   );
 
   // === Genre/Country/Language classification ===
@@ -245,11 +245,11 @@ export async function readTags(filePath: string): Promise<TagResult> {
     genres: m.common.genre ?? [],
     countries: [
       ...(Array.isArray(commonAny.country) ? commonAny.country : commonAny.country ? [commonAny.country] : []),
-      ...nativeValues(m, ['country', 'tXXX:country', 'tXXX:Country', 'TXXX:Country', 'TXXX:COUNTRY'])
+      ...nativeValues(m, ['country', 'tXXX:country', 'tXXX:Country', 'TXXX:Country', 'TXXX:COUNTRY', '----:com.apple.iTunes:COUNTRY'])
     ],
     languages: [
       ...(Array.isArray(commonAny.language) ? commonAny.language : commonAny.language ? [commonAny.language] : []),
-      ...nativeValues(m, ['language', 'lang', 'tlan', 'TLAN', 'tXXX:language', 'tXXX:Language', 'TXXX:Language', 'TXXX:LANGUAGE'])
+      ...nativeValues(m, ['language', 'lang', 'tlan', 'TLAN', 'tXXX:language', 'tXXX:Language', 'TXXX:Language', 'TXXX:LANGUAGE', '----:com.apple.iTunes:LANGUAGE'])
     ]
   });
 
