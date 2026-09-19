@@ -183,7 +183,8 @@ subscriber.on('message', async (channel, message) => {
         return;
       }
       try {
-        const result = await refreshTrackMetadata(mountPath, relPath);
+        const fields = Array.isArray(cmd.fields) ? cmd.fields.filter((field: unknown): field is string => typeof field === 'string') : [];
+        const result = await refreshTrackMetadata(mountPath, relPath, fields);
         await commandResults.set(resultKey, JSON.stringify({ ok: true, ...result }), 'EX', 60);
         logger.info('metadata', `Refreshed metadata for ${relPath}`);
       } catch (error) {
