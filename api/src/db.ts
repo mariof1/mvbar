@@ -1213,6 +1213,30 @@ export async function initDb() {
   await pool.query('alter table plugin_deezer_playlist_items add column if not exists track_number integer');
   await pool.query('alter table plugin_deezer_playlist_items add column if not exists disc_number integer');
   await pool.query('alter table plugin_deezer_playlist_items add column if not exists unavailable boolean not null default false');
+  await pool.query(`
+    update plugin_deezer_playlist_items item
+       set unavailable=true,
+           error='Unavailable on Deezer for this account or region'
+      from plugin_media_requests request
+     where item.request_id=request.id
+       and item.state='failed'
+       and item.unavailable=false
+       and request.provider_error like '%NonStreamableError%'
+  `);
+  await pool.query(`
+    update plugin_deezer_playlist_imports import
+       set unavailable_tracks=summary.unavailable,
+           failed_tracks=summary.failed,
+           updated_at=now()
+      from (
+        select import_id,
+               count(*) filter(where state='failed' and unavailable=true)::int unavailable,
+               count(*) filter(where state='failed' and unavailable=false)::int failed
+          from plugin_deezer_playlist_items
+         group by import_id
+      ) summary
+     where import.id=summary.import_id
+  `);
   await pool.query('alter table plugin_media_requests add column if not exists deezer_artist_id text');
   await pool.query('alter table plugin_media_requests add column if not exists deezer_album_id text');
   await pool.query('alter table plugin_media_requests add column if not exists deezer_track_id text');
