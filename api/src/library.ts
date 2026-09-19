@@ -9,8 +9,8 @@ import {
   removeRateLimitBypassIP,
 } from './rateLimitBypass.js';
 import { access, constants } from 'node:fs/promises';
-import { readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolveInside } from './pathSafety.js';
 import { artistDisplay } from './artistDisplay.js';
@@ -20,32 +20,48 @@ import path from 'node:path';
 
 const LIBRARY_READ_ONLY = process.env.LIBRARY_READ_ONLY === '1';
 const LIBRARY_PROBE_TIMEOUT_MS = 3000;
-const FLAC_EDITOR = fileURLToPath(new URL('../scripts/edit_flac_metadata.py', import.meta.url));
+const AUDIO_METADATA_EDITOR = fileURLToPath(new URL('../scripts/edit_audio_metadata.py', import.meta.url));
+const EDITABLE_AUDIO_EXTENSIONS = new Set(['.mp3', '.flac', '.m4a', '.mp4', '.ogg', '.opus', '.wav']);
+const METADATA_REFRESH_TIMEOUT_MS = 30_000;
+
+type MetadataUpdate = {
+  title?: string | null;
+  artists?: string[] | null;
+  album?: string | null;
+  albumArtists?: string[] | null;
+  genres?: string[] | null;
+  countries?: string[] | null;
+  languages?: string[] | null;
+  trackNumber?: number | null;
+  trackTotal?: number | null;
+  discNumber?: number | null;
+  discTotal?: number | null;
+  releaseDate?: string | null;
+  originalYear?: number | null;
+  bpm?: number | null;
+  initialKey?: string | null;
+  composers?: string[] | null;
+  conductors?: string[] | null;
+  publisher?: string | null;
+  copyright?: string | null;
+  comment?: string | null;
+  mood?: string | null;
+  grouping?: string | null;
+  isrc?: string | null;
+  compilation?: boolean | null;
+  titleSort?: string | null;
+  artistSort?: string | null;
+  albumSort?: string | null;
+  albumArtistSort?: string | null;
+  musicbrainzTrackId?: string | null;
+  musicbrainzReleaseId?: string | null;
+  musicbrainzArtistId?: string | null;
+  musicbrainzAlbumArtistId?: string | null;
+};
 
 function isWritableStagingLibrary(library: { mount_path: string; source_plugin_id: string | null }) {
   const staging = deezerStagingConfig().directory;
   return library.source_plugin_id === 'mvbar.missing-music' && Boolean(staging) && path.resolve(library.mount_path) === staging;
-}
-
-function updateFlacTag(file: string, values: Parameters<typeof updateId3Tag>[1]): Promise<void> {
-  const python = deezerStagingConfig().python;
-  return new Promise((resolve, reject) => {
-    const child = spawn(python, [FLAC_EDITOR, file], { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
-    let stderr = '';
-    let settled = false;
-    const timer = setTimeout(() => child.kill(), 30_000);
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error); else resolve();
-    };
-    child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(0, 500); });
-    child.stdin.on('error', error => finish(new Error(`Could not send FLAC metadata: ${error.message}`)));
-    child.on('error', error => finish(new Error(`Could not start FLAC metadata editor: ${error.message}`)));
-    child.on('close', code => finish(code === 0 ? undefined : new Error(stderr || 'FLAC metadata update failed')));
-    child.stdin.end(JSON.stringify(values));
-  });
 }
 
 function safeJoinMount(mountPath: string, relPath: string) {
@@ -68,266 +84,91 @@ async function probeAccess(target: string, mode?: number): Promise<boolean | nul
   }
 }
 
-type Id3Frame = { id: string; data: Buffer; flags: Buffer; txxxDescription?: string };
-
-function decodeSyncSafeInt(buf: Buffer) {
-  // 4 bytes, 7 bits each
-  return ((buf[0] & 0x7f) << 21) | ((buf[1] & 0x7f) << 14) | ((buf[2] & 0x7f) << 7) | (buf[3] & 0x7f);
-}
-
-function encodeSyncSafeInt(n: number) {
-  return Buffer.from([(n >> 21) & 0x7f, (n >> 14) & 0x7f, (n >> 7) & 0x7f, n & 0x7f]);
-}
-
-function encodeUtf16WithBom(s: string) {
-  return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(s, 'utf16le')]);
-}
-
-function decodeText(buf: Buffer, encodingByte: number) {
-  if (!buf.length) return '';
-  if (encodingByte === 0x01 || encodingByte === 0x02) {
-    // UTF-16 with/without BOM (best-effort)
-    if (buf.length >= 2) {
-      const b0 = buf[0];
-      const b1 = buf[1];
-      if (b0 === 0xff && b1 === 0xfe) return buf.subarray(2).toString('utf16le');
-      if (b0 === 0xfe && b1 === 0xff) {
-        const swapped = Buffer.alloc(buf.length - 2);
-        for (let i = 2; i + 1 < buf.length; i += 2) {
-          swapped[i - 2] = buf[i + 1];
-          swapped[i - 1] = buf[i];
-        }
-        return swapped.toString('utf16le');
-      }
-    }
-    // Assume LE
-    return buf.toString('utf16le');
-  }
-  if (encodingByte === 0x03) return buf.toString('utf8');
-  return buf.toString('latin1');
-}
-
-function parseTxxxDescription(frameData: Buffer) {
-  if (!frameData.length) return undefined;
-  const enc = frameData[0] ?? 0x00;
-  const charSize = enc === 0x01 || enc === 0x02 ? 2 : 1;
-  let pos = 1;
-  for (; pos + charSize - 1 < frameData.length; pos += charSize) {
-    let isTerm = true;
-    for (let j = 0; j < charSize; j++) if (frameData[pos + j] !== 0x00) isTerm = false;
-    if (isTerm) break;
-  }
-  const descBuf = frameData.subarray(1, pos);
-  return decodeText(descBuf, enc).replace(/\0/g, '').trim() || undefined;
-}
-
-function buildFrame(id: string, data: Buffer, version: 3 | 4, flags?: Buffer) {
-  const header = Buffer.alloc(10);
-  header.write(id, 0, 4, 'ascii');
-  if (version === 4) encodeSyncSafeInt(data.length).copy(header, 4);
-  else header.writeUInt32BE(data.length, 4);
-  (flags ?? Buffer.from([0x00, 0x00])).copy(header, 8);
-  return Buffer.concat([header, data]);
-}
-
-function buildTextFrame(id: string, values: string[], version: 3 | 4) {
-  if (!values.length) return null;
-  const joined = version === 4 ? values.join('\u0000') : values.join('/');
-  const text = encodeUtf16WithBom(joined);
-  const body = Buffer.concat([Buffer.from([0x01]), text]);
-  return buildFrame(id, body, version);
-}
-
-function buildTxxxFrame(description: string, values: string[], version: 3 | 4) {
-  if (!values.length) return null;
-  const joined = version === 4 ? values.join('\u0000') : values.join('/');
-  const desc = encodeUtf16WithBom(description);
-  const val = encodeUtf16WithBom(joined);
-  const body = Buffer.concat([Buffer.from([0x01]), desc, Buffer.from([0x00, 0x00]), val]);
-  return buildFrame('TXXX', body, version);
-}
-
-function applyUnsync(buf: Buffer) {
-  // Insert 0x00 after 0xFF if next byte is 0x00 or >= 0xE0 (prevents false MPEG syncs).
-  const out: number[] = [];
-  for (let i = 0; i < buf.length; i++) {
-    const b = buf[i]!;
-    out.push(b);
-    if (b === 0xff) {
-      const next = buf[i + 1];
-      if (next === 0x00 || (next !== undefined && (next & 0xe0) === 0xe0)) out.push(0x00);
-    }
-  }
-  return Buffer.from(out);
-}
-
-function parseId3Frames(file: Buffer): { frames: Id3Frame[]; audioOffset: number; version: 3 | 4; usesSyncsafeFrameSizes: boolean; headerFlags: number } {
-  if (file.length < 10 || file.toString('ascii', 0, 3) !== 'ID3') return { frames: [], audioOffset: 0, version: 3, usesSyncsafeFrameSizes: false, headerFlags: 0 };
-
-  const version = (file[3] === 4 ? 4 : 3) as 3 | 4;
-  const flags = file[5] ?? 0;
-  const tagSize = decodeSyncSafeInt(file.subarray(6, 10));
-  const tagEnd = Math.min(file.length, 10 + tagSize);
-  let body = file.subarray(10, tagEnd);
-
-  // Skip extended header if present.
-  const hasExtended = (flags & 0x40) !== 0;
-  if (hasExtended && body.length >= 4) {
-    // v2.3 extended headers are messy in the wild; if present we just skip a conservative amount.
-    const extSize = version === 4 ? decodeSyncSafeInt(body.subarray(0, 4)) : body.readUInt32BE(0);
-    const extTotal = version === 4 ? extSize : extSize + 4;
-    if (extTotal > 0 && extTotal <= body.length) body = body.subarray(extTotal);
-  }
-
-  const frames: Id3Frame[] = [];
-  let pos = 0;
-  let usesSyncsafeFrameSizes = version === 4;
-
-  while (pos + 10 <= body.length) {
-    const id = body.toString('ascii', pos, pos + 4);
-    if (!id || /^\0{4}$/.test(id) || id.trim() === '') break;
-
-    const sizeBytes = body.subarray(pos + 4, pos + 8);
-    let size = version === 4 ? decodeSyncSafeInt(sizeBytes) : sizeBytes.readUInt32BE(0);
-    let end = pos + 10 + size;
-
-    // Some files lie (v2.3 header but v2.4-style syncsafe frame sizes). If the v2.3 size is impossible,
-    // fall back to syncsafe to avoid producing mixed/invalid tags on rewrite.
-    if (version === 3 && (size < 0 || end > body.length)) {
-      const alt = decodeSyncSafeInt(sizeBytes);
-      const altEnd = pos + 10 + alt;
-      if (alt >= 0 && altEnd <= body.length) {
-        usesSyncsafeFrameSizes = true;
-        size = alt;
-        end = altEnd;
-      } else {
-        break;
-      }
-    }
-
-    if (size < 0 || end > body.length) break;
-
-    const flagsBuf = Buffer.from(body.subarray(pos + 8, pos + 10));
-    const data = Buffer.from(body.subarray(pos + 10, end));
-    const f: Id3Frame = { id, data, flags: flagsBuf };
-    if (id === 'TXXX') f.txxxDescription = parseTxxxDescription(data);
-    frames.push(f);
-    pos = end;
-  }
-
-  return { frames, audioOffset: tagEnd, version, usesSyncsafeFrameSizes, headerFlags: flags };
-}
-
-function updateId3Tag(absPath: string, opts: {
-  title?: string | null;
-  album?: string | null;
-  genre?: string[] | null;
-  artists?: string[] | null;
-  albumArtist?: string[] | null;
-  year?: number | null;
-  trackNumber?: number | null;
-  discNumber?: number | null;
-  country?: string[] | null;
-  language?: string[] | null;
-}) {
-  const file = readFileSync(absPath);
-  const parsed = parseId3Frames(file);
-  // Always write ID3v2.4 so multi-value text frames use NUL separators (MP3Tag-compatible, avoids v2.3 '/').
-  const targetVersion: 4 = 4;
-  const needsUnsync = (parsed.headerFlags & 0x80) !== 0;
-
-  const removeIds = new Set<string>();
-  const removeTxxx = new Set<string>();
-
-  if (opts.title !== undefined) removeIds.add('TIT2');
-  if (opts.album !== undefined) removeIds.add('TALB');
-  if (opts.genre !== undefined) removeIds.add('TCON');
-  if (opts.artists !== undefined) {
-    removeIds.add('TPE1');
-    removeTxxx.add('artists');
-  }
-  if (opts.albumArtist !== undefined) removeIds.add('TPE2');
-  if (opts.year !== undefined) {
-    removeIds.add('TYER');
-    removeIds.add('TDRC');
-  }
-  if (opts.trackNumber !== undefined) removeIds.add('TRCK');
-  if (opts.discNumber !== undefined) removeIds.add('TPOS');
-  if (opts.language !== undefined) {
-    removeIds.add('TLAN');
-    removeTxxx.add('language');
-  }
-  if (opts.country !== undefined) removeTxxx.add('country');
-
-  const kept = parsed.frames.filter((f) => {
-    if (removeIds.has(f.id)) return false;
-    if (f.id === 'TXXX' && f.txxxDescription) {
-      const key = f.txxxDescription.trim().toLowerCase();
-      if (removeTxxx.has(key)) return false;
-    }
-    return true;
+function runAudioMetadataEditor(file: string, values: MetadataUpdate): Promise<void> {
+  const python = process.env.METADATA_PYTHON?.trim() || deezerStagingConfig().python;
+  return new Promise((resolve, reject) => {
+    const child = spawn(python, [AUDIO_METADATA_EDITOR, file], {
+      windowsHide: true,
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(new Error('Metadata update timed out'));
+    }, 180_000);
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    child.stderr.on('data', chunk => {
+      stderr = (stderr + String(chunk)).slice(-1500);
+    });
+    child.stdin.on('error', error => finish(new Error(`Could not send metadata update: ${error.message}`)));
+    child.on('error', error => finish(new Error(`Could not start metadata editor: ${error.message}`)));
+    child.on('close', code => finish(code === 0 ? undefined : new Error(stderr.trim() || 'Metadata update failed')));
+    child.stdin.end(JSON.stringify(values));
   });
+}
 
-  const added: Buffer[] = [];
-  const addTextList = (id: string, parts: string[] | null | undefined) => {
-    if (parts === undefined) return;
-    const v = (parts ?? []).map((x) => String(x ?? '').trim()).filter(Boolean);
-    const f = buildTextFrame(id, v, targetVersion);
-    if (f) added.push(f);
-  };
-  const addTextOne = (id: string, v: string | null | undefined) => {
-    if (v === undefined || v === null) return;
-    const f = buildTextFrame(id, [String(v)], targetVersion);
-    if (f) added.push(f);
-  };
-  const addTxxx = (desc: string, parts: string[] | null | undefined) => {
-    if (parts === undefined) return;
-    const v = (parts ?? []).map((x) => String(x ?? '').trim()).filter(Boolean);
-    const f = buildTxxxFrame(desc, v, targetVersion);
-    if (f) added.push(f);
-  };
-
-  if (opts.title !== undefined) addTextOne('TIT2', opts.title);
-  if (opts.album !== undefined) addTextOne('TALB', opts.album);
-  if (opts.genre !== undefined) addTextList('TCON', opts.genre);
-  if (opts.artists !== undefined) {
-    addTextList('TPE1', opts.artists);
+async function waitForMetadataRefresh(requestId: string) {
+  const key = `metadata:refresh:${requestId}`;
+  const deadline = Date.now() + METADATA_REFRESH_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const raw = await redis().get(key);
+    if (raw) {
+      await redis().del(key).catch(() => undefined);
+      try {
+        return JSON.parse(raw) as { ok: boolean; trackId?: number; error?: string };
+      } catch {
+        return { ok: false, error: 'Worker returned an invalid metadata refresh result' };
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
-  if (opts.albumArtist !== undefined) addTextList('TPE2', opts.albumArtist);
-  if (opts.year !== undefined && opts.year !== null) {
-    if (targetVersion === 4) addTextOne('TDRC', String(opts.year));
-    else addTextOne('TYER', String(opts.year));
-  }
-  if (opts.trackNumber !== undefined && opts.trackNumber !== null) addTextOne('TRCK', String(opts.trackNumber));
-  if (opts.discNumber !== undefined && opts.discNumber !== null) addTextOne('TPOS', String(opts.discNumber));
-  if (opts.country !== undefined) addTxxx('Country', opts.country);
-  if (opts.language !== undefined) {
-    addTextList('TLAN', opts.language);
-  }
+  return { ok: false, error: 'Tags were written, but the library refresh timed out' };
+}
 
-  // If we upgrade v2.3 -> v2.4 (syncsafe mismatch), drop per-frame flags to avoid writing invalid flags for the new version.
-  if (needsUnsync) {
-    for (let i = 0; i < added.length; i++) added[i] = applyUnsync(added[i]!);
+function cleanString(value: unknown) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function cleanInteger(value: unknown, max = Number.MAX_SAFE_INTEGER) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0 || number > max) return null;
+  return Math.floor(number);
+}
+
+function cleanStringList(value: unknown) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const input = Array.isArray(value) ? value : String(value).split(/(?:\u0000|\\n|\r?\n)+/);
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const item of input) {
+    const text = String(item ?? '').trim();
+    if (!text) continue;
+    const key = text.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(text);
   }
+  return output;
+}
 
-  const keptBuf = kept.map((f) => buildFrame(f.id, f.data, targetVersion, targetVersion === parsed.version ? f.flags : undefined));
-  const framesBuf = Buffer.concat([...keptBuf, ...added]);
-  if (framesBuf.length === 0) {
-    // Remove ID3 tag entirely.
-    writeFileSync(absPath, file.subarray(parsed.audioOffset));
-    return;
-  }
-
-  const header = Buffer.alloc(10);
-  header.write('ID3', 0, 3, 'ascii');
-  header[3] = targetVersion;
-  header[4] = 0x00;
-  // Preserve original header flags when possible; we don't emit extended headers or footers.
-  header[5] = parsed.headerFlags & ~0x50;
-  encodeSyncSafeInt(framesBuf.length).copy(header, 6);
-
-  const out = Buffer.concat([header, framesBuf, file.subarray(parsed.audioOffset)]);
-  writeFileSync(absPath, out);
+function cleanReleaseDate(value: unknown) {
+  const text = cleanString(value);
+  if (text == null || text === undefined) return text;
+  if (!/^\d{4}(?:-\d{2}(?:-\d{2})?)?$/.test(text)) return null;
+  return text;
 }
 
 export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
@@ -515,43 +356,50 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
     return { ok: true, anyWritable: writable.length > 0, writableMounts: writable, libraries: results };
   });
 
-  // Edit metadata only on writable mounts; a managed staging mount may remain
-  // writable even when the main NAS library is configured read-only.
+  // Edit metadata on writable music files. The file update is atomic and
+  // the request does not return success until the worker has re-read the exact
+  // file, updated PostgreSQL relations, and refreshed the search index.
   app.post('/api/admin/tracks/:id/metadata', async (req, reply) => {
     if (req.user?.role !== 'admin') return reply.code(403).send({ ok: false });
 
     const id = Number((req.params as { id: string }).id);
-    if (!Number.isFinite(id)) return reply.code(400).send({ ok: false, error: 'Invalid track id' });
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return reply.code(400).send({ ok: false, error: 'Invalid track id' });
+    }
 
-    const body = (req.body ?? {}) as {
-      title?: string | null;
-      artists?: string[] | null;
-      album?: string | null;
-      albumArtist?: string | null;
-      trackNumber?: number | null;
-      discNumber?: number | null;
-      year?: number | null;
-      genre?: string | null;
-      country?: string | null;
-      language?: string | null;
+    const body = (req.body ?? {}) as Record<string, unknown> & {
+      albumArtist?: unknown; // backwards-compatible legacy field
+      genre?: unknown;
+      country?: unknown;
+      language?: unknown;
+      year?: unknown;
     };
 
-    const r = await db().query<{ path: string; ext: string; library_id: number; mount_path: string; source_plugin_id: string | null }>(
+    const result = await db().query<{
+      path: string;
+      ext: string;
+      library_id: number;
+      mount_path: string;
+      source_plugin_id: string | null;
+    }>(
       'select t.path, t.ext, t.library_id, l.mount_path, l.source_plugin_id from active_tracks t join libraries l on l.id=t.library_id where t.id=$1',
       [id]
     );
-    const row = r.rows[0];
+    const row = result.rows[0];
     if (!row) return reply.code(404).send({ ok: false, error: 'Track not found' });
 
     if (LIBRARY_READ_ONLY && !isWritableStagingLibrary(row)) {
       return reply.code(403).send({ ok: false, error: 'Library writes are disabled' });
     }
-    const extension = (row.ext ?? '').toLowerCase();
-    if (extension !== '.mp3' && !(extension === '.flac' && isWritableStagingLibrary(row))) {
-      return reply.code(400).send({ ok: false, error: 'Only MP3 and staged FLAC files are editable' });
+
+    const extension = (row.ext ?? path.extname(row.path)).toLowerCase();
+    if (!EDITABLE_AUDIO_EXTENSIONS.has(extension)) {
+      return reply.code(400).send({
+        ok: false,
+        error: `Metadata editing is not supported for ${extension || 'this format'} files`,
+      });
     }
 
-    // Must be writable
     if (!await probeWritableDirectory(row.mount_path)) {
       return reply.code(400).send({ ok: false, error: `Library mount is not writable: ${row.mount_path}` });
     }
@@ -561,86 +409,117 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
       return reply.code(400).send({ ok: false, error: 'Track file is not writable' });
     }
 
-    // Normalize inputs
-    const normStr = (s: any) => {
-      if (s === undefined) return undefined;
-      if (s === null) return null;
-      const v = String(s).trim();
-      return v === '' ? null : v;
+    const values: MetadataUpdate = {};
+    const setString = (field: keyof MetadataUpdate, source: unknown) => {
+      if (source !== undefined) (values as Record<string, unknown>)[field] = cleanString(source);
+    };
+    const setList = (field: keyof MetadataUpdate, source: unknown) => {
+      if (source !== undefined) (values as Record<string, unknown>)[field] = cleanStringList(source);
+    };
+    const setInt = (field: keyof MetadataUpdate, source: unknown, max?: number) => {
+      if (source !== undefined) (values as Record<string, unknown>)[field] = cleanInteger(source, max);
     };
 
-    const normNum = (n: any) => {
-      if (n === undefined) return undefined;
-      if (n === null) return null;
-      const v = Number(n);
-      if (!Number.isFinite(v) || v <= 0) return null;
-      return Math.floor(v);
-    };
+    setString('title', body.title);
+    setList('artists', body.artists);
+    setString('album', body.album);
+    setList('albumArtists', body.albumArtists !== undefined ? body.albumArtists : body.albumArtist);
+    setList('genres', body.genres !== undefined ? body.genres : body.genre);
+    setList('countries', body.countries !== undefined ? body.countries : body.country);
+    setList('languages', body.languages !== undefined ? body.languages : body.language);
+    setInt('trackNumber', body.trackNumber, 9999);
+    setInt('trackTotal', body.trackTotal, 9999);
+    setInt('discNumber', body.discNumber, 999);
+    setInt('discTotal', body.discTotal, 999);
 
-    const title = normStr(body.title);
-    const album = normStr(body.album);
-    const albumArtist = normStr(body.albumArtist);
-    const genre = normStr(body.genre);
-    const country = normStr(body.country);
-    const language = normStr(body.language);
-
-    const multiParts = (s: string | null | undefined) => {
-      if (s === undefined) return undefined;
-      if (s === null) return null;
-      return String(s)
-        // Support both our preferred NUL-separated encoding and legacy/newline payloads.
-        .split(/(?:\u0000|\\n|\r?\n)+/)
-        .map((x) => x.trim())
-        .filter(Boolean);
-    };
-
-    const genreParts = multiParts(genre);
-    const countryParts = multiParts(country);
-    const languageParts = multiParts(language);
-    const year = normNum(body.year);
-    const trackNumber = normNum(body.trackNumber);
-    const discNumber = normNum(body.discNumber);
-
-    const artistsList = body.artists === undefined
-      ? undefined
-      : (body.artists ?? [])
-          .map((x) => String(x ?? '').trim())
-          .filter(Boolean);
-
-    const updateOpts: Parameters<typeof updateId3Tag>[1] = {};
-
-    if (title !== undefined) updateOpts.title = title;
-    if (album !== undefined) updateOpts.album = album;
-
-    if (genre !== undefined) updateOpts.genre = genreParts === null ? null : (genreParts ?? []);
-
-    if (artistsList !== undefined) updateOpts.artists = artistsList;
-
-    if (albumArtist !== undefined) {
-      const aaParts = multiParts(albumArtist);
-      updateOpts.albumArtist = aaParts === null ? null : (aaParts ?? []);
+    if (body.releaseDate !== undefined || body.year !== undefined) {
+      const releaseDate = cleanReleaseDate(body.releaseDate !== undefined ? body.releaseDate : body.year);
+      if (releaseDate === null && cleanString(body.releaseDate !== undefined ? body.releaseDate : body.year) !== null) {
+        return reply.code(400).send({ ok: false, error: 'Release date must be YYYY, YYYY-MM or YYYY-MM-DD' });
+      }
+      values.releaseDate = releaseDate;
     }
 
-    if (year !== undefined) updateOpts.year = year;
-    if (trackNumber !== undefined) updateOpts.trackNumber = trackNumber;
-    if (discNumber !== undefined) updateOpts.discNumber = discNumber;
+    setInt('originalYear', body.originalYear, 9999);
+    setInt('bpm', body.bpm, 1000);
+    setString('initialKey', body.initialKey);
+    setList('composers', body.composers);
+    setList('conductors', body.conductors);
+    setString('publisher', body.publisher);
+    setString('copyright', body.copyright);
+    setString('comment', body.comment);
+    setString('mood', body.mood);
+    setString('grouping', body.grouping);
+    setString('isrc', body.isrc);
+    if (body.compilation !== undefined) values.compilation = body.compilation === null ? null : Boolean(body.compilation);
+    setString('titleSort', body.titleSort);
+    setString('artistSort', body.artistSort);
+    setString('albumSort', body.albumSort);
+    setString('albumArtistSort', body.albumArtistSort);
+    setString('musicbrainzTrackId', body.musicbrainzTrackId);
+    setString('musicbrainzReleaseId', body.musicbrainzReleaseId);
+    setString('musicbrainzArtistId', body.musicbrainzArtistId);
+    setString('musicbrainzAlbumArtistId', body.musicbrainzAlbumArtistId);
 
-    if (country !== undefined) updateOpts.country = countryParts === null ? null : (countryParts ?? []);
-    if (language !== undefined) updateOpts.language = languageParts === null ? null : (languageParts ?? []);
+    if (Object.keys(values).length === 0) {
+      return reply.code(400).send({ ok: false, error: 'No metadata changes were supplied' });
+    }
 
     try {
-      if (extension === '.flac') await updateFlacTag(abs, updateOpts);
-      else updateId3Tag(abs, updateOpts);
-    } catch (e: any) {
-      return reply.code(500).send({ ok: false, error: e?.message ?? String(e) });
+      await runAudioMetadataEditor(abs, values);
+    } catch (error) {
+      return reply.code(500).send({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
 
-    await audit('track_metadata_updated', { trackId: id, by: req.user.userId });
+    const refreshRequestId = randomUUID();
+    const refreshKey = `metadata:refresh:${refreshRequestId}`;
+    await redis().del(refreshKey);
+    await redis().publish('library:commands', JSON.stringify({
+      command: 'refresh_track_metadata',
+      requestId: refreshRequestId,
+      by: req.user.userId,
+      mountPath: row.mount_path,
+      path: row.path,
+    }));
 
-    // Trigger quick scan so DB reflects new tags without forcing a full reprocess
-    await redis().publish('library:commands', JSON.stringify({ command: 'rescan', by: req.user.userId, force: false }));
+    const refreshed = await waitForMetadataRefresh(refreshRequestId);
+    if (!refreshed.ok) {
+      await audit('track_metadata_refresh_failed', {
+        trackId: id,
+        by: req.user.userId,
+        extension,
+        error: refreshed.error,
+      });
+      return reply.code(503).send({
+        ok: false,
+        tagsWritten: true,
+        error: refreshed.error || 'Tags were written but MVBar could not refresh the library entry',
+      });
+    }
 
-    return { ok: true };
+    const updated = (await db().query(
+      `select id, title, artist, album_artist, album, genre, country, language, year,
+              track_number, track_total, disc_number, disc_total, bpm, initial_key,
+              composer, conductor, publisher, copyright, comment, mood, grouping,
+              isrc, release_date, original_year, compilation,
+              title_sort, artist_sort, album_sort, album_artist_sort,
+              musicbrainz_track_id, musicbrainz_release_id, musicbrainz_artist_id,
+              musicbrainz_album_artist_id, updated_at
+         from active_tracks where id=$1`,
+      [id]
+    )).rows[0] ?? null;
+
+    await audit('track_metadata_updated', {
+      trackId: id,
+      by: req.user.userId,
+      extension,
+      fields: Object.keys(values),
+    });
+
+    return { ok: true, track: updated };
   });
 
   app.get('/api/admin/library/scan/status', async (req, reply) => {
