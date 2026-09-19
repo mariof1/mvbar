@@ -2029,7 +2029,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     if (!importRow) return reply.code(404).send({ ok: false, error: 'Playlist import not found' });
 
     const failed = (await db().query<{ count: string | number }>(
-      "select count(*) count from plugin_deezer_playlist_items where import_id=$1 and state='failed'",
+      "select count(*) count from plugin_deezer_playlist_items where import_id=$1 and state='failed' and unavailable=false",
       [importId]
     )).rows[0];
     if (Number(failed?.count ?? 0) < 1) {
@@ -2040,7 +2040,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     try {
       await client.query('begin');
       await client.query(
-        "update plugin_deezer_playlist_items set state='pending',error=null,request_id=null where import_id=$1 and state='failed'",
+        "update plugin_deezer_playlist_items set state='pending',error=null,request_id=null where import_id=$1 and state='failed' and unavailable=false",
         [importId]
       );
       await client.query(
