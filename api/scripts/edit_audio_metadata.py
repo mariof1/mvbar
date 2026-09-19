@@ -50,7 +50,7 @@ from mutagen.oggvorbis import OggVorbis
 from mutagen.wave import WAVE
 
 
-SUPPORTED = {".mp3", ".flac", ".m4a", ".mp4", ".ogg", ".opus", ".wav"}
+SUPPORTED = {".mp3", ".flac", ".m4a", ".mp4", ".ogg", ".opus", ".wav", ".aac"}
 
 LANGUAGE_CODES = {
     "english": "eng", "eng": "eng", "en": "eng",
@@ -461,6 +461,7 @@ def edit_mp4(path, values):
 
 EDITORS = {
     ".mp3": edit_mp3,
+    ".aac": edit_mp3,
     ".flac": edit_flac,
     ".m4a": edit_mp4,
     ".mp4": edit_mp4,
