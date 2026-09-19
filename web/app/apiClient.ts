@@ -667,6 +667,28 @@ export type Playlist = {
   collaborator_count: number;
 };
 
+export type DeezerPlaylistSyncState = {
+  id: string;
+  deezerPlaylistId: string;
+  playlistId: string;
+  title: string;
+  artworkUrl: string | null;
+  status: 'queued' | 'downloading' | 'completed' | 'partial' | 'failed';
+  totalTracks: number;
+  addedTracks: number;
+  failedTracks: number;
+  pendingTracks: number;
+  syncEnabled: boolean;
+  syncIntervalHours: number;
+  nextSyncAt: string | null;
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
+  lastSyncAdded: number;
+  lastSyncRemoved: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PlaylistCollaborator = {
   user: SocialUser;
   addedAt: string;
@@ -682,6 +704,38 @@ export type PlaylistCollaboration = {
 
 export async function listPlaylists(token: string) {
   return (await apiFetch('/playlists', { method: 'GET' }, token)) as { ok: boolean; playlists: Playlist[] };
+}
+
+export async function getDeezerPlaylistSync(token: string, playlistId: string) {
+  return (await apiFetch(
+    `/plugins/missing-music/deezer-playlist-imports/by-playlist/${encodeURIComponent(playlistId)}`,
+    { method: 'GET' },
+    token,
+  )) as { ok: true; import: DeezerPlaylistSyncState };
+}
+
+export async function updateDeezerPlaylistSync(
+  token: string,
+  importId: string,
+  enabled: boolean,
+  intervalHours: number,
+) {
+  return (await apiFetch(
+    `/plugins/missing-music/deezer-playlist-imports/${encodeURIComponent(importId)}/sync-settings`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ enabled, intervalHours }),
+    },
+    token,
+  )) as { ok: true; import: DeezerPlaylistSyncState };
+}
+
+export async function syncDeezerPlaylistNow(token: string, importId: string) {
+  return (await apiFetch(
+    `/plugins/missing-music/deezer-playlist-imports/${encodeURIComponent(importId)}/sync-now`,
+    { method: 'POST' },
+    token,
+  )) as { ok: true; import: DeezerPlaylistSyncState; added: number; removed: number };
 }
 
 export async function createPlaylist(token: string, name: string) {
