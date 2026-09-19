@@ -91,6 +91,12 @@ function swap<T>(arr: T[], i: number, j: number) {
   return next;
 }
 
+function formatSyncTimestamp(value: string | null) {
+  if (!value) return 'Never';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString();
+}
+
 export function Playlists(props: {
   onPlayTrack?: (tracks: PlayablePlaylistTrack[], index: number) => void;
   onPlayAll?: (tracks: PlayablePlaylistTrack[]) => void;
@@ -225,6 +231,25 @@ export function Playlists(props: {
     }
   }
 
+  async function refreshDeezerSync(id: string) {
+    if (!token || selection.current.id !== id || selection.current.token !== token) return;
+    setDeezerSyncLoading(true);
+    try {
+      const result = await getDeezerPlaylistSync(token, id);
+      if (selection.current.id !== id || selection.current.token !== token) return;
+      setDeezerSync(result.import);
+      setDeezerSyncEnabledDraft(result.import.syncEnabled);
+      setDeezerSyncIntervalDraft(result.import.syncIntervalHours);
+    } catch (e: any) {
+      if (selection.current.id !== id || selection.current.token !== token) return;
+      if (e?.status === 401) clear();
+      else if (e?.status !== 404) showTimedError(e?.data?.error ?? e?.message ?? 'Could not load Deezer sync settings.');
+      setDeezerSync(null);
+    } finally {
+      if (selection.current.id === id && selection.current.token === token) setDeezerSyncLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (!token) return;
     refreshPlaylists();
@@ -255,6 +280,20 @@ export function Playlists(props: {
       navigate({ type: 'playlists', sub: 'regular' }, true);
     }
   }, [selectedId, playlistsLoaded, pls, navigate]);
+
+  useEffect(() => {
+    setDeezerSync(null);
+    setDeezerSyncLoading(false);
+    setDeezerSyncEnabledDraft(false);
+    setDeezerSyncIntervalDraft(168);
+    if (!selectedId || !token) return;
+    const selected = pls.find((playlist) => String(playlist.id) === selectedId);
+    const isDeezerImport = selected?.is_owner === true
+      && selected.source_plugin_id === 'mvbar.missing-music'
+      && selected.source_external_id?.startsWith('deezer-playlist:');
+    if (isDeezerImport) void refreshDeezerSync(selectedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, token, pls]);
 
   // Live updates: refresh playlists list when a playlist is created
   useEffect(() => {
