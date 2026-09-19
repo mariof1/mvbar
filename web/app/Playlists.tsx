@@ -125,6 +125,11 @@ export function Playlists(props: {
   const [collaboration, setCollaboration] = useState<PlaylistCollaboration | null>(null);
   const [showCollaborators, setShowCollaborators] = useState(false);
   const [collaboratorBusy, setCollaboratorBusy] = useState<string | null>(null);
+  const [deezerSync, setDeezerSync] = useState<DeezerPlaylistSyncState | null>(null);
+  const [deezerSyncLoading, setDeezerSyncLoading] = useState(false);
+  const [deezerSyncBusy, setDeezerSyncBusy] = useState<'save' | 'sync' | null>(null);
+  const [deezerSyncEnabledDraft, setDeezerSyncEnabledDraft] = useState(false);
+  const [deezerSyncIntervalDraft, setDeezerSyncIntervalDraft] = useState(168);
 
   function showTimedError(message: string | null, ms = 2500) {
     if (errorTimeoutRef.current) {
