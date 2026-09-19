@@ -1879,6 +1879,99 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     );
     return { ok: true, imports: result.rows.map(serializePlaylistImport) };
   });
+  app.get('/api/plugins/missing-music/deezer-playlist-imports/by-playlist/:playlistId', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    const { playlistId } = req.params as { playlistId: string };
+    if (!/^\d+$/.test(playlistId)) return reply.code(400).send({ ok: false, error: 'Invalid playlist id' });
+    const importRow = (await db().query<DeezerPlaylistImportRow>(
+      'select * from plugin_deezer_playlist_imports where plugin_id=$1 and user_id=$2 and playlist_id=$3 limit 1',
+      [plugin.id, req.user!.userId, Number(playlistId)]
+    )).rows[0];
+    if (!importRow) return reply.code(404).send({ ok: false, error: 'This playlist is not linked to Deezer' });
+    return { ok: true, import: serializePlaylistImport(importRow) };
+  });
+
+  app.put('/api/plugins/missing-music/deezer-playlist-imports/:importId/sync-settings', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    const { importId } = req.params as { importId: string };
+    const body = req.body as { enabled?: unknown; intervalHours?: unknown } | null;
+    if (typeof body?.enabled !== 'boolean') return reply.code(400).send({ ok: false, error: 'enabled must be true or false' });
+
+    const importRow = (await db().query<DeezerPlaylistImportRow>(
+      'select * from plugin_deezer_playlist_imports where id=$1 and plugin_id=$2 and user_id=$3',
+      [importId, plugin.id, req.user!.userId]
+    )).rows[0];
+    if (!importRow) return reply.code(404).send({ ok: false, error: 'Playlist import not found' });
+
+    const intervalHours = body.intervalHours === undefined ? Number(importRow.sync_interval_hours) : Number(body.intervalHours);
+    if (!Number.isInteger(intervalHours) || !DEEZER_PLAYLIST_SYNC_INTERVALS.has(intervalHours)) {
+      return reply.code(400).send({ ok: false, error: 'Choose a supported Deezer sync interval' });
+    }
+    if (body.enabled) {
+      if (plugin.config.providerBaseUrl?.trim()) {
+        return reply.code(409).send({ ok: false, error: 'Disable the external request provider before enabling Deezer playlist sync' });
+      }
+      const canImport = req.user!.role === 'admin' || (
+        plugin.config.requireAdminApproval === false && plugin.config.autoDownloadDeezer === true
+      );
+      if (!canImport) {
+        return reply.code(409).send({ ok: false, error: 'Automatic Deezer downloads must be enabled for scheduled playlist sync' });
+      }
+      try {
+        await assertDeezerStagingReady();
+      } catch (error) {
+        return reply.code(409).send({ ok: false, error: errorMessage(error) });
+      }
+    }
+
+    const updated = (await db().query<DeezerPlaylistImportRow>(
+      "update plugin_deezer_playlist_imports set sync_enabled=$2,sync_interval_hours=$3," +
+      "next_sync_at=case when $2 then now() + $3::int * interval '1 hour' else null end," +
+      "last_sync_error=case when $2 then null else last_sync_error end,updated_at=now() where id=$1 returning *",
+      [importId, body.enabled, intervalHours]
+    )).rows[0];
+    await audit('plugin_deezer_playlist_sync_settings', {
+      pluginId: plugin.id, importId, userId: req.user!.userId, enabled: body.enabled, intervalHours,
+    });
+    return { ok: true, import: serializePlaylistImport(updated) };
+  });
+
+  app.post('/api/plugins/missing-music/deezer-playlist-imports/:importId/sync-now', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    if (plugin.config.providerBaseUrl?.trim()) {
+      return reply.code(409).send({ ok: false, error: 'Disable the external request provider before syncing a Deezer playlist' });
+    }
+    const canImport = req.user!.role === 'admin' || (
+      plugin.config.requireAdminApproval === false && plugin.config.autoDownloadDeezer === true
+    );
+    if (!canImport) {
+      return reply.code(409).send({ ok: false, error: 'Automatic Deezer downloads must be enabled to sync this playlist' });
+    }
+    try {
+      await assertDeezerStagingReady();
+    } catch (error) {
+      return reply.code(409).send({ ok: false, error: errorMessage(error) });
+    }
+
+    const { importId } = req.params as { importId: string };
+    const importRow = (await db().query<DeezerPlaylistImportRow>(
+      'select * from plugin_deezer_playlist_imports where id=$1 and plugin_id=$2 and user_id=$3',
+      [importId, plugin.id, req.user!.userId]
+    )).rows[0];
+    if (!importRow) return reply.code(404).send({ ok: false, error: 'Playlist import not found' });
+    try {
+      const result = await syncDeezerPlaylistImport(plugin, importRow, 'manual');
+      void runMissingMusicJobs().catch((error) => {
+        logger.warn('missing-music', 'Could not continue playlist jobs after manual sync: ' + errorMessage(error));
+      });
+      return { ok: true, import: serializePlaylistImport(result.importRow), added: result.added, removed: result.removed };
+    } catch (error) {
+      return reply.code(409).send({ ok: false, error: errorMessage(error) });
+    }
+  });
   app.post('/api/plugins/missing-music/deezer-playlist-imports/:importId/retry', async (req, reply) => {
     const plugin = await requireExtension(req, reply);
     if (!plugin) return;
