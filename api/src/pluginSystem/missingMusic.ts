@@ -27,6 +27,8 @@ const DEEZER_DOWNLOAD_CONCURRENCY = Math.max(
   1,
   Math.min(8, Number(process.env.MISSING_MUSIC_DEEZER_CONCURRENCY ?? 3) || 3),
 );
+const DEEZER_PLAYLIST_SYNC_INTERVALS = new Set([6, 12, 24, 72, 168]);
+const DEFAULT_DEEZER_PLAYLIST_SYNC_INTERVAL_HOURS = 168;
 
 export function availableDeezerDownloadSlots(active: number, limit = DEEZER_DOWNLOAD_CONCURRENCY) {
   return Math.max(0, Math.max(1, Math.trunc(limit)) - Math.max(0, Math.trunc(active)));
@@ -727,6 +729,13 @@ function serializePlaylistImport(row: DeezerPlaylistImportRow) {
     addedTracks: Number(row.added_tracks),
     failedTracks: Number(row.failed_tracks),
     pendingTracks: Math.max(0, Number(row.total_tracks) - Number(row.added_tracks) - Number(row.failed_tracks)),
+    syncEnabled: row.sync_enabled === true,
+    syncIntervalHours: Number(row.sync_interval_hours || DEFAULT_DEEZER_PLAYLIST_SYNC_INTERVAL_HOURS),
+    nextSyncAt: row.next_sync_at,
+    lastSyncedAt: row.last_synced_at,
+    lastSyncError: row.last_sync_error,
+    lastSyncAdded: Number(row.last_sync_added || 0),
+    lastSyncRemoved: Number(row.last_sync_removed || 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
