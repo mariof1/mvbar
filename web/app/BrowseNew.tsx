@@ -1265,12 +1265,17 @@ export function BrowseNew(props: {
                 <button type="button" onClick={() => {
                   setEditAlbum(existingAlbumTrack.album || albumDetail.name);
                   if (existingAlbumTrack.album_artist) setEditAlbumArtist(existingAlbumTrack.album_artist.split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/).filter(Boolean).join('\n'));
-                  if (existingAlbumTrack.year) setEditYear(String(existingAlbumTrack.year));
+                  if (existingAlbumTrack.release_date || existingAlbumTrack.year) {
+                    setEditAdvanced((current) => ({
+                      ...current,
+                      releaseDate: existingAlbumTrack.release_date ?? String(existingAlbumTrack.year ?? ''),
+                    }));
+                  }
                   if (existingAlbumTrack.genre) setEditGenre(existingAlbumTrack.genre.split(';').map((part) => part.trim()).filter(Boolean).join('\n'));
                   if (existingAlbumTrack.country) setEditCountry(existingAlbumTrack.country.split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/).filter(Boolean).join('\n'));
                   if (existingAlbumTrack.language) setEditLanguage(existingAlbumTrack.language.split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/).filter(Boolean).join('\n'));
                 }} className="mt-4 w-full rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-left text-sm text-cyan-200 hover:bg-cyan-500/20">
-                  Use album metadata from your library <span className="block text-xs text-slate-400">Copies album artist, year, genre, country and language. Track title and artist stay as they are.</span>
+                  Use album metadata from your library <span className="block text-xs text-slate-400">Copies album artist, release date, genre, country and language. Track title and artist stay as they are.</span>
                 </button>
               )}
 
@@ -1352,40 +1357,126 @@ export function BrowseNew(props: {
                   </label>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <label className="text-sm text-slate-300">
                     Track #
-                    <input
-                      inputMode="numeric"
-                      value={editTrackNumber}
-                      onChange={(e) => setEditTrackNumber(e.target.value)}
-                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                      placeholder="1"
-                    />
+                    <input inputMode="numeric" value={editTrackNumber} onChange={(e) => setEditTrackNumber(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" placeholder="1" />
                   </label>
-
+                  <label className="text-sm text-slate-300">
+                    Track total
+                    <input inputMode="numeric" value={editAdvanced.trackTotal}
+                      onChange={(e) => setEditAdvanced((current) => ({ ...current, trackTotal: e.target.value }))}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" placeholder="12" />
+                  </label>
                   <label className="text-sm text-slate-300">
                     Disc #
-                    <input
-                      inputMode="numeric"
-                      value={editDiscNumber}
-                      onChange={(e) => setEditDiscNumber(e.target.value)}
-                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                      placeholder="1"
-                    />
+                    <input inputMode="numeric" value={editDiscNumber} onChange={(e) => setEditDiscNumber(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" placeholder="1" />
                   </label>
-
                   <label className="text-sm text-slate-300">
-                    Year
-                    <input
-                      inputMode="numeric"
-                      value={editYear}
-                      onChange={(e) => setEditYear(e.target.value)}
-                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
-                      placeholder="2025"
-                    />
+                    Disc total
+                    <input inputMode="numeric" value={editAdvanced.discTotal}
+                      onChange={(e) => setEditAdvanced((current) => ({ ...current, discTotal: e.target.value }))}
+                      className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" placeholder="2" />
                   </label>
                 </div>
+
+                <label className="text-sm text-slate-300">
+                  Release date
+                  <input value={editAdvanced.releaseDate}
+                    onChange={(e) => setEditAdvanced((current) => ({ ...current, releaseDate: e.target.value }))}
+                    className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white"
+                    placeholder="YYYY, YYYY-MM or YYYY-MM-DD" />
+                </label>
+
+                <details className="rounded-lg border border-slate-700 bg-slate-900/20">
+                  <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-slate-300">Advanced metadata</summary>
+                  <div className="space-y-3 border-t border-slate-700 p-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <label className="text-sm text-slate-300">BPM
+                        <input inputMode="numeric" value={editAdvanced.bpm}
+                          onChange={(e) => setEditAdvanced((current) => ({ ...current, bpm: e.target.value }))}
+                          className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" />
+                      </label>
+                      <label className="text-sm text-slate-300">Key
+                        <input value={editAdvanced.initialKey}
+                          onChange={(e) => setEditAdvanced((current) => ({ ...current, initialKey: e.target.value }))}
+                          className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" />
+                      </label>
+                      <label className="text-sm text-slate-300">Original year
+                        <input inputMode="numeric" value={editAdvanced.originalYear}
+                          onChange={(e) => setEditAdvanced((current) => ({ ...current, originalYear: e.target.value }))}
+                          className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <label className="text-sm text-slate-300">Composers (one per line)
+                        <textarea rows={2} value={editAdvanced.composers}
+                          onChange={(e) => setEditAdvanced((current) => ({ ...current, composers: e.target.value }))}
+                          className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" />
+                      </label>
+                      <label className="text-sm text-slate-300">Conductors (one per line)
+                        <textarea rows={2} value={editAdvanced.conductors}
+                          onChange={(e) => setEditAdvanced((current) => ({ ...current, conductors: e.target.value }))}
+                          className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {([
+                        ['publisher', 'Publisher'],
+                        ['copyright', 'Copyright'],
+                        ['mood', 'Mood'],
+                        ['grouping', 'Grouping'],
+                        ['isrc', 'ISRC'],
+                      ] as const).map(([field, label]) => (
+                        <label key={field} className="text-sm text-slate-300">{label}
+                          <input value={editAdvanced[field]}
+                            onChange={(e) => setEditAdvanced((current) => ({ ...current, [field]: e.target.value }))}
+                            className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" />
+                        </label>
+                      ))}
+                      <label className="flex items-center gap-2 self-end rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300">
+                        <input type="checkbox" checked={editAdvanced.compilation}
+                          onChange={(e) => setEditAdvanced((current) => ({ ...current, compilation: e.target.checked }))} />
+                        Compilation
+                      </label>
+                    </div>
+                    <label className="text-sm text-slate-300">Comment
+                      <textarea rows={2} value={editAdvanced.comment}
+                        onChange={(e) => setEditAdvanced((current) => ({ ...current, comment: e.target.value }))}
+                        className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" />
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {([
+                        ['titleSort', 'Title sort'],
+                        ['artistSort', 'Artist sort'],
+                        ['albumSort', 'Album sort'],
+                        ['albumArtistSort', 'Album artist sort'],
+                      ] as const).map(([field, label]) => (
+                        <label key={field} className="text-sm text-slate-300">{label}
+                          <input value={editAdvanced[field]}
+                            onChange={(e) => setEditAdvanced((current) => ({ ...current, [field]: e.target.value }))}
+                            className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white" />
+                        </label>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-1 gap-3">
+                      {([
+                        ['musicbrainzTrackId', 'MusicBrainz track ID'],
+                        ['musicbrainzReleaseId', 'MusicBrainz release ID'],
+                        ['musicbrainzArtistId', 'MusicBrainz artist ID'],
+                        ['musicbrainzAlbumArtistId', 'MusicBrainz album artist ID'],
+                      ] as const).map(([field, label]) => (
+                        <label key={field} className="text-sm text-slate-300">{label}
+                          <input value={editAdvanced[field]}
+                            onChange={(e) => setEditAdvanced((current) => ({ ...current, [field]: e.target.value }))}
+                            className="mt-1 w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white font-mono text-xs" />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </details>
 
                 <div className="text-xs text-slate-500 flex items-end">
                   Saves tags to the writable audio file and refreshes the library.
