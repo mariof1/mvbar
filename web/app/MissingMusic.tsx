@@ -1353,23 +1353,31 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                 const complete = imported?.status === 'completed' || imported?.status === 'partial';
                 return (
                   <article key={playlist.id} className="group overflow-hidden rounded-xl border border-white/10 bg-black/20 transition hover:border-white/20 hover:bg-white/[0.05]">
-                    <div className="relative aspect-square overflow-hidden bg-gradient-to-br from-violet-500/20 to-cyan-500/20">
+                    <button
+                      type="button"
+                      onClick={() => void previewDeezerPlaylist(playlist)}
+                      className="relative block aspect-square w-full overflow-hidden bg-gradient-to-br from-violet-500/20 to-cyan-500/20 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                      aria-label={`Preview ${playlist.title}`}
+                    >
                       {playlist.cover ? (
                         <img
                           src={playlist.cover}
                           alt=""
-                          className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+                          className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
                           onError={(event) => { event.currentTarget.style.display = 'none'; }}
                         />
                       ) : (
                         <div className="flex h-full items-center justify-center text-4xl text-white/20">♫</div>
                       )}
+                      <span className="absolute inset-x-0 bottom-0 translate-y-full bg-black/70 px-3 py-2 text-center text-xs font-semibold text-white/90 backdrop-blur transition-transform group-hover:translate-y-0 group-focus-within:translate-y-0">
+                        Preview tracks
+                      </span>
                       {imported && (
                         <span className={`absolute right-2 top-2 rounded-full border px-2 py-1 text-[10px] font-semibold backdrop-blur ${complete ? 'border-emerald-300/30 bg-emerald-950/70 text-emerald-200' : 'border-violet-300/30 bg-violet-950/70 text-violet-200'}`}>
                           {imported.status === 'completed' ? 'Imported' : imported.status === 'partial' ? 'Partial' : `${imported.addedTracks}/${imported.totalTracks}`}
                         </span>
                       )}
-                    </div>
+                    </button>
                     <div className="p-3">
                       <h5 className="truncate text-sm font-semibold text-white" title={playlist.title}>{playlist.title}</h5>
                       <p className="mt-0.5 truncate text-xs text-white/40">
@@ -1420,6 +1428,17 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
           )}
         </section>
       )}
+
+      <DeezerPlaylistPreviewModal
+        playlist={playlistPreviewTarget}
+        preview={playlistPreview}
+        loading={playlistPreviewLoading}
+        imported={playlistPreviewTarget ? playlistImportByDeezerId.get(playlistPreviewTarget.id) ?? null : null}
+        importEnabled={Boolean(status?.playlistImportEnabled)}
+        importBusy={Boolean(playlistPreviewTarget && playlistImportBusy === playlistPreviewTarget.id)}
+        onClose={closePlaylistPreview}
+        onImport={(playlist) => void importDeezerPlaylist(playlist)}
+      />
 
       {view === 'requests' && (
         <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
