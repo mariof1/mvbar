@@ -42,6 +42,9 @@ test('full Deezer album metadata keeps clean, deduplicated genre names', async (
     nb_tracks: 14,
     release_date: '2001-03-07',
     record_type: 'album',
+    label: 'Virgin',
+    upc: '724384960650',
+    gain: -8.2,
     artist: { id: 27, name: 'Daft Punk' },
     genres: { data: [
       { id: 106, name: 'Electro' },
@@ -53,6 +56,9 @@ test('full Deezer album metadata keeps clean, deduplicated genre names', async (
   try {
     const album = await deezerAlbum('302127');
     assert.deepEqual(album.genres, ['Electro', 'Dance']);
+    assert.equal(album.publisher, 'Virgin');
+    assert.equal(album.barcode, '724384960650');
+    assert.equal(album.gainDb, -8.2);
   } finally {
     globalThis.fetch = originalFetch;
   }
