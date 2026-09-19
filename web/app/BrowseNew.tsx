@@ -1501,68 +1501,85 @@ export function BrowseNew(props: {
                     setEditSaving(true);
                     setEditError(null);
                     try {
-                      const toNull = (s: string) => {
-                        const v = s.trim();
-                        return v === '' ? null : v;
+                      const toNull = (value: string) => value.trim() || null;
+                      const toNumOrNull = (value: string) => {
+                        const text = value.trim();
+                        if (!text) return null;
+                        const number = Number(text);
+                        return Number.isFinite(number) && number > 0 ? number : null;
                       };
-                      const toNumOrNull = (s: string) => {
-                        const v = s.trim();
-                        if (!v) return null;
-                        const n = Number(v);
-                        return Number.isFinite(n) ? n : null;
-                      };
-                      const normLines = (s: string, splitRe: RegExp = /\r?\n/) =>
-                        s
-                          .split(splitRe)
-                          .map((x) => x.trim())
-                          .filter(Boolean);
-                      const canonLines = (s: string, splitRe?: RegExp) => normLines(s, splitRe).join('\n');
-                      const joinMulti = (lines: string[]) => lines.join('\u0000');
+                      const normLines = (value: string) => value
+                        .split(/\r?\n/)
+                        .map((part) => part.trim())
+                        .filter(Boolean);
+                      const canonLines = (value: string) => normLines(value).join('\n');
 
-                      const artists = normLines(editArtists);
-                      const genres = normLines(editGenre);
-                      const countries = normLines(editCountry, /\\n|\r?\n/);
-                      const languages = normLines(editLanguage, /\\n|\r?\n/);
-                      const albumArtists = normLines(editAlbumArtist);
-
-                      const init = editInitial ?? {
+                      const current = {
                         title: editTitle,
                         artists: canonLines(editArtists),
                         album: editAlbum,
                         albumArtist: canonLines(editAlbumArtist),
                         trackNumber: editTrackNumber.trim(),
                         discNumber: editDiscNumber.trim(),
-                        year: editYear.trim(),
                         genre: canonLines(editGenre),
-                        country: canonLines(editCountry, /\\n|\r?\n/),
-                        language: canonLines(editLanguage, /\\n|\r?\n/),
+                        country: canonLines(editCountry),
+                        language: canonLines(editLanguage),
+                        advanced: {
+                          ...editAdvanced,
+                          trackTotal: editAdvanced.trackTotal.trim(),
+                          discTotal: editAdvanced.discTotal.trim(),
+                          releaseDate: editAdvanced.releaseDate.trim(),
+                          originalYear: editAdvanced.originalYear.trim(),
+                          bpm: editAdvanced.bpm.trim(),
+                          initialKey: editAdvanced.initialKey.trim(),
+                          composers: canonLines(editAdvanced.composers),
+                          conductors: canonLines(editAdvanced.conductors),
+                          publisher: editAdvanced.publisher.trim(),
+                          copyright: editAdvanced.copyright.trim(),
+                          comment: editAdvanced.comment.trim(),
+                          mood: editAdvanced.mood.trim(),
+                          grouping: editAdvanced.grouping.trim(),
+                          isrc: editAdvanced.isrc.trim(),
+                          titleSort: editAdvanced.titleSort.trim(),
+                          artistSort: editAdvanced.artistSort.trim(),
+                          albumSort: editAdvanced.albumSort.trim(),
+                          albumArtistSort: editAdvanced.albumArtistSort.trim(),
+                          musicbrainzTrackId: editAdvanced.musicbrainzTrackId.trim(),
+                          musicbrainzReleaseId: editAdvanced.musicbrainzReleaseId.trim(),
+                          musicbrainzArtistId: editAdvanced.musicbrainzArtistId.trim(),
+                          musicbrainzAlbumArtistId: editAdvanced.musicbrainzAlbumArtistId.trim(),
+                        },
                       };
+                      const initial = editInitial ?? current;
+                      const payload: Parameters<typeof adminUpdateTrackMetadata>[2] = {};
 
-                      const cur = {
-                        title: editTitle,
-                        artists: canonLines(editArtists),
-                        album: editAlbum,
-                        albumArtist: canonLines(editAlbumArtist),
-                        trackNumber: editTrackNumber.trim(),
-                        discNumber: editDiscNumber.trim(),
-                        year: editYear.trim(),
-                        genre: canonLines(editGenre),
-                        country: canonLines(editCountry, /\\n|\r?\n/),
-                        language: canonLines(editLanguage, /\\n|\r?\n/),
-                      };
+                      if (current.title !== initial.title) payload.title = toNull(editTitle);
+                      if (current.album !== initial.album) payload.album = toNull(editAlbum);
+                      if (current.artists !== initial.artists) payload.artists = normLines(editArtists);
+                      if (current.albumArtist !== initial.albumArtist) payload.albumArtists = normLines(editAlbumArtist);
+                      if (current.genre !== initial.genre) payload.genres = normLines(editGenre);
+                      if (current.country !== initial.country) payload.countries = normLines(editCountry);
+                      if (current.language !== initial.language) payload.languages = normLines(editLanguage);
+                      if (current.trackNumber !== initial.trackNumber) payload.trackNumber = toNumOrNull(editTrackNumber);
+                      if (current.discNumber !== initial.discNumber) payload.discNumber = toNumOrNull(editDiscNumber);
 
-                      const payload: any = {};
-                      if (cur.title !== init.title) payload.title = toNull(editTitle);
-                      if (cur.album !== init.album) payload.album = toNull(editAlbum);
-                      if (cur.trackNumber !== init.trackNumber) payload.trackNumber = toNumOrNull(editTrackNumber);
-                      if (cur.discNumber !== init.discNumber) payload.discNumber = toNumOrNull(editDiscNumber);
-                      if (cur.year !== init.year) payload.year = toNumOrNull(editYear);
+                      const stringFields = [
+                        'releaseDate', 'initialKey', 'publisher', 'copyright', 'comment', 'mood', 'grouping', 'isrc',
+                        'titleSort', 'artistSort', 'albumSort', 'albumArtistSort',
+                        'musicbrainzTrackId', 'musicbrainzReleaseId', 'musicbrainzArtistId', 'musicbrainzAlbumArtistId',
+                      ] as const;
+                      for (const field of stringFields) {
+                        if (current.advanced[field] !== initial.advanced[field]) payload[field] = toNull(editAdvanced[field]);
+                      }
 
-                      if (cur.artists !== init.artists) payload.artists = artists;
-                      if (cur.albumArtist !== init.albumArtist) payload.albumArtist = albumArtists.length ? joinMulti(albumArtists) : null;
-                      if (cur.genre !== init.genre) payload.genre = genres.length ? joinMulti(genres) : null;
-                      if (cur.country !== init.country) payload.country = countries.length ? joinMulti(countries) : null;
-                      if (cur.language !== init.language) payload.language = languages.length ? joinMulti(languages) : null;
+                      const numberFields = ['trackTotal', 'discTotal', 'originalYear', 'bpm'] as const;
+                      for (const field of numberFields) {
+                        if (current.advanced[field] !== initial.advanced[field]) payload[field] = toNumOrNull(editAdvanced[field]);
+                      }
+
+                      if (current.advanced.composers !== initial.advanced.composers) payload.composers = normLines(editAdvanced.composers);
+                      if (current.advanced.conductors !== initial.advanced.conductors) payload.conductors = normLines(editAdvanced.conductors);
+                      if (current.advanced.compilation !== initial.advanced.compilation) payload.compilation = editAdvanced.compilation;
 
                       if (Object.keys(payload).length === 0) {
                         setEditOpen(false);
@@ -1573,24 +1590,25 @@ export function BrowseNew(props: {
                       await adminUpdateTrackMetadata(token, editTrack.id, payload);
                       setEditOpen(false);
                       setEditInitial(null);
-                      showToast('Metadata saved. The library is updating.', 'success');
-                      if (payload.album !== undefined || payload.albumArtist !== undefined || payload.artists !== undefined) {
+                      showToast('Metadata saved and library updated.', 'success');
+
+                      if (payload.album !== undefined || payload.albumArtists !== undefined || payload.artists !== undefined) {
                         const newAlbum = editAlbum.trim();
                         if (newAlbum) navigate({ type: 'browse-album', artist: '', album: newAlbum, artistId: undefined });
                         else navigate({ type: 'browse', sub: 'albums' });
                       } else {
-                        window.setTimeout(() => { void refreshAlbumDetail(); }, 1500);
+                        await refreshAlbumDetail();
                       }
                     } catch (e: any) {
                       if (e?.status === 401) clear();
-                      setEditError(e?.data?.error || e?.data?.message || e?.message || 'Failed to save');
+                      setEditError(e?.data?.error || e?.data?.message || e?.message || 'Failed to save metadata');
                     } finally {
                       setEditSaving(false);
                     }
                   }}
                   className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-medium disabled:opacity-60"
                 >
-                  {editSaving ? 'Saving…' : 'Save'}
+                  {editSaving ? 'Writing tags & refreshing…' : 'Save'}
                 </button>
               </div>
             </div>
