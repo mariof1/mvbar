@@ -245,3 +245,68 @@ audio {
 .animate-fade-in {
   animation: fadeIn 0.2s ease-out;
 }
+
+
+/* Now-playing track indicator: four independently moving equalizer bars. */
+.mvbar-playing-equalizer {
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  width: 14px;
+  height: 14px;
+}
+
+.mvbar-playing-equalizer__bar {
+  width: 2px;
+  min-height: 3px;
+  border-radius: 9999px;
+  background: currentColor;
+  transform-origin: center bottom;
+  animation: mvbarPlayingEqualizer 720ms ease-in-out infinite alternate;
+}
+
+.mvbar-playing-equalizer__bar:nth-child(1) {
+  height: 45%;
+  animation-duration: 620ms;
+}
+
+.mvbar-playing-equalizer__bar:nth-child(2) {
+  height: 90%;
+  animation-duration: 840ms;
+  animation-delay: -230ms;
+}
+
+.mvbar-playing-equalizer__bar:nth-child(3) {
+  height: 65%;
+  animation-duration: 700ms;
+  animation-delay: -410ms;
+}
+
+.mvbar-playing-equalizer__bar:nth-child(4) {
+  height: 80%;
+  animation-duration: 930ms;
+  animation-delay: -120ms;
+}
+
+@keyframes mvbarPlayingEqualizer {
+  0% {
+    transform: scaleY(0.28);
+  }
+  45% {
+    transform: scaleY(0.95);
+  }
+  70% {
+    transform: scaleY(0.5);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mvbar-playing-equalizer__bar {
+    animation: none;
+    transform: none;
+  }
+}
