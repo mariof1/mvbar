@@ -71,6 +71,20 @@ def embed_artwork(output, extension, artwork):
         audio.save()
 
 
+async def get_downloadable_with_fallback(client, track_id, quality):
+    last_error = None
+    for candidate_quality in range(quality, -1, -1):
+        try:
+            return await client.get_downloadable(track_id, quality=candidate_quality)
+        except Exception as error:
+            if type(error).__name__ != "NonStreamableError":
+                raise
+            last_error = error
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No Deezer quality candidates were available")
+
+
 async def main():
     from mutagen import File
     from streamrip.client.deezer import DeezerClient
@@ -107,7 +121,7 @@ async def main():
         await client.login()
         for index, metadata in enumerate(tracks, start=1):
             track_id = str(metadata["id"])
-            downloadable = await client.get_downloadable(track_id, quality=quality)
+            downloadable = await get_downloadable_with_fallback(client, track_id, quality)
             extension = downloadable.extension.lower()
             if extension not in ("mp3", "flac"):
                 raise ValueError("Unsupported Deezer audio format")
