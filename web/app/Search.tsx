@@ -12,6 +12,7 @@ import { useUi, type PodcastEpisode } from './uiStore';
 import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 import { ArtworkImage } from './ArtworkImage';
 import { formatCount } from './format';
+import { PlayingTrackIndicator } from './PlayingTrackIndicator';
 
 type Hit = {
   id: number;
@@ -429,7 +430,7 @@ export function Search(props: { onPlay?: (t: Hit) => void; onAddToQueue?: (t: Hi
 
                 {/* Track Info */}
                 <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-white truncate text-sm sm:text-base">{t.title ?? t.path}</div>
+                  <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white sm:text-base"><span className="truncate">{t.title ?? t.path}</span><PlayingTrackIndicator trackId={t.id} /></div>
                   <div className="text-xs sm:text-sm text-slate-400 truncate">
                     {[trackArtistLabel(t), t.album].filter(Boolean).join(' • ')}
                   </div>
