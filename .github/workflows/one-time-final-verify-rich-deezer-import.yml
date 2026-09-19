@@ -1,3 +1,4 @@
+# retry after compatibility fix
 name: One-time final verify rich Deezer import
 
 on:
