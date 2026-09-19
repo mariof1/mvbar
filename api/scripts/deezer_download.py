@@ -71,6 +71,146 @@ def embed_artwork(output, extension, artwork):
         audio.save()
 
 
+def clean_values(value):
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    result = []
+    seen = set()
+    for item in values:
+        if isinstance(item, dict):
+            item = item.get("name")
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
+
+
+def gain_tag(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not (-100 <= number <= 100):
+        return None
+    return f"{number:+.2f} dB"
+
+
+async def deezer_gateway_credits(client, track_id):
+    try:
+        detail = await asyncio.to_thread(client.client.gw.get_track, track_id)
+    except Exception:
+        return {"composers": [], "lyricists": []}
+    contributors = detail.get("SNG_CONTRIBUTORS") if isinstance(detail, dict) else None
+    if not isinstance(contributors, dict):
+        return {"composers": [], "lyricists": []}
+    composers = clean_values(contributors.get("composer"))
+    lyricists = clean_values(
+        contributors.get("author")
+        or contributors.get("lyricist")
+        or contributors.get("writer")
+    )
+    return {"composers": composers, "lyricists": lyricists}
+
+
+def apply_rich_metadata(output, extension, metadata, job, credits):
+    artists = clean_values(metadata.get("artists") or metadata.get("artist"))
+    composers = clean_values(credits.get("composers"))
+    lyricists = clean_values(credits.get("lyricists"))
+    publisher = str(job.get("publisher") or "").strip()
+    barcode = str(job.get("barcode") or "").strip()
+    release_type = str(job.get("recordType") or "").strip()
+    album_id = str(job.get("albumId") or metadata.get("albumId") or "").strip()
+    track_id = str(metadata.get("id") or "").strip()
+    lyrics_value = metadata.get("lyrics")
+    lyrics_text = ""
+    if isinstance(lyrics_value, dict):
+        lyrics_text = str(lyrics_value.get("text") or "").strip()
+    bpm = metadata.get("bpm")
+    try:
+        bpm_text = str(int(round(float(bpm)))) if bpm and float(bpm) > 0 else ""
+    except (TypeError, ValueError):
+        bpm_text = ""
+    track_gain = gain_tag(metadata.get("gainDb"))
+    album_gain = gain_tag(job.get("albumGainDb"))
+
+    if extension == "mp3":
+        from mutagen.id3 import ID3, TPE1, TBPM, TCOM, TEXT, TPUB, USLT, TXXX
+
+        tags = ID3(output)
+        if artists:
+            tags.delall("TPE1")
+            tags.add(TPE1(encoding=3, text=artists))
+        if bpm_text:
+            tags.delall("TBPM")
+            tags.add(TBPM(encoding=3, text=[bpm_text]))
+        if composers:
+            tags.delall("TCOM")
+            tags.add(TCOM(encoding=3, text=composers))
+        if lyricists:
+            tags.delall("TEXT")
+            tags.add(TEXT(encoding=3, text=lyricists))
+        if publisher:
+            tags.delall("TPUB")
+            tags.add(TPUB(encoding=3, text=[publisher]))
+        if lyrics_text:
+            tags.delall("USLT")
+            tags.add(USLT(encoding=3, lang="eng", desc="", text=lyrics_text))
+
+        custom = {
+            "BARCODE": barcode,
+            "RELEASETYPE": release_type,
+            "REPLAYGAIN_TRACK_GAIN": track_gain,
+            "REPLAYGAIN_ALBUM_GAIN": album_gain,
+            "DEEZER_TRACK_ID": track_id,
+            "DEEZER_ALBUM_ID": album_id,
+        }
+        for description, value in custom.items():
+            if not value:
+                continue
+            for key in list(tags.keys()):
+                frame = tags.get(key)
+                if isinstance(frame, TXXX) and frame.desc.casefold() == description.casefold():
+                    del tags[key]
+            tags.add(TXXX(encoding=3, desc=description, text=[value]))
+        tags.save(output, v2_version=4)
+
+    elif extension == "flac":
+        from mutagen.flac import FLAC
+
+        audio = FLAC(output)
+        if artists:
+            audio["ARTIST"] = artists
+        if bpm_text:
+            audio["BPM"] = [bpm_text]
+        if composers:
+            audio["COMPOSER"] = composers
+        if lyricists:
+            audio["LYRICIST"] = lyricists
+        if publisher:
+            audio["PUBLISHER"] = [publisher]
+        if lyrics_text:
+            audio["LYRICS"] = [lyrics_text]
+        if barcode:
+            audio["BARCODE"] = [barcode]
+        if release_type:
+            audio["RELEASETYPE"] = [release_type]
+        if track_gain:
+            audio["REPLAYGAIN_TRACK_GAIN"] = [track_gain]
+        if album_gain:
+            audio["REPLAYGAIN_ALBUM_GAIN"] = [album_gain]
+        if track_id:
+            audio["DEEZER_TRACK_ID"] = [track_id]
+        if album_id:
+            audio["DEEZER_ALBUM_ID"] = [album_id]
+        audio.save()
+
+
 async def get_downloadable_with_fallback(client, track_id, quality):
     last_error = None
     for candidate_quality in range(quality, -1, -1):
@@ -132,7 +272,7 @@ async def main():
                 raise ValueError("Downloaded audio could not be read")
             for key, value in (
                 ("title", metadata.get("title")),
-                ("artist", metadata.get("artist")),
+                ("artist", metadata.get("artists") or metadata.get("artist")),
                 ("album", metadata.get("album")),
                 ("albumartist", job.get("albumArtist")),
                 ("isrc", metadata.get("isrc")),
@@ -144,6 +284,12 @@ async def main():
                 if value:
                     audio[key] = [str(item) for item in value] if isinstance(value, list) else [str(value)]
             audio.save()
+            credits = await deezer_gateway_credits(client, track_id)
+            try:
+                apply_rich_metadata(output, extension, metadata, job, credits)
+            except Exception:
+                # Rich tags are best effort; a successfully downloaded audio file remains usable.
+                print("Metadata warning: rich tags could not be applied", file=sys.stderr, flush=True)
             try:
                 embed_artwork(output, extension, artwork)
             except Exception:
