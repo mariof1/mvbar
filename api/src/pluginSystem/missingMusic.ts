@@ -887,6 +887,197 @@ async function recordDeezerPlaylistSyncFailure(importRow: DeezerPlaylistImportRo
   );
   return message;
 }
+async function syncDeezerPlaylistImport(
+  plugin: MissingMusicPluginRow,
+  importRow: DeezerPlaylistImportRow,
+  source: 'manual' | 'scheduled',
+) {
+  if (deezerPlaylistSyncJobs.has(importRow.id)) throw new Error('This Deezer playlist is already syncing');
+  if (!['completed', 'partial'].includes(importRow.status)) {
+    throw new Error('Wait for the current playlist import to finish before syncing with Deezer');
+  }
+
+  deezerPlaylistSyncJobs.add(importRow.id);
+  try {
+    await assertDeezerStagingReady();
+    await ensureMissingMusicLibraryAccess(importRow.user_id);
+    const { playlist, tracks } = await deezerPlaylistTracks(importRow.deezer_playlist_id, 1000);
+    const remoteTracks = uniqueDeezerPlaylistTracks(tracks);
+    if (!remoteTracks.length) throw new Error('The Deezer playlist currently has no available tracks');
+
+    const client = await db().connect();
+    let updated: DeezerPlaylistImportRow;
+    let addedCount = 0;
+    let removedCount = 0;
+    try {
+      await client.query('begin');
+      const locked = (await client.query<DeezerPlaylistImportRow>(
+        'select * from plugin_deezer_playlist_imports where id=$1 and plugin_id=$2 for update',
+        [importRow.id, plugin.id]
+      )).rows[0];
+      if (!locked) throw new Error('Playlist import no longer exists');
+
+      const currentItems = (await client.query<DeezerPlaylistImportItemRow>(
+        'select * from plugin_deezer_playlist_items where import_id=$1 order by position',
+        [importRow.id]
+      )).rows;
+      const currentByTrackId = new Map(currentItems.map(item => [item.deezer_track_id, item] as const));
+      const remoteIds = new Set(remoteTracks.map(track => track.id));
+      const removedItems = currentItems.filter(item => !remoteIds.has(item.deezer_track_id));
+      const removedTrackIds = removedItems
+        .map(item => item.track_id)
+        .filter((trackId): trackId is number | string => trackId !== null && trackId !== undefined)
+        .map(Number)
+        .filter(Number.isFinite);
+      const removedRequestIds = removedItems
+        .map(item => item.request_id)
+        .filter((requestId): requestId is string => Boolean(requestId));
+
+      addedCount = remoteTracks.filter(track => !currentByTrackId.has(track.id)).length;
+      removedCount = removedItems.length;
+
+      if (removedTrackIds.length) {
+        await client.query(
+          'delete from playlist_items where playlist_id=$1 and track_id=any($2::bigint[])',
+          [Number(importRow.playlist_id), removedTrackIds]
+        );
+      }
+      if (removedRequestIds.length) {
+        await client.query(
+          "update plugin_media_requests set status='cancelled', " +
+          "provider_error='Removed from the source Deezer playlist during sync', updated_at=now() " +
+          "where id=any($1::text[]) and status in ('requested','approved')",
+          [removedRequestIds]
+        );
+      }
+
+      await client.query('delete from plugin_deezer_playlist_items where import_id=$1', [importRow.id]);
+
+      const values: string[] = [];
+      const params: unknown[] = [];
+      for (const [index, track] of remoteTracks.entries()) {
+        const previous = currentByTrackId.get(track.id);
+        const base = params.length;
+        values.push('(' + Array.from({ length: 16 }, (_, offset) => '$' + (base + offset + 1)).join(',') + ')');
+        params.push(
+          importRow.id,
+          index,
+          track.id,
+          track.albumId,
+          track.artistId,
+          track.title,
+          track.artist,
+          track.album || null,
+          track.durationMs,
+          track.isrc,
+          track.trackNumber || null,
+          track.discNumber || null,
+          previous?.request_id ?? null,
+          previous?.track_id ?? null,
+          previous?.state ?? 'pending',
+          previous?.error ?? null,
+        );
+      }
+      await client.query(
+        'insert into plugin_deezer_playlist_items(' +
+        'import_id,position,deezer_track_id,deezer_album_id,deezer_artist_id,title,artist,album,' +
+        'duration_ms,isrc,track_number,disc_number,request_id,track_id,state,error' +
+        ') values ' + values.join(','),
+        params
+      );
+
+      await client.query(
+        "update playlist_items item set position=source.position " +
+        "from plugin_deezer_playlist_items source " +
+        "where source.import_id=$1 and source.state='added' and source.track_id=item.track_id and item.playlist_id=$2",
+        [importRow.id, Number(importRow.playlist_id)]
+      );
+
+      const counts = (await client.query<{ total: string | number; added: string | number; failed: string | number; outstanding: string | number }>(
+        "select count(*) total," +
+        "count(*) filter(where state='added') added," +
+        "count(*) filter(where state='failed') failed," +
+        "count(*) filter(where state not in ('added','failed')) outstanding " +
+        "from plugin_deezer_playlist_items where import_id=$1",
+        [importRow.id]
+      )).rows[0];
+      const total = Number(counts?.total ?? 0);
+      const added = Number(counts?.added ?? 0);
+      const failed = Number(counts?.failed ?? 0);
+      const outstanding = Number(counts?.outstanding ?? 0);
+      const status: DeezerPlaylistImportRow['status'] = outstanding > 0 ? 'queued' : failed > 0 ? 'partial' : 'completed';
+
+      await client.query(
+        'update playlists set artwork_url=coalesce($2,artwork_url) where id=$1 and user_id=$3',
+        [Number(importRow.playlist_id), playlist.cover, importRow.user_id]
+      );
+
+      updated = (await client.query<DeezerPlaylistImportRow>(
+        "update plugin_deezer_playlist_imports set title=$2,artwork_url=$3,status=$4,total_tracks=$5," +
+        "added_tracks=$6,failed_tracks=$7,last_synced_at=now(),last_sync_error=null,last_sync_added=$8,last_sync_removed=$9," +
+        "next_sync_at=case when sync_enabled then now() + sync_interval_hours * interval '1 hour' else null end,updated_at=now() " +
+        "where id=$1 returning *",
+        [importRow.id, playlist.title, playlist.cover, status, total, added, failed, addedCount, removedCount]
+      )).rows[0];
+
+      await client.query('commit');
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    await broadcastImportedPlaylistUpdated(updated);
+    await audit('plugin_deezer_playlist_synced', {
+      pluginId: plugin.id,
+      importId: importRow.id,
+      userId: importRow.user_id,
+      deezerPlaylistId: importRow.deezer_playlist_id,
+      playlistId: Number(importRow.playlist_id),
+      source,
+      added: addedCount,
+      removed: removedCount,
+    });
+
+    if (addedCount > 0 || removedCount > 0) {
+      broadcastToUser(importRow.user_id, 'missing-music:update', {
+        event: 'playlist-sync-complete',
+        requestId: importRow.id,
+        userId: importRow.user_id,
+        status: updated.status,
+        artist: 'Deezer',
+        title: updated.title,
+        message: updated.title + ' synced with Deezer: ' + addedCount + ' added · ' + removedCount + ' removed from playlist',
+        at: new Date().toISOString(),
+      });
+    }
+
+    return { importRow: updated, added: addedCount, removed: removedCount };
+  } catch (error) {
+    await recordDeezerPlaylistSyncFailure(importRow, error).catch(() => undefined);
+    throw error;
+  } finally {
+    deezerPlaylistSyncJobs.delete(importRow.id);
+  }
+}
+
+async function syncDueDeezerPlaylists(plugin: MissingMusicPluginRow) {
+  const due = await db().query<DeezerPlaylistImportRow>(
+    "select * from plugin_deezer_playlist_imports where plugin_id=$1 and sync_enabled=true " +
+    "and next_sync_at is not null and next_sync_at <= now() and status in ('completed','partial') " +
+    "order by next_sync_at limit 5",
+    [plugin.id]
+  );
+  for (const importRow of due.rows) {
+    if (deezerPlaylistSyncJobs.has(importRow.id)) continue;
+    try {
+      await syncDeezerPlaylistImport(plugin, importRow, 'scheduled');
+    } catch (error) {
+      logger.warn('missing-music', 'Scheduled Deezer playlist sync failed for ' + importRow.id + ': ' + errorMessage(error));
+    }
+  }
+}
 async function addImportedPlaylistTrack(
   importRow: DeezerPlaylistImportRow,
   item: DeezerPlaylistImportItemRow,
