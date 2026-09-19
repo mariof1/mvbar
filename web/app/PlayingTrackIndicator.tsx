@@ -39,11 +39,12 @@ export function PlayingTrackIndicator({
       title="Now playing"
       className={`inline-flex h-4 w-4 flex-none items-center justify-center text-cyan-400 ${className}`}
     >
-      <svg className="h-4 w-4 animate-pulse motion-reduce:animate-none" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-        <rect x="1" y="6" width="2.5" height="6" rx="1" />
-        <rect x="6.75" y="2" width="2.5" height="10" rx="1" />
-        <rect x="12.5" y="4" width="2.5" height="8" rx="1" />
-      </svg>
+      <span className="mvbar-playing-equalizer" aria-hidden="true">
+        <span className="mvbar-playing-equalizer__bar" />
+        <span className="mvbar-playing-equalizer__bar" />
+        <span className="mvbar-playing-equalizer__bar" />
+        <span className="mvbar-playing-equalizer__bar" />
+      </span>
     </span>
   );
 }
