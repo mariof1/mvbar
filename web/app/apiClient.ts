@@ -433,16 +433,41 @@ export async function adminUpdateTrackMetadata(
     title?: string | null;
     artists?: string[] | null;
     album?: string | null;
-    albumArtist?: string | null;
+    albumArtists?: string[] | null;
+    genres?: string[] | null;
+    countries?: string[] | null;
+    languages?: string[] | null;
     trackNumber?: number | null;
+    trackTotal?: number | null;
     discNumber?: number | null;
-    year?: number | null;
-    genre?: string | null;
-    country?: string | null;
-    language?: string | null;
+    discTotal?: number | null;
+    releaseDate?: string | null;
+    originalYear?: number | null;
+    bpm?: number | null;
+    initialKey?: string | null;
+    composers?: string[] | null;
+    conductors?: string[] | null;
+    publisher?: string | null;
+    copyright?: string | null;
+    comment?: string | null;
+    mood?: string | null;
+    grouping?: string | null;
+    isrc?: string | null;
+    compilation?: boolean | null;
+    titleSort?: string | null;
+    artistSort?: string | null;
+    albumSort?: string | null;
+    albumArtistSort?: string | null;
+    musicbrainzTrackId?: string | null;
+    musicbrainzReleaseId?: string | null;
+    musicbrainzArtistId?: string | null;
+    musicbrainzAlbumArtistId?: string | null;
   }
 ) {
-  return (await apiFetch(`/admin/tracks/${trackId}/metadata`, { method: 'POST', body: JSON.stringify(payload) }, token)) as { ok: boolean };
+  return (await apiFetch(`/admin/tracks/${trackId}/metadata`, { method: 'POST', body: JSON.stringify(payload) }, token)) as {
+    ok: boolean;
+    track?: Record<string, unknown>;
+  };
 }
 
 export async function listLibraries(token: string) {
@@ -1147,9 +1172,32 @@ export async function browseAlbum(token: string, artist: string | null | undefin
       country?: string | null;
       language?: string | null;
       year?: number | null;
+      bpm?: number | null;
+      initial_key?: string | null;
+      composer?: string | null;
+      conductor?: string | null;
+      publisher?: string | null;
+      copyright?: string | null;
+      comment?: string | null;
+      mood?: string | null;
+      grouping?: string | null;
+      isrc?: string | null;
+      release_date?: string | null;
+      original_year?: number | null;
+      compilation?: boolean | null;
+      title_sort?: string | null;
+      artist_sort?: string | null;
+      album_sort?: string | null;
+      album_artist_sort?: string | null;
+      musicbrainz_track_id?: string | null;
+      musicbrainz_release_id?: string | null;
+      musicbrainz_artist_id?: string | null;
+      musicbrainz_album_artist_id?: string | null;
       artists: Array<{ id: number; name: string }>;
       discNumber?: number | null;
+      discTotal?: number | null;
       trackNumber?: number | null;
+      trackTotal?: number | null;
       source_plugin_id?: string | null;
     }>;
   };
