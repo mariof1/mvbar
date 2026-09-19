@@ -1192,7 +1192,7 @@ export function BrowseNew(props: {
                       </svg>
                     </button>
 
-                    {writableLibraryIds.has(track.library_id ?? -1) && /\.(mp3|flac|m4a|mp4|ogg|opus|wav)$/i.test(track.path ?? '') && (
+                    {writableLibraryIds.has(track.library_id ?? -1) && /\.(mp3|flac|m4a|mp4|ogg|opus|wav|aac)$/i.test(track.path ?? '') && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
