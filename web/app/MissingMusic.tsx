@@ -15,6 +15,7 @@ import { formatCount } from './format';
 import { useToastStore } from './Toast';
 import { useMissingMusicUpdates } from './useWebSocket';
 import { showConfirm } from './ConfirmModal';
+import { useBodyScrollLock } from './useBodyScrollLock';
 
 type Artist = {
   name: string;
@@ -132,6 +133,25 @@ type DeezerPlaylistCard = {
   trackCount: number;
   cover: string | null;
   link: string | null;
+};
+
+type DeezerPlaylistPreviewTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  artistId: string | null;
+  album: string;
+  albumId: string;
+  durationMs: number | null;
+  isrc: string | null;
+  discNumber: number;
+  trackNumber: number;
+  position: number;
+};
+
+type DeezerPlaylistPreview = {
+  playlist: DeezerPlaylistCard;
+  tracks: DeezerPlaylistPreviewTrack[];
 };
 
 type DeezerPlaylistImport = {
