@@ -1507,7 +1507,16 @@ async function downloadDeezerRequest(request: MediaRequestRow, itemId: string, l
       if (remoteAlbumId) {
         try {
           const detail = await deezerAlbum(remoteAlbumId);
-          remoteAlbum = { artist: detail.artist, releaseDate: detail.releaseDate, genres: detail.genres };
+          remoteAlbum = {
+            id: detail.id,
+            artist: detail.artist,
+            releaseDate: detail.releaseDate,
+            genres: detail.genres,
+            publisher: detail.publisher,
+            barcode: detail.barcode,
+            recordType: detail.recordType,
+            gainDb: detail.gainDb,
+          };
           deezerGenres = detail.genres;
         } catch (error) {
           logger.warn('missing-music', `Could not load Deezer album metadata for track ${itemId}: ${errorMessage(error)}`);
