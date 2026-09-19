@@ -162,8 +162,8 @@ export function requestStatusBlocksDuplicate(status: string) {
   return (ACTIVE_REQUEST_STATUSES as readonly string[]).includes(status);
 }
 
-export function isRequestProviderConfigured(config: Pick<MissingMusicConfig, 'providerBaseUrl'> | null | undefined) {
-  return Boolean(config?.providerBaseUrl?.trim());
+export function isRequestProviderConfigured(config: { providerBaseUrl?: unknown } | null | undefined) {
+  return typeof config?.providerBaseUrl === 'string' && Boolean(config.providerBaseUrl.trim());
 }
 
 export function isPermanentDeezerUnavailableError(error: unknown) {
@@ -1770,7 +1770,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
 
       const requested = await db().query<{ deezer_track_id: string }>(
         "select deezer_track_id from plugin_media_requests where plugin_id=$1 and user_id=$2 " +
-        "and item_type='track' and deezer_track_id=any($3::text[]) and status in (${ACTIVE_REQUEST_STATUS_SQL})",
+        `and item_type='track' and deezer_track_id=any($3::text[]) and status in (${ACTIVE_REQUEST_STATUS_SQL})`,
         [plugin.id, req.user.userId, songs.map(song => song.id)]
       );
       const requestedIds = new Set(requested.rows.map(row => row.deezer_track_id));
