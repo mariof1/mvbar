@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { ZipArchive } from 'archiver';
 import { probeWritableDirectory } from '../libraryWritability.js';
 import { DEEZER_MAX_ALBUM_TRACKS } from './deezerCatalog.js';
+import { fetchLrclibLyrics, type LyricsCandidate } from '../lyricsProvider.js';
 
 const DEEZER_ORIGIN = 'https://api.deezer.com';
 const DOWNLOAD_SCRIPT = fileURLToPath(new URL('../../scripts/deezer_download.py', import.meta.url));
@@ -24,6 +25,10 @@ export type DeezerTrack = {
   trackNumber?: number | null;
   cover?: string | null;
   albumId?: string | null;
+  artists: string[];
+  bpm: number | null;
+  gainDb: number | null;
+  lyrics?: LyricsCandidate | null;
 };
 
 export type DeezerAlbum = {
@@ -36,6 +41,10 @@ export type DeezerAlbum = {
   cover: string | null;
   artwork: string | null;
   genres: string[];
+  publisher: string | null;
+  barcode: string | null;
+  recordType: string | null;
+  gainDb: number | null;
   score: number;
 };
 
@@ -52,6 +61,9 @@ type RawTrack = {
   link?: string;
   artist?: { id?: number; name?: string };
   album?: { id?: number; title?: string; cover_xl?: string; cover_big?: string; cover_medium?: string };
+  contributors?: Array<{ id?: number; name?: string; role?: string }>;
+  bpm?: number;
+  gain?: number;
   disk_number?: number;
   track_position?: number;
 };
@@ -68,6 +80,10 @@ type RawAlbum = {
   cover_xl?: string;
   artist?: { name?: string };
   genres?: { data?: Array<{ id?: number; name?: string }> };
+  label?: string;
+  upc?: string;
+  gain?: number;
+  original_release_date?: string;
 };
 
 function normalized(value: string) {
@@ -84,6 +100,50 @@ function deezerCover(...candidates: Array<string | undefined>) {
     } catch { /* Ignore malformed artwork URLs from catalog results. */ }
   }
   return null;
+}
+
+function cleanNames(values: Array<string | undefined | null>) {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const name = typeof value === 'string' ? value.trim() : '';
+    if (!name) continue;
+    const key = normalized(name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(name);
+  }
+  return output;
+}
+
+function trackArtists(raw: RawTrack, fallback: string) {
+  const contributors = Array.isArray(raw.contributors)
+    ? cleanNames(raw.contributors.map(contributor => contributor?.name))
+    : [];
+  return contributors.length ? contributors : cleanNames([raw.artist?.name, fallback]);
+}
+
+function validBpm(value: unknown) {
+  const bpm = Number(value);
+  return Number.isFinite(bpm) && bpm > 0 && bpm <= 1000 ? Math.round(bpm) : null;
+}
+
+function validGain(value: unknown) {
+  const gain = Number(value);
+  return Number.isFinite(gain) && Math.abs(gain) <= 100 ? gain : null;
+}
+
+async function mapConcurrent<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const output = new Array<R>(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      output[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+  return output;
 }
 
 function deezerGenres(raw: RawAlbum) {
@@ -145,6 +205,9 @@ function mapTrack(
     trackNumber: Number.isSafeInteger(raw.track_position) && raw.track_position! > 0 ? raw.track_position! : null,
     cover: deezerCover(raw.album?.cover_xl, raw.album?.cover_big, raw.album?.cover_medium),
     albumId: raw.album?.id ? String(raw.album.id) : null,
+    artists: trackArtists(raw, raw.artist.name),
+    bpm: validBpm(raw.bpm),
+    gainDb: validGain(raw.gain),
   };
 }
 
@@ -163,6 +226,10 @@ function mapAlbum(raw: RawAlbum, artist: string, title: string): DeezerAlbum | n
     cover: deezerCover(raw.cover_medium, raw.cover_big, raw.cover_xl),
     artwork: deezerCover(raw.cover_xl, raw.cover_big, raw.cover_medium),
     genres: deezerGenres(raw),
+    publisher: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : null,
+    barcode: typeof raw.upc === 'string' && raw.upc.trim() ? raw.upc.trim() : null,
+    recordType: typeof raw.record_type === 'string' && raw.record_type.trim() ? raw.record_type.trim() : null,
+    gainDb: validGain(raw.gain),
     score: 110,
   };
 }
@@ -240,6 +307,9 @@ export async function verifiedDeezerAlbum(id: string, artist: string, title: str
         isrc: raw.isrc || null, link: null, score: 0,
         discNumber: Number.isSafeInteger(raw.disk_number) && raw.disk_number! > 0 ? raw.disk_number! : 1,
         trackNumber: Number.isSafeInteger(raw.track_position) && raw.track_position! > 0 ? raw.track_position! : tracks.length + 1,
+        artists: trackArtists(raw, raw.artist?.name || album.artist),
+        bpm: validBpm(raw.bpm),
+        gainDb: validGain(raw.gain),
       });
     }
   }
@@ -266,6 +336,50 @@ export async function verifiedDeezerTrack(
   return track;
 }
 
+export async function enrichDeezerTrackForImport(
+  track: DeezerTrack,
+  options: { fetchDetail?: boolean; lyrics?: boolean } = {},
+): Promise<DeezerTrack> {
+  let enriched = track;
+  if (options.fetchDetail) {
+    try {
+      const detail = await deezerJson(new URL(`/track/${track.id}`, DEEZER_ORIGIN)) as RawTrack;
+      if (String(detail.id ?? '') === track.id) {
+        enriched = {
+          ...track,
+          artist: detail.artist?.name || track.artist,
+          artists: trackArtists(detail, track.artist),
+          durationMs: typeof detail.duration === 'number' ? detail.duration * 1000 : track.durationMs,
+          isrc: detail.isrc || track.isrc,
+          cover: deezerCover(detail.album?.cover_xl, detail.album?.cover_big, detail.album?.cover_medium) || track.cover,
+          bpm: validBpm(detail.bpm) ?? track.bpm,
+          gainDb: validGain(detail.gain) ?? track.gainDb,
+          albumId: detail.album?.id ? String(detail.album.id) : track.albumId,
+        };
+      }
+    } catch {
+      // Rich metadata is best effort and must never prevent an otherwise valid download.
+    }
+  }
+
+  if (options.lyrics) {
+    const lookupArtist = enriched.artists[0] || enriched.artist;
+    const lyrics = await fetchLrclibLyrics(lookupArtist, enriched.title, enriched.album, enriched.durationMs);
+    enriched = { ...enriched, lyrics };
+  }
+
+  return enriched;
+}
+
+export async function enrichDeezerTracksForImport(
+  tracks: DeezerTrack[],
+  options: { concurrency?: number; lyrics?: boolean } = {},
+) {
+  return mapConcurrent(tracks, options.concurrency ?? 4, track =>
+    enrichDeezerTrackForImport(track, { fetchDetail: true, lyrics: options.lyrics })
+  );
+}
+
 function pathsOverlap(left: string, right: string) {
   const inside = (relative: string) => !relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
   return inside(path.relative(left, right)) || inside(path.relative(right, left));
@@ -275,6 +389,8 @@ export function deezerStagingConfig() {
   const directory = process.env.DEEZER_DOWNLOAD_DIR?.trim() ?? '';
   const arl = process.env.DEEZER_ARL?.trim() ?? '';
   const quality = Number(process.env.DEEZER_QUALITY ?? 0);
+  const metadataConcurrency = Math.max(1, Math.min(8, Number(process.env.DEEZER_METADATA_CONCURRENCY ?? 4) || 4));
+  const importLyrics = !['0', 'false', 'no', 'off'].includes((process.env.DEEZER_IMPORT_LYRICS ?? 'true').trim().toLowerCase());
   const resolved = directory ? path.resolve(directory) : '';
   const roots = (process.env.MUSIC_DIRS ?? process.env.MUSIC_DIR ?? '/music')
     .split(',').map(root => root.trim()).filter(Boolean).map(root => path.resolve(root));
@@ -285,6 +401,8 @@ export function deezerStagingConfig() {
     arl,
     python: process.env.DEEZER_PYTHON?.trim() || (process.platform === 'win32' ? 'python' : 'python3'),
     quality: Number.isInteger(quality) && quality >= 0 && quality <= 2 ? quality : 0,
+    metadataConcurrency,
+    importLyrics,
     configured: Boolean(directory && arl && !overlapsMusic),
     error: overlapsMusic ? 'DEEZER_DOWNLOAD_DIR must be separate from MUSIC_DIRS' : 'Set DEEZER_ARL and DEEZER_DOWNLOAD_DIR on the server first',
   };
