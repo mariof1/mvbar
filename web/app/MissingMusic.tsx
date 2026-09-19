@@ -1333,7 +1333,10 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium text-white">{item.title}</div>
-                        <div className="text-xs text-white/45">{item.addedTracks}/{item.totalTracks} tracks added</div>
+                        <div className="text-xs text-white/45">
+                          {item.addedTracks}/{item.totalTracks} tracks ready
+                          {item.unavailableTracks > 0 ? ` · ${item.unavailableTracks} unavailable` : ''}
+                        </div>
                       </div>
                     </div>
                     <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
@@ -1393,15 +1396,20 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                           >
                             Open playlist
                           </a>
-                          {imported.status === 'partial' && imported.failedTracks > 0 && (
+                          {imported.status === 'partial' && imported.retryableFailedTracks > 0 && (
                             <button
                               type="button"
                               onClick={() => void retryDeezerPlaylistImport(imported)}
                               disabled={!status?.playlistImportEnabled || playlistImportBusy !== null}
                               className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-400/20 disabled:opacity-45"
                             >
-                              {playlistImportBusy === playlist.id ? 'Retrying…' : `Retry ${imported.failedTracks} failed`}
+                              {playlistImportBusy === playlist.id ? 'Retrying…' : `Retry ${imported.retryableFailedTracks} failed`}
                             </button>
+                          )}
+                          {imported.unavailableTracks > 0 && (
+                            <div className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-center text-xs text-white/50">
+                              {imported.unavailableTracks} unavailable on Deezer
+                            </div>
                           )}
                         </div>
                       ) : (
