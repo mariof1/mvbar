@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { LogController } from 'fastify';
 import multipart from '@fastify/multipart';
 import { config } from './config.js';
 import { authPlugin } from './auth.js';
@@ -43,7 +43,7 @@ import { refreshRateLimitBypassIPs } from './rateLimitBypass.js';
 
 // Use pino-pretty for human-readable logs
 const app = Fastify({
-  disableRequestLogging: true,
+  logController: new LogController({ disableRequestLogging: true }),
   logger: {
     level: process.env.LOG_LEVEL ?? 'info',
     transport: {

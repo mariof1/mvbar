@@ -44,7 +44,7 @@ test('Deezer staging rejects a filesystem alias of the main music library', asyn
   const oldArl = process.env.DEEZER_ARL;
   const oldMusicDir = process.env.MUSIC_DIR;
   await mkdir(music);
-  await symlink(music, alias, 'dir');
+  await symlink(music, alias, process.platform === 'win32' ? 'junction' : 'dir');
   process.env.DEEZER_DOWNLOAD_DIR = alias;
   process.env.DEEZER_ARL = 'test-arl';
   process.env.MUSIC_DIR = music;
@@ -339,7 +339,10 @@ test('staged albums reject missing tracks even when other audio files remain', a
 
     await writeFile(path.join(album, expected[1]), 'second again');
     const archive = await unzipper.Open.buffer(await streamBuffer(await createStagedAlbumArchive('Artist/Album', expected, 2)));
-    assert.deepEqual(archive.files.map(file => file.path), expected.map(name => `Artist/Album/${name}`));
+    assert.deepEqual(
+      archive.files.map(file => file.path).sort(),
+      expected.map(name => `Artist/Album/${name}`).sort(),
+    );
   } finally {
     if (oldDirectory === undefined) delete process.env.DEEZER_DOWNLOAD_DIR;
     else process.env.DEEZER_DOWNLOAD_DIR = oldDirectory;

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import path from 'node:path';
 import { probeWritableDirectory } from '../dist/libraryWritability.js';
 
 test('writable directory probe requires a real create and delete', async () => {
@@ -19,7 +20,7 @@ test('writable directory probe requires a real create and delete', async () => {
   assert.equal(calls[0][0], 'open');
   assert.equal(calls[0][2], 'wx');
   assert.equal(calls[0][3], 0o600);
-  assert.equal(calls[0][1].startsWith('/music/.mvbar-write-probe-'), true);
+  assert.equal(calls[0][1].startsWith(path.join('/music', '.mvbar-write-probe-')), true);
   assert.equal(calls.includes('close'), true);
   assert.equal(calls.filter((call) => Array.isArray(call) && call[0] === 'unlink').length >= 1, true);
 });
@@ -39,5 +40,5 @@ test('writable directory probe returns false when the mount rejects creation', a
 
   assert.equal(await probeWritableDirectory('/music', fsOps), false);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].startsWith('/music/.mvbar-write-probe-'), true);
+  assert.equal(calls[0].startsWith(path.join('/music', '.mvbar-write-probe-')), true);
 });
