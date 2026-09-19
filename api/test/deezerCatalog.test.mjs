@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   DEEZER_MAX_ALBUM_TRACKS,
   deezerAlbum,
+  deezerAlbumsForArtist,
   deezerBaseAlbumTitle,
   deezerSecondaryTypes,
   dedupeDeezerAlbums,
@@ -64,6 +65,37 @@ test('full Deezer album metadata keeps clean, deduplicated genre names', async (
   }
 });
 
+test('artist catalog fills track counts from album details when Deezer omits them from listings', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/artist/27/albums') return new Response(JSON.stringify({ data: [{
+      id: 302127,
+      title: 'Discovery',
+      release_date: '2001-03-07',
+      record_type: 'album',
+    }] }), { status: 200 });
+    if (url.pathname === '/album/302127') return new Response(JSON.stringify({
+      id: 302127,
+      title: 'Discovery',
+      nb_tracks: 14,
+      release_date: '2001-03-07',
+      record_type: 'album',
+      artist: { id: 27, name: 'Daft Punk' },
+      genres: { data: [{ id: 106, name: 'Electro' }] },
+    }), { status: 200 });
+    return new Response('{}', { status: 404 });
+  };
+  try {
+    const albums = await deezerAlbumsForArtist('27', { artistName: 'Daft Punk' });
+    assert.equal(albums.length, 1);
+    assert.equal(albums[0].trackCount, 14);
+    assert.deepEqual(albums[0].genres, ['Electro']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Deezer album dedupe prefers standard editions unless special editions are requested', () => {
   const base = {
     artistId: '27', artist: 'Daft Punk', releaseDate: '2001-03-07',
@@ -73,6 +105,10 @@ test('Deezer album dedupe prefers standard editions unless special editions are 
   const deluxe = { ...base, id: '2', title: 'Discovery (Deluxe Edition)', trackCount: 18, baseTitle: 'discovery', explicit: true };
   assert.equal(dedupeDeezerAlbums([deluxe, standard], false)[0].id, '1');
   assert.equal(dedupeDeezerAlbums([standard, deluxe], true)[0].id, '2');
+
+  const original = { ...base, id: '3', title: 'Random Access Memories', trackCount: 0, baseTitle: 'random access memories' };
+  const drumless = { ...base, id: '4', title: 'Random Access Memories (Drumless Edition)', trackCount: 0, baseTitle: 'random access memories' };
+  assert.equal(dedupeDeezerAlbums([drumless, original], false)[0].id, '3');
 });
 
 test('track matching prefers ISRC when available', () => {

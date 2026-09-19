@@ -257,6 +257,40 @@ test('Deezer album selection rejects other versions and validates every paginate
   }
 });
 
+test('verified Deezer releases allow catalog singles while keeping exact matching', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/album/45') return new Response(JSON.stringify({
+      id: 45,
+      title: 'Harder, Better, Faster, Stronger',
+      artist: { name: 'Daft Punk' },
+      record_type: 'single',
+      nb_tracks: 2,
+      release_date: '2010-04-05',
+    }), { status: 200 });
+    if (url.pathname === '/album/45/tracks') return new Response(JSON.stringify({
+      total: 2,
+      data: [
+        { id: 451, title: 'Harder, Better, Faster, Stronger', artist: { name: 'Daft Punk' }, disk_number: 1, track_position: 1 },
+        { id: 452, title: 'Harder, Better, Faster, Stronger (Remix)', artist: { name: 'Daft Punk' }, disk_number: 1, track_position: 2 },
+      ],
+    }), { status: 200 });
+    return new Response('{}', { status: 404 });
+  };
+  try {
+    const release = await verifiedDeezerAlbum('45', 'Daft Punk', 'Harder, Better, Faster, Stronger');
+    assert.equal(release.recordType, 'single');
+    assert.equal(release.tracks.length, 2);
+    await assert.rejects(
+      verifiedDeezerAlbum('45', 'Other Artist', 'Harder, Better, Faster, Stronger'),
+      /does not match/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('single-track tag metadata prefers local genre and falls back to Deezer album genres', () => {
   const remote = { artist: 'Daft Punk', releaseDate: '2001-03-07', genres: ['Electro', 'Dance'] };
   assert.deepEqual(resolveDeezerTrackTagMetadata(null, remote), {

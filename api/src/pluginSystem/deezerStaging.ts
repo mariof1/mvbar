@@ -211,9 +211,17 @@ function mapTrack(
   };
 }
 
-function mapAlbum(raw: RawAlbum, artist: string, title: string): DeezerAlbum | null {
+const DEEZER_ALBUM_SEARCH_TYPES = new Set(['album', 'ep']);
+const DEEZER_DOWNLOADABLE_RELEASE_TYPES = new Set(['album', 'ep', 'single', 'compile', 'compilation']);
+
+function mapAlbum(
+  raw: RawAlbum,
+  artist: string,
+  title: string,
+  allowedRecordTypes = DEEZER_ALBUM_SEARCH_TYPES,
+): DeezerAlbum | null {
   if (!Number.isSafeInteger(raw.id) || !raw.id || !raw.title || !raw.artist?.name) return null;
-  if (raw.record_type && !['album', 'ep'].includes(raw.record_type.toLowerCase())) return null;
+  if (raw.record_type && !allowedRecordTypes.has(raw.record_type.toLowerCase())) return null;
   if (normalized(raw.title) !== normalized(title)) return null;
   const wantedArtist = normalized(artist);
   const foundArtist = normalized(raw.artist.name);
@@ -286,7 +294,10 @@ export async function searchDeezerAlbums(artist: string, title: string): Promise
 export async function verifiedDeezerAlbum(id: string, artist: string, title: string): Promise<VerifiedDeezerAlbum> {
   if (!/^\d{1,16}$/.test(id)) throw new Error('Invalid Deezer album id');
   const detail = await deezerJson(new URL(`/album/${id}`, DEEZER_ORIGIN)) as RawAlbum;
-  const album = mapAlbum(detail, artist, title);
+  // The artist catalog can be configured to include singles and compilations.
+  // Any release type the catalog presents as downloadable must pass the same
+  // exact artist/title checks as a regular album here.
+  const album = mapAlbum(detail, artist, title, DEEZER_DOWNLOADABLE_RELEASE_TYPES);
   if (!album || album.id !== id) throw new Error('This Deezer album does not match the requested album');
   if (album.trackCount < 1 || album.trackCount > DEEZER_MAX_ALBUM_TRACKS) throw new Error('Album track count is unavailable or too large');
   const tracks: DeezerAlbumTrack[] = [];

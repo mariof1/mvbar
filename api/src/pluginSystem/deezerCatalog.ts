@@ -168,6 +168,19 @@ function albumGain(raw: RawAlbum) {
   const gain = Number(raw.gain);
   return Number.isFinite(gain) && Math.abs(gain) <= 100 ? gain : null;
 }
+
+async function mapConcurrent<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const output = new Array<R>(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      output[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+  return output;
+}
 function mapAlbum(raw: RawAlbum, artistId: string, artistName: string): DeezerAlbum | null {
   if (!Number.isSafeInteger(raw.id) || !raw.id || !raw.title) return null;
   return {
@@ -200,7 +213,13 @@ export async function deezerArtist(id: string): Promise<DeezerArtist> {
   return { id, name: r.name.trim(), cover: cover(r), link: typeof r.link === 'string' ? r.link : null, score: 100 };
 }
 function albumScore(a: DeezerAlbum, preferSpecial: boolean) {
-  let score = 100 + Math.min(a.trackCount,30); const special = isSpecialEdition(a.title);
+  let score = 100 + Math.min(a.trackCount,30);
+  const special = isSpecialEdition(a.title);
+  // Prefer the undecorated title in a group. Deezer often lists recent
+  // variants (for example, a drumless edition) before the original album,
+  // and artist listing rows do not carry enough metadata for track-count
+  // ranking until after the group has already been deduplicated.
+  if (normalizeDeezerText(a.title) === a.baseTitle) score += 30;
   if (preferSpecial && special) score += 25; if (!preferSpecial && special) score -= 15; if (a.explicit) score += 10; return score;
 }
 export function dedupeDeezerAlbums(albums: DeezerAlbum[], preferSpecial=false) {
@@ -221,8 +240,23 @@ export async function deezerAlbumsForArtist(id: string, options: {
     if (rows.length < 100 || albums.length >= Math.min(Number(page.total || max),max)) break;
   }
   const types = options.releaseTypes || new Set(['album','ep']), excluded = options.excludedTypes || new Set(['compilation','live','remix','soundtrack']);
-  return dedupeDeezerAlbums(albums.filter(a=>types.has(a.recordType.toLowerCase())).filter(a=>!a.secondaryTypes.some(t=>excluded.has(t.toLowerCase()))),options.preferSpecial)
-    .sort((a,b)=>(a.releaseDate||'9999').localeCompare(b.releaseDate||'9999') || a.title.localeCompare(b.title));
+  const selected = dedupeDeezerAlbums(
+    albums.filter(a=>types.has(a.recordType.toLowerCase())).filter(a=>!a.secondaryTypes.some(t=>excluded.has(t.toLowerCase()))),
+    options.preferSpecial,
+  ).sort((a,b)=>(a.releaseDate||'9999').localeCompare(b.releaseDate||'9999') || a.title.localeCompare(b.title));
+
+  // Deezer's artist-albums listing currently omits nb_tracks and most album
+  // metadata. Fetch the selected release details so the UI can enable valid
+  // downloads and show accurate counts, genres and release metadata.
+  return mapConcurrent(selected, 6, async summary => {
+    try {
+      const raw: RawAlbum = await json(new URL('/album/' + summary.id, ORIGIN));
+      const detail = mapAlbum(raw, id, artist);
+      return detail?.id === summary.id ? detail : summary;
+    } catch {
+      return summary;
+    }
+  });
 }
 export async function deezerAlbum(id: string) {
   if (!/^\d{1,16}$/.test(id)) throw new Error('Invalid Deezer album id');
