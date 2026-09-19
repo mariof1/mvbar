@@ -535,16 +535,25 @@ export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: 
   await mkdir(working, { mode: 0o700 });
   try {
     await onProgress?.(0, album.trackCount, 'downloading');
+    const importTracks = await enrichDeezerTracksForImport(album.tracks, {
+      concurrency: config.metadataConcurrency,
+      lyrics: config.importLyrics,
+    });
     const timeout = Math.min(2 * 60 * 60_000, 15 * 60_000 + album.trackCount * 2 * 60_000);
     const result = await runPython(
       config.python,
       {
         directory: working,
         quality: config.quality,
-        tracks: album.tracks,
+        tracks: importTracks,
         albumArtist: album.artist,
         releaseDate: album.releaseDate,
         genre: album.genres,
+        publisher: album.publisher,
+        barcode: album.barcode,
+        recordType: album.recordType,
+        albumGainDb: album.gainDb,
+        albumId: album.id,
         coverUrl: album.artwork,
       },
       config.arl,
@@ -564,7 +573,7 @@ export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: 
     await onProgress?.(album.trackCount, album.trackCount, 'publishing');
 
     const names = new Set<string>();
-    for (const [index, track] of album.tracks.entries()) {
+    for (const [index, track] of importTracks.entries()) {
       const extension = extensions[index];
       let name = trackFileName(track, extension);
       if (names.has(name.toLowerCase())) {
@@ -654,6 +663,11 @@ export type DeezerAlbumTagMetadata = {
   artist: string;
   releaseDate: string | null;
   genres: string[];
+  publisher?: string | null;
+  barcode?: string | null;
+  recordType?: string | null;
+  gainDb?: number | null;
+  id?: string | null;
 };
 
 export function resolveDeezerTrackTagMetadata(
@@ -665,6 +679,11 @@ export function resolveDeezerTrackTagMetadata(
     albumArtist: existingAlbum?.album_artist?.trim() || remoteAlbum?.artist?.trim() || undefined,
     releaseDate: existingAlbum?.year ? String(existingAlbum.year) : remoteAlbum?.releaseDate || undefined,
     genres: localGenres.length ? localGenres : (remoteAlbum?.genres ?? []),
+    publisher: remoteAlbum?.publisher || undefined,
+    barcode: remoteAlbum?.barcode || undefined,
+    recordType: remoteAlbum?.recordType || undefined,
+    albumGainDb: remoteAlbum?.gainDb ?? undefined,
+    albumId: remoteAlbum?.id || undefined,
   };
 }
 
@@ -677,14 +696,20 @@ export async function stageDeezerTrack(
   const working = path.join(config.directory, `.incoming-${crypto.randomUUID()}`);
   await mkdir(working, { mode: 0o700 });
   try {
-    const stagedTrack = existingAlbum ? { ...track, album: existingAlbum.album } : track;
+    const importTrack = await enrichDeezerTrackForImport(track, { lyrics: config.importLyrics });
+    const stagedTrack = existingAlbum ? { ...importTrack, album: existingAlbum.album } : importTrack;
     const tagMetadata = resolveDeezerTrackTagMetadata(existingAlbum, remoteAlbum);
     const result = await runPython(config.python, {
-      id: track.id, directory: working, quality: config.quality, track: stagedTrack,
+      id: importTrack.id, directory: working, quality: config.quality, track: stagedTrack,
       albumArtist: tagMetadata.albumArtist,
       releaseDate: tagMetadata.releaseDate,
       genre: tagMetadata.genres,
-      coverUrl: track.cover,
+      publisher: tagMetadata.publisher,
+      barcode: tagMetadata.barcode,
+      recordType: tagMetadata.recordType,
+      albumGainDb: tagMetadata.albumGainDb,
+      albumId: tagMetadata.albumId || importTrack.albumId,
+      coverUrl: importTrack.cover,
     }, config.arl);
     if (result.extension !== 'mp3' && result.extension !== 'flac') throw new Error('Deezer returned an unsupported audio format');
     const source = path.join(working, `track.${result.extension}`);
