@@ -483,6 +483,7 @@ export const libraryPlugin: FastifyPluginAsync = fp(async (app) => {
       by: req.user.userId,
       mountPath: row.mount_path,
       path: row.path,
+      fields: Object.keys(values),
     }));
 
     const refreshed = await waitForMetadataRefresh(refreshRequestId);
