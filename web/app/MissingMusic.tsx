@@ -63,6 +63,7 @@ type ReleaseGroup = {
   secondaryTypes: string[];
   firstReleaseDate: string | null;
   cover?: string | null;
+  genres?: string[];
   trackCount?: number;
   present: boolean;
   partial?: boolean;
@@ -387,7 +388,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   const [catalog, setCatalog] = useState<ReleaseGroup[]>([]);
   const [catalogFilter, setCatalogFilter] = useState<'missing' | 'all' | 'present'>('missing');
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [tracks, setTracks] = useState<Record<string, { releaseId?: string; album?: { id: string; title: string; localAlbum: string | null; matchConfidence: number }; tracks: CatalogTrack[] }>>({});
+  const [tracks, setTracks] = useState<Record<string, { releaseId?: string; album?: { id: string; title: string; genres?: string[]; localAlbum: string | null; matchConfidence: number }; tracks: CatalogTrack[] }>>({});
   const [requests, setRequests] = useState<RequestItem[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(true);
   const [requestFilter, setRequestFilter] = useState<'all' | 'action' | 'progress' | 'staged' | 'history'>('all');
@@ -673,7 +674,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
         `/plugins/missing-music/deezer-albums/${group.id}/tracks?localArtist=${encodeURIComponent(artist.name)}`,
         {},
         token,
-      ) as { album: { id: string; title: string; localAlbum: string | null; matchConfidence: number }; tracks: CatalogTrack[] };
+      ) as { album: { id: string; title: string; genres?: string[]; localAlbum: string | null; matchConfidence: number }; tracks: CatalogTrack[] };
       if (catalogId === catalogRequestId.current) setTracks((current) => ({ ...current, [group.id]: data }));
     } catch (cause) {
       if (catalogId === catalogRequestId.current) {
@@ -1225,6 +1226,11 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                           </div>
                           {expanded === group.id && detail && (
                             <div className="border-t border-white/10 px-3 py-2">
+                              {detail.album?.genres?.length ? (
+                                <div className="border-b border-white/[0.06] py-2 text-xs text-white/45">
+                                  Genres: {detail.album.genres.join(' · ')}
+                                </div>
+                              ) : null}
                               {detail.tracks.map((track, index) => {
                                 const trackRequest = track.recordingId ? requestByCatalogId.get(`track:${track.recordingId}`) : undefined;
                                 return (

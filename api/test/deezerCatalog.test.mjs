@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DEEZER_MAX_ALBUM_TRACKS,
+  deezerAlbum,
   deezerBaseAlbumTitle,
   deezerSecondaryTypes,
   dedupeDeezerAlbums,
@@ -31,6 +32,30 @@ test('secondary release classification avoids ordinary titles containing live/re
   assert.deepEqual(deezerSecondaryTypes('Soundtrack of My Life', 'album', 123), []);
   assert.deepEqual(deezerSecondaryTypes('Original Motion Picture Soundtrack', 'album', 123), ['Soundtrack']);
   assert.equal(DEEZER_MAX_ALBUM_TRACKS, 200);
+});
+
+test('full Deezer album metadata keeps clean, deduplicated genre names', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    id: 302127,
+    title: 'Discovery',
+    nb_tracks: 14,
+    release_date: '2001-03-07',
+    record_type: 'album',
+    artist: { id: 27, name: 'Daft Punk' },
+    genres: { data: [
+      { id: 106, name: 'Electro' },
+      { id: 113, name: 'Dance' },
+      { id: 999, name: ' electro ' },
+      { id: 1000, name: '' },
+    ] },
+  }), { status: 200 });
+  try {
+    const album = await deezerAlbum('302127');
+    assert.deepEqual(album.genres, ['Electro', 'Dance']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('Deezer album dedupe prefers standard editions unless special editions are requested', () => {

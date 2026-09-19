@@ -7,7 +7,7 @@ export type DeezerArtist = { id: string; name: string; cover: string | null; lin
 export type DeezerAlbum = {
   id: string; title: string; artistId: string; artist: string; trackCount: number;
   releaseDate: string | null; recordType: 'Album' | 'EP' | 'Single' | 'Other';
-  secondaryTypes: string[]; cover: string | null; explicit: boolean; baseTitle: string;
+  secondaryTypes: string[]; genres: string[]; cover: string | null; explicit: boolean; baseTitle: string;
 };
 export type DeezerTrack = {
   id: string; title: string; artist: string; artistId: string | null; albumId: string; album: string; isrc: string | null;
@@ -33,6 +33,7 @@ type RawArtist = { id?: number; name?: string; link?: string; picture_xl?: strin
 type RawAlbum = {
   id?: number; title?: string; cover_xl?: string; cover_big?: string; cover_medium?: string; nb_tracks?: number;
   release_date?: string; record_type?: string; explicit_lyrics?: boolean; artist?: { id?: number; name?: string };
+  genres?: { data?: Array<{ id?: number; name?: string }> };
 };
 type RawTrack = {
   id?: number; title?: string; duration?: number; isrc?: string; disk_number?: number; track_position?: number;
@@ -146,14 +147,29 @@ function recordType(raw: RawAlbum): DeezerAlbum['recordType'] {
   if (type === 'single') return 'Single';
   return 'Other';
 }
+function albumGenres(raw: RawAlbum) {
+  const rows = Array.isArray(raw.genres?.data) ? raw.genres.data : [];
+  const seen = new Set<string>();
+  const genres: string[] = [];
+  for (const row of rows) {
+    const name = typeof row?.name === 'string' ? row.name.trim() : '';
+    if (!name || name.length > 120) continue;
+    const key = normalizeDeezerText(name) || name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    genres.push(name);
+    if (genres.length >= 20) break;
+  }
+  return genres;
+}
 function mapAlbum(raw: RawAlbum, artistId: string, artistName: string): DeezerAlbum | null {
   if (!Number.isSafeInteger(raw.id) || !raw.id || !raw.title) return null;
   return {
     id: String(raw.id), title: raw.title, artistId: raw.artist?.id ? String(raw.artist.id) : artistId,
     artist: raw.artist?.name?.trim() || artistName, trackCount: Number.isSafeInteger(raw.nb_tracks) ? Math.max(0, raw.nb_tracks || 0) : 0,
     releaseDate: /^\d{4}-\d{2}-\d{2}$/.test(raw.release_date || '') ? raw.release_date! : null,
-    recordType: recordType(raw), secondaryTypes: secondary(raw), cover: cover(raw), explicit: raw.explicit_lyrics === true,
-    baseTitle: deezerBaseAlbumTitle(raw.title),
+    recordType: recordType(raw), secondaryTypes: secondary(raw), genres: albumGenres(raw),
+    cover: cover(raw), explicit: raw.explicit_lyrics === true, baseTitle: deezerBaseAlbumTitle(raw.title),
   };
 }
 

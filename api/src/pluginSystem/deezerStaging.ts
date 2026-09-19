@@ -23,6 +23,7 @@ export type DeezerTrack = {
   discNumber?: number | null;
   trackNumber?: number | null;
   cover?: string | null;
+  albumId?: string | null;
 };
 
 export type DeezerAlbum = {
@@ -34,6 +35,7 @@ export type DeezerAlbum = {
   link: string | null;
   cover: string | null;
   artwork: string | null;
+  genres: string[];
   score: number;
 };
 
@@ -65,6 +67,7 @@ type RawAlbum = {
   cover_big?: string;
   cover_xl?: string;
   artist?: { name?: string };
+  genres?: { data?: Array<{ id?: number; name?: string }> };
 };
 
 function normalized(value: string) {
@@ -81,6 +84,22 @@ function deezerCover(...candidates: Array<string | undefined>) {
     } catch { /* Ignore malformed artwork URLs from catalog results. */ }
   }
   return null;
+}
+
+function deezerGenres(raw: RawAlbum) {
+  const rows = Array.isArray(raw.genres?.data) ? raw.genres.data : [];
+  const seen = new Set<string>();
+  const genres: string[] = [];
+  for (const row of rows) {
+    const name = typeof row?.name === 'string' ? row.name.trim() : '';
+    if (!name || name.length > 120) continue;
+    const key = normalized(name) || name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    genres.push(name);
+    if (genres.length >= 20) break;
+  }
+  return genres;
 }
 
 function scoreTrack(
@@ -125,6 +144,7 @@ function mapTrack(
     discNumber: Number.isSafeInteger(raw.disk_number) && raw.disk_number! > 0 ? raw.disk_number! : null,
     trackNumber: Number.isSafeInteger(raw.track_position) && raw.track_position! > 0 ? raw.track_position! : null,
     cover: deezerCover(raw.album?.cover_xl, raw.album?.cover_big, raw.album?.cover_medium),
+    albumId: raw.album?.id ? String(raw.album.id) : null,
   };
 }
 
@@ -142,6 +162,7 @@ function mapAlbum(raw: RawAlbum, artist: string, title: string): DeezerAlbum | n
     link: typeof raw.link === 'string' && raw.link.startsWith('https://www.deezer.com/') ? raw.link : null,
     cover: deezerCover(raw.cover_medium, raw.cover_big, raw.cover_xl),
     artwork: deezerCover(raw.cover_xl, raw.cover_big, raw.cover_medium),
+    genres: deezerGenres(raw),
     score: 110,
   };
 }
@@ -214,6 +235,7 @@ export async function verifiedDeezerAlbum(id: string, artist: string, title: str
       if (!Number.isSafeInteger(raw.id) || !raw.id || !raw.title) throw new Error('Deezer returned an invalid album track');
       tracks.push({
         id: String(raw.id), title: raw.title, artist: raw.artist?.name || album.artist, album: album.title,
+        albumId: album.id,
         durationMs: typeof raw.duration === 'number' ? raw.duration * 1000 : null,
         isrc: raw.isrc || null, link: null, score: 0,
         discNumber: Number.isSafeInteger(raw.disk_number) && raw.disk_number! > 0 ? raw.disk_number! : 1,
@@ -404,6 +426,7 @@ export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: 
         tracks: album.tracks,
         albumArtist: album.artist,
         releaseDate: album.releaseDate,
+        genre: album.genres,
         coverUrl: album.artwork,
       },
       config.arl,
@@ -509,17 +532,40 @@ export async function publishStagedTrack(directory: string, source: string, trac
     throw new Error('Too many duplicate staged tracks');
 }
 
-export async function stageDeezerTrack(track: DeezerTrack, existingAlbum?: ExistingAlbumMetadata | null): Promise<string> {
+export type DeezerAlbumTagMetadata = {
+  artist: string;
+  releaseDate: string | null;
+  genres: string[];
+};
+
+export function resolveDeezerTrackTagMetadata(
+  existingAlbum?: ExistingAlbumMetadata | null,
+  remoteAlbum?: DeezerAlbumTagMetadata | null,
+) {
+  const localGenres = (existingAlbum?.genre ?? '').split(';').map(part => part.trim()).filter(Boolean);
+  return {
+    albumArtist: existingAlbum?.album_artist?.trim() || remoteAlbum?.artist?.trim() || undefined,
+    releaseDate: existingAlbum?.year ? String(existingAlbum.year) : remoteAlbum?.releaseDate || undefined,
+    genres: localGenres.length ? localGenres : (remoteAlbum?.genres ?? []),
+  };
+}
+
+export async function stageDeezerTrack(
+  track: DeezerTrack,
+  existingAlbum?: ExistingAlbumMetadata | null,
+  remoteAlbum?: DeezerAlbumTagMetadata | null,
+): Promise<string> {
   const config = await assertDeezerStagingReady();
   const working = path.join(config.directory, `.incoming-${crypto.randomUUID()}`);
   await mkdir(working, { mode: 0o700 });
   try {
     const stagedTrack = existingAlbum ? { ...track, album: existingAlbum.album } : track;
+    const tagMetadata = resolveDeezerTrackTagMetadata(existingAlbum, remoteAlbum);
     const result = await runPython(config.python, {
       id: track.id, directory: working, quality: config.quality, track: stagedTrack,
-      albumArtist: existingAlbum?.album_artist || undefined,
-      releaseDate: existingAlbum?.year ? String(existingAlbum.year) : undefined,
-      genre: existingAlbum?.genre?.split(';').map(part => part.trim()).filter(Boolean),
+      albumArtist: tagMetadata.albumArtist,
+      releaseDate: tagMetadata.releaseDate,
+      genre: tagMetadata.genres,
       coverUrl: track.cover,
     }, config.arl);
     if (result.extension !== 'mp3' && result.extension !== 'flac') throw new Error('Deezer returned an unsupported audio format');

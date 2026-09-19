@@ -1489,14 +1489,37 @@ async function downloadDeezerRequest(request: MediaRequestRow, itemId: string, l
         logger.warn('missing-music', `Could not record Deezer progress for ${request.id}: ${errorMessage(error)}`);
       }
     };
-    const filename = album
-      ? await stageDeezerAlbum(album, reportProgress)
-      : await stageDeezerTrack(await verifiedDeezerTrack(itemId, request.artist, request.title, request.album, request.deezer_artist_id, request.deezer_album_id), localAlbum);
+    let filename: string;
+    let deezerGenres: string[] = album?.genres ?? [];
+    if (album) {
+      filename = await stageDeezerAlbum(album, reportProgress);
+    } else {
+      const track = await verifiedDeezerTrack(
+        itemId,
+        request.artist,
+        request.title,
+        request.album,
+        request.deezer_artist_id,
+        request.deezer_album_id,
+      );
+      let remoteAlbum = null;
+      const remoteAlbumId = request.deezer_album_id ?? track.albumId ?? null;
+      if (remoteAlbumId) {
+        try {
+          const detail = await deezerAlbum(remoteAlbumId);
+          remoteAlbum = { artist: detail.artist, releaseDate: detail.releaseDate, genres: detail.genres };
+          deezerGenres = detail.genres;
+        } catch (error) {
+          logger.warn('missing-music', `Could not load Deezer album metadata for track ${itemId}: ${errorMessage(error)}`);
+        }
+      }
+      filename = await stageDeezerTrack(track, localAlbum, remoteAlbum);
+    }
     const trackFiles = album ? await listStagedAlbumFiles(filename) : null;
     if (album && trackFiles?.length !== album.trackCount) throw new Error('Staged album track list is incomplete');
     const deezer = album
-      ? { state: 'staged', albumId: itemId, trackCount: album.trackCount, trackFiles, filename }
-      : { state: 'staged', trackId: itemId, filename, usedLocalAlbumMetadata: Boolean(localAlbum) };
+      ? { state: 'staged', albumId: itemId, trackCount: album.trackCount, trackFiles, filename, genres: deezerGenres }
+      : { state: 'staged', trackId: itemId, filename, usedLocalAlbumMetadata: Boolean(localAlbum), genres: deezerGenres };
     const row = await updateRequest(request.id, {
       metadata: { ...request.metadata, deezer },
       provider_error: null,
@@ -2310,6 +2333,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
           secondaryTypes: album.secondaryTypes,
           firstReleaseDate: album.releaseDate,
           cover: album.cover,
+          genres: album.genres,
           trackCount: album.trackCount,
           present,
           partial,
@@ -2357,6 +2381,7 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
           title: album.title,
           artist: album.artist,
           releaseDate: album.releaseDate,
+          genres: album.genres,
           trackCount: album.trackCount,
           localAlbum: matchedAlbum?.row.album ?? null,
           matchConfidence: matchedAlbum?.score ?? 0,

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/
 import os from 'node:os';
 import path from 'node:path';
 import unzipper from 'unzipper';
-import { assertDeezerStagingReady, cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, publishStagedTrack, searchDeezerAlbums, searchDeezerTracks, stagedAlbumComplete, validStagedAlbumIdentifier, verifiedDeezerAlbum, verifiedDeezerTrack, validStagedFilename } from '../dist/pluginSystem/deezerStaging.js';
+import { assertDeezerStagingReady, cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, publishStagedTrack, resolveDeezerTrackTagMetadata, searchDeezerAlbums, searchDeezerTracks, stagedAlbumComplete, validStagedAlbumIdentifier, verifiedDeezerAlbum, verifiedDeezerTrack, validStagedFilename } from '../dist/pluginSystem/deezerStaging.js';
 
 async function streamBuffer(stream) {
   const chunks = [];
@@ -158,6 +158,7 @@ test('Deezer album selection rejects other versions and validates every paginate
     if (url.pathname === '/album/42') return new Response(JSON.stringify({
       id: 42, title: 'Discovery', artist: { name: 'Daft Punk' }, record_type: 'album', nb_tracks: 101,
       release_date: '2001-03-07',
+      genres: { data: [{ id: 106, name: 'Electro' }, { id: 113, name: 'Dance' }] },
       cover_medium: 'https://cdn-images.dzcdn.net/images/cover/discovery/250x250.jpg',
       cover_xl: 'https://cdn-images.dzcdn.net/images/cover/discovery/1000x1000.jpg',
     }), { status: 200 });
@@ -177,6 +178,7 @@ test('Deezer album selection rejects other versions and validates every paginate
     const album = await verifiedDeezerAlbum('42', 'Daft Punk', 'Discovery');
     assert.equal(album.cover, 'https://cdn-images.dzcdn.net/images/cover/discovery/250x250.jpg');
     assert.equal(album.artwork, 'https://cdn-images.dzcdn.net/images/cover/discovery/1000x1000.jpg');
+    assert.deepEqual(album.genres, ['Electro', 'Dance']);
     assert.equal(album.tracks.length, 101);
     assert.equal(album.tracks[100].discNumber, 2);
     assert.equal(album.tracks[100].trackNumber, 1);
@@ -185,6 +187,35 @@ test('Deezer album selection rejects other versions and validates every paginate
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('single-track tag metadata prefers local genre and falls back to Deezer album genres', () => {
+  const remote = { artist: 'Daft Punk', releaseDate: '2001-03-07', genres: ['Electro', 'Dance'] };
+  assert.deepEqual(resolveDeezerTrackTagMetadata(null, remote), {
+    albumArtist: 'Daft Punk',
+    releaseDate: '2001-03-07',
+    genres: ['Electro', 'Dance'],
+  });
+  assert.deepEqual(resolveDeezerTrackTagMetadata({
+    album: 'Discovery',
+    album_artist: 'Daft Punk',
+    year: 2001,
+    genre: 'House; Funk',
+    country: null,
+    language: null,
+  }, remote), {
+    albumArtist: 'Daft Punk',
+    releaseDate: '2001',
+    genres: ['House', 'Funk'],
+  });
+  assert.deepEqual(resolveDeezerTrackTagMetadata({
+    album: 'Discovery',
+    album_artist: 'Daft Punk',
+    year: 2001,
+    genre: null,
+    country: null,
+    language: null,
+  }, remote).genres, ['Electro', 'Dance']);
 });
 
 test('oversized Deezer albums are rejected before track pagination', async () => {
