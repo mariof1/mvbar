@@ -1,0 +1,49 @@
+name: One-time verify now playing indicators
+
+on:
+  push:
+    branches: [fix/now-playing-indicator]
+    paths:
+      - '.github/workflows/one-time-verify-now-playing-indicators.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/now-playing-indicator
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Lint and build web
+        working-directory: web
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+      - name: Verify indicator coverage
+        run: |
+          grep -q "PlayingTrackIndicator" web/app/Tracks.tsx
+          grep -q "PlayingTrackIndicator" web/app/Favorites.tsx
+          grep -q "PlayingTrackIndicator" web/app/Playlists.tsx
+          grep -q "PlayingTrackIndicator" web/app/BrowseNew.tsx
+          grep -q "PlayingTrackIndicator" web/app/RecentlyAdded.tsx
+          grep -q "PlayingTrackIndicator" web/app/History.tsx
+          grep -q "PlayingTrackIndicator" web/app/Search.tsx
+          grep -q "PlayingTrackIndicator" web/app/SearchModal.tsx
+          grep -q "PlayingTrackIndicator" web/app/SmartPlaylists.tsx
+          grep -q "PlayingTrackIndicator" web/app/Social.tsx
+      - name: Remove verification workflow
+        run: |
+          git rm .github/workflows/one-time-verify-now-playing-indicators.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Remove now playing verification workflow"
+          git push origin HEAD:fix/now-playing-indicator
