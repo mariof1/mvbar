@@ -987,10 +987,11 @@ async function syncDeezerPlaylistImport(
       );
 
       await client.query(
-        "update playlist_items item set position=source.position " +
-        "from plugin_deezer_playlist_items source " +
-        "where source.import_id=$1 and source.state='added' and source.track_id=item.track_id and item.playlist_id=$2",
-        [importRow.id, Number(importRow.playlist_id)]
+        "insert into playlist_items(playlist_id,track_id,position,added_by) " +
+        "select $2,source.track_id,source.position,$3 from plugin_deezer_playlist_items source " +
+        "where source.import_id=$1 and source.state='added' and source.track_id is not null " +
+        "on conflict(playlist_id,track_id) do update set position=excluded.position",
+        [importRow.id, Number(importRow.playlist_id), importRow.user_id]
       );
 
       const counts = (await client.query<{ total: string | number; added: string | number; failed: string | number; outstanding: string | number }>(
