@@ -1280,7 +1280,8 @@ async function reconcileDeezerPlaylistImport(plugin: MissingMusicPluginRow, impo
 
   const changed = status !== importRow.status
     || added !== Number(importRow.added_tracks)
-    || failed !== Number(importRow.failed_tracks);
+    || failed !== Number(importRow.failed_tracks)
+    || unavailable !== Number(importRow.unavailable_tracks ?? 0);
   if (changed) {
     const final = status === 'completed' || status === 'partial';
     const parts = [`${added}/${total} songs ready`];
