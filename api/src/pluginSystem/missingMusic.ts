@@ -122,6 +122,7 @@ type DeezerPlaylistImportItemRow = {
   request_id: string | null;
   track_id: number | string | null;
   state: 'pending' | 'requested' | 'downloading' | 'added' | 'failed';
+  unavailable: boolean;
   error: string | null;
 };
 
@@ -151,6 +152,12 @@ type SavedDeezerArtistMatch = {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function isPermanentDeezerUnavailableError(error: unknown) {
+  const message = errorMessage(error);
+  return message.includes('DEEZER_UNAVAILABLE:')
+    || /\bNonStreamableError\b/.test(message);
 }
 
 export function normalizeCatalogText(value: string) {
