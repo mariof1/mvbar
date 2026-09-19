@@ -9,6 +9,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { allowedLibrariesForUser } from '../access.js';
 import { audit, db, redis } from '../db.js';
 import logger from '../logger.js';
+import { playlistUserIds } from '../playlistsRepo.js';
 import type { Role } from '../store.js';
 import { broadcastToAdmins, broadcastToUser } from '../websocket.js';
 import { pluginsEnabledGlobally } from './registry.js';
