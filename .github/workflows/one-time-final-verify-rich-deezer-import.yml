@@ -1,0 +1,61 @@
+name: One-time final verify rich Deezer import
+
+on:
+  push:
+    branches: [feature/rich-deezer-import]
+    paths:
+      - '.github/workflows/one-time-final-verify-rich-deezer-import.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feature/rich-deezer-import
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            worker/package-lock.json
+            web/package-lock.json
+      - name: Prepare metadata test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python3 -m venv /tmp/mvbar-meta
+          /tmp/mvbar-meta/bin/pip install --quiet mutagen==1.47.0
+          python3 -m py_compile api/scripts/deezer_download.py
+      - name: Test API
+        working-directory: api
+        run: |
+          npm ci
+          npm run lint
+          npm test
+      - name: Test worker rich metadata
+        working-directory: worker
+        env:
+          MVBAR_METADATA_TEST_PYTHON: /tmp/mvbar-meta/bin/python
+        run: |
+          npm ci
+          npm run lint
+          npm test
+      - name: Build web
+        working-directory: web
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+      - name: Remove verification workflow
+        run: |
+          git rm .github/workflows/one-time-final-verify-rich-deezer-import.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Remove rich Deezer final verification workflow"
+          git push origin HEAD:feature/rich-deezer-import
