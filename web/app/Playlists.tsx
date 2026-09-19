@@ -736,6 +736,112 @@ export function Playlists(props: {
                       )}
                     </div>
                   )}
+                  {collaboration.isOwner
+                    && selectedPlaylist.source_plugin_id === 'mvbar.missing-music'
+                    && selectedPlaylist.source_external_id?.startsWith('deezer-playlist:')
+                    && (
+                      <div className="rounded-xl border border-violet-400/20 bg-violet-400/[0.05] p-4 lg:col-span-2">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h3 className="text-sm font-semibold text-white">Deezer sync</h3>
+                              {deezerSync?.syncEnabled && (
+                                <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+                                  Scheduled
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-400">
+                              Keep this playlist aligned with its Deezer source. New Deezer tracks are downloaded automatically. Tracks removed from Deezer are removed only from this playlist — the audio files stay in your library.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleSyncDeezerNow()}
+                            disabled={!deezerSync || deezerSyncBusy !== null || deezerSyncLoading}
+                            className="rounded-lg border border-violet-400/30 bg-violet-400/10 px-3 py-2 text-xs font-semibold text-violet-200 transition hover:bg-violet-400/20 disabled:opacity-45"
+                          >
+                            {deezerSyncBusy === 'sync' ? 'Syncing…' : 'Sync now'}
+                          </button>
+                        </div>
+
+                        {deezerSyncLoading ? (
+                          <p className="mt-4 text-sm text-slate-400">Loading Deezer sync settings…</p>
+                        ) : deezerSync ? (
+                          <>
+                            <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+                              <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5">
+                                <input
+                                  type="checkbox"
+                                  checked={deezerSyncEnabledDraft}
+                                  onChange={(event) => setDeezerSyncEnabledDraft(event.target.checked)}
+                                  className="h-4 w-4 accent-cyan-400"
+                                />
+                                <span>
+                                  <span className="block text-sm font-medium text-white">Keep synced with Deezer</span>
+                                  <span className="block text-xs text-slate-500">Runs automatically in the background.</span>
+                                </span>
+                              </label>
+
+                              <label className="block">
+                                <span className="mb-1 block text-xs font-medium text-slate-400">Sync frequency</span>
+                                <select
+                                  value={deezerSyncIntervalDraft}
+                                  onChange={(event) => setDeezerSyncIntervalDraft(Number(event.target.value))}
+                                  disabled={!deezerSyncEnabledDraft}
+                                  className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none disabled:opacity-45"
+                                >
+                                  <option value={6}>Every 6 hours</option>
+                                  <option value={12}>Every 12 hours</option>
+                                  <option value={24}>Daily</option>
+                                  <option value={72}>Every 3 days</option>
+                                  <option value={168}>Weekly</option>
+                                </select>
+                              </label>
+
+                              <button
+                                type="button"
+                                onClick={() => void handleSaveDeezerSync()}
+                                disabled={deezerSyncBusy !== null}
+                                className="rounded-lg bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:opacity-45"
+                              >
+                                {deezerSyncBusy === 'save' ? 'Saving…' : 'Save schedule'}
+                              </button>
+                            </div>
+
+                            <div className="mt-4 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                              <div className="rounded-lg bg-black/20 p-3">
+                                <div className="text-slate-500">Last sync</div>
+                                <div className="mt-1 text-slate-200">{formatSyncTimestamp(deezerSync.lastSyncedAt)}</div>
+                              </div>
+                              <div className="rounded-lg bg-black/20 p-3">
+                                <div className="text-slate-500">Next sync</div>
+                                <div className="mt-1 text-slate-200">
+                                  {deezerSync.syncEnabled ? formatSyncTimestamp(deezerSync.nextSyncAt) : 'Disabled'}
+                                </div>
+                              </div>
+                              <div className="rounded-lg bg-black/20 p-3">
+                                <div className="text-slate-500">Last additions</div>
+                                <div className="mt-1 text-emerald-300">+{deezerSync.lastSyncAdded}</div>
+                              </div>
+                              <div className="rounded-lg bg-black/20 p-3">
+                                <div className="text-slate-500">Last removals</div>
+                                <div className="mt-1 text-amber-300">-{deezerSync.lastSyncRemoved}</div>
+                              </div>
+                            </div>
+
+                            {deezerSync.lastSyncError && (
+                              <p className="mt-3 rounded-lg border border-red-400/20 bg-red-400/[0.06] px-3 py-2 text-xs text-red-200">
+                                Last sync error: {deezerSync.lastSyncError}
+                              </p>
+                            )}
+                          </>
+                        ) : (
+                          <p className="mt-4 text-sm text-slate-500">Deezer sync settings are unavailable for this playlist.</p>
+                        )}
+                      </div>
+                    )}
+
                   <p className="text-xs text-slate-500 lg:col-span-2">
                     Each person only sees and contributes songs from music libraries they are allowed to access.
                   </p>
