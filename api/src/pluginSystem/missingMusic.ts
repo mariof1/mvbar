@@ -1599,6 +1599,38 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
     }
   });
 
+  app.get('/api/plugins/missing-music/deezer-playlists/:playlistId', async (req, reply) => {
+    const plugin = await requireExtension(req, reply);
+    if (!plugin) return;
+    const { playlistId } = req.params as { playlistId: string };
+    if (!validDeezerId(playlistId)) {
+      return reply.code(400).send({ ok: false, error: 'Invalid Deezer playlist id' });
+    }
+    try {
+      const { playlist, tracks } = await deezerPlaylistTracks(playlistId, 1000);
+      return {
+        ok: true,
+        playlist,
+        tracks: tracks.map((track, index) => ({
+          id: track.id,
+          title: track.title,
+          artist: track.artist,
+          artistId: track.artistId,
+          album: track.album,
+          albumId: track.albumId,
+          durationMs: track.durationMs,
+          isrc: track.isrc,
+          discNumber: track.discNumber,
+          trackNumber: track.trackNumber || index + 1,
+          position: index + 1,
+        })),
+      };
+    } catch (error) {
+      logger.warn('missing-music', 'Deezer playlist preview failed: ' + errorMessage(error));
+      return reply.code(502).send({ ok: false, error: errorMessage(error) });
+    }
+  });
+
   app.get('/api/plugins/missing-music/deezer-playlist-imports', async (req, reply) => {
     const plugin = await requireExtension(req, reply);
     if (!plugin) return;
