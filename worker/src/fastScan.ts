@@ -649,6 +649,124 @@ async function getOrCreateLibrary(mountPath: string): Promise<number> {
   return Number(ins.rows[0].id);
 }
 
+export async function refreshTrackMetadata(musicDir: string, relPath: string) {
+  const libraryId = await getOrCreateLibrary(musicDir);
+  const fullPath = resolveInside(musicDir, relPath);
+  const details = await stat(fullPath);
+  if (!details.isFile()) throw new Error('Track path is not a file');
+
+  const ext = path.extname(fullPath).toLowerCase();
+  if (!AUDIO_EXTS.has(ext)) throw new Error(`Unsupported audio format: ${ext || 'unknown'}`);
+
+  const existing = (await db().query<{
+    id: number | string;
+    birthtime_ms: string | null;
+    art_path: string | null;
+    art_mime: string | null;
+    art_hash: string | null;
+    lyrics_path: string | null;
+    bpm: number | null;
+    deleted_at: Date | null;
+  }>(
+    `SELECT id, birthtime_ms, art_path, art_mime, art_hash, lyrics_path, bpm, deleted_at
+       FROM tracks WHERE library_id=$1 AND path=$2 LIMIT 1`,
+    [libraryId, relPath]
+  )).rows[0] ?? null;
+
+  const tags = await readTagsWithTimeout(fullPath);
+
+  let artPath = existing?.art_path ?? null;
+  let artMime = existing?.art_mime ?? null;
+  let artHash = existing?.art_hash ?? null;
+  if (tags.artData && tags.artMime) {
+    try {
+      const art = await writeMusicArt(ART_DIR, tags.artData);
+      artPath = art.relPath;
+      artMime = art.mime;
+      artHash = art.hash;
+    } catch {
+      // Preserve the existing cached artwork if refreshing it fails.
+    }
+  }
+
+  const data: TrackData = {
+    libraryId,
+    path: relPath,
+    mtimeMs: Math.round(details.mtimeMs),
+    birthtimeMs: existing?.birthtime_ms == null ? Math.round(details.birthtimeMs) : Number(existing.birthtime_ms),
+    sizeBytes: details.size,
+    ext,
+    title: tags.title,
+    artist: tags.artist,
+    album: tags.album,
+    albumartist: tags.albumartist,
+    genre: tags.genre,
+    country: tags.country,
+    language: tags.language,
+    year: tags.year,
+    durationMs: tags.durationMs,
+    artPath,
+    artMime,
+    artHash,
+    lyricsPath: existing?.lyrics_path ?? null,
+    embeddedLyrics: tags.embeddedLyrics,
+    embeddedLyricsSynced: tags.embeddedLyricsSynced,
+    artists: tags.artists,
+    albumartists: tags.albumartists,
+    composers: tags.composers || [],
+    conductors: tags.conductors || [],
+    trackNumber: tags.trackNumber,
+    trackTotal: tags.trackTotal,
+    discNumber: tags.discNumber,
+    discTotal: tags.discTotal,
+    bpm: tags.bpm ?? existing?.bpm ?? null,
+    initialKey: tags.initialKey ?? null,
+    composer: tags.composer ?? null,
+    conductor: tags.conductor ?? null,
+    publisher: tags.publisher ?? null,
+    copyright: tags.copyright ?? null,
+    comment: tags.comment ?? null,
+    mood: tags.mood ?? null,
+    grouping: tags.grouping ?? null,
+    isrc: tags.isrc ?? null,
+    releaseDate: tags.releaseDate ?? null,
+    originalYear: tags.originalYear ?? null,
+    compilation: tags.compilation ?? false,
+    titleSort: tags.titleSort ?? null,
+    artistSort: tags.artistSort ?? null,
+    albumSort: tags.albumSort ?? null,
+    albumArtistSort: tags.albumArtistSort ?? null,
+    musicbrainzTrackId: tags.musicbrainzTrackId ?? null,
+    musicbrainzReleaseId: tags.musicbrainzReleaseId ?? null,
+    musicbrainzArtistId: tags.musicbrainzArtistId ?? null,
+    musicbrainzAlbumArtistId: tags.musicbrainzAlbumArtistId ?? null,
+    isNew: !existing,
+    isRestored: Boolean(existing?.deleted_at),
+  };
+
+  await batchUpsertTracks([data]);
+
+  const track = (await db().query<{ id: number | string }>(
+    'SELECT id FROM active_tracks WHERE library_id=$1 AND path=$2',
+    [libraryId, relPath]
+  )).rows[0];
+  if (!track) throw new Error('Refreshed track was not found in the library');
+
+  const trackId = Number(track.id);
+  await ensureTracksIndex();
+  await indexChangedTracks([trackId], []);
+  await getPublisher().incr('reco:library_revision');
+  publishUpdate('track_updated', {
+    trackId,
+    path: relPath,
+    title: tags.title,
+    artist: tags.artist,
+    album: tags.album,
+  });
+
+  return { trackId };
+}
+
 async function refreshArtistAsciiNames(): Promise<number> {
   const result = await db().query<{ id: number; name: string; ascii_name: string | null }>(
     'SELECT id, name, ascii_name FROM artists WHERE name IS NOT NULL'
