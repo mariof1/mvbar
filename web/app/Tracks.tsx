@@ -7,6 +7,7 @@ import { useAuth } from './store';
 import { useLibraryUpdates } from './useWebSocket';
 import { AddMenu } from './AddMenu';
 import { trackArtistLabel } from './artistDisplay';
+import { PlayingTrackIndicator } from './PlayingTrackIndicator';
 
 export function Tracks(props: {
   refreshNonce?: number;
@@ -144,7 +145,7 @@ export function Tracks(props: {
 
             {/* Track Info */}
             <div className="flex-1 min-w-0">
-              <div className="font-medium text-white truncate text-sm sm:text-base">{t.title ?? t.path}</div>
+              <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{t.title ?? t.path}</span><PlayingTrackIndicator trackId={t.id} /></div>
               <div className="text-xs sm:text-sm text-slate-400 truncate">
                 {[trackArtistLabel(t), t.album].filter(Boolean).join(' • ')}
               </div>
