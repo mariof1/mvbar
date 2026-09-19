@@ -92,6 +92,13 @@ type DeezerPlaylistImportRow = {
   total_tracks: number;
   added_tracks: number;
   failed_tracks: number;
+  sync_enabled: boolean;
+  sync_interval_hours: number;
+  next_sync_at: string | Date | null;
+  last_synced_at: string | Date | null;
+  last_sync_error: string | null;
+  last_sync_added: number;
+  last_sync_removed: number;
   created_at: string | Date;
   updated_at: string | Date;
 };
