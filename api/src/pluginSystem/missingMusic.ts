@@ -1063,14 +1063,27 @@ async function syncDeezerPlaylistImport(
 }
 
 async function syncDueDeezerPlaylists(plugin: MissingMusicPluginRow) {
-  const due = await db().query<DeezerPlaylistImportRow>(
-    "select * from plugin_deezer_playlist_imports where plugin_id=$1 and sync_enabled=true " +
-    "and next_sync_at is not null and next_sync_at <= now() and status in ('completed','partial') " +
-    "order by next_sync_at limit 5",
+  const due = await db().query<DeezerPlaylistImportRow & { owner_role: Role }>(
+    "select imp.*, app_user.role owner_role from plugin_deezer_playlist_imports imp " +
+    "join users app_user on app_user.id=imp.user_id " +
+    "where imp.plugin_id=$1 and imp.sync_enabled=true and imp.next_sync_at is not null " +
+    "and imp.next_sync_at <= now() and imp.status in ('completed','partial') " +
+    "order by imp.next_sync_at limit 5",
     [plugin.id]
   );
   for (const importRow of due.rows) {
     if (deezerPlaylistSyncJobs.has(importRow.id)) continue;
+    const automaticAllowed = importRow.owner_role === 'admin' || (
+      plugin.config.requireAdminApproval === false && plugin.config.autoDownloadDeezer === true
+    );
+    if (!automaticAllowed) {
+      await db().query(
+        "update plugin_deezer_playlist_imports set last_sync_error=$2," +
+        "next_sync_at=now() + sync_interval_hours * interval '1 hour',updated_at=now() where id=$1",
+        [importRow.id, 'Automatic Deezer downloads are disabled for this user']
+      );
+      continue;
+    }
     try {
       await syncDeezerPlaylistImport(plugin, importRow, 'scheduled');
     } catch (error) {
