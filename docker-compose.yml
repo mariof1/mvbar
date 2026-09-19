@@ -50,6 +50,8 @@ services:
       DEEZER_ARL: ${DEEZER_ARL:-}
       DEEZER_DOWNLOAD_DIR: /data/deezer-staging
       DEEZER_QUALITY: ${DEEZER_QUALITY:-0}
+      DEEZER_IMPORT_LYRICS: ${DEEZER_IMPORT_LYRICS:-true}
+      DEEZER_METADATA_CONCURRENCY: ${DEEZER_METADATA_CONCURRENCY:-4}
 
       # worker
       MUSIC_DIRS: /music
