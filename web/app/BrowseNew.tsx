@@ -28,6 +28,7 @@ import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
 import { ArtworkImage } from './ArtworkImage';
 import { PluginDownloadBadge } from './PluginDownloadBadge';
+import { PlayingTrackIndicator } from './PlayingTrackIndicator';
 
 type Tab = 'artists' | 'albums' | 'genres' | 'countries' | 'languages';
 
@@ -1053,7 +1054,7 @@ export function BrowseNew(props: {
                     </svg>
                   </button>
                   <div className="flex-1 min-w-0">
-                    <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span>{track.source_plugin_id && <PluginDownloadBadge />}</div>
+                    <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span><PlayingTrackIndicator trackId={track.id} />{track.source_plugin_id && <PluginDownloadBadge />}</div>
                     <div className="text-xs sm:text-sm text-slate-400 truncate">
                       {track.artists.length > 0 ? (
                         track.artists.map((a, i) => (
@@ -1582,7 +1583,7 @@ export function BrowseNew(props: {
                 <img src={`/api/art/${track.art_path}`} alt="" className="w-8 h-8 sm:w-10 sm:h-10 rounded flex-shrink-0" />
               )}
               <div className="flex-1 min-w-0">
-                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span>{track.source_plugin_id && <PluginDownloadBadge />}</div>
+                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span><PlayingTrackIndicator trackId={track.id} />{track.source_plugin_id && <PluginDownloadBadge />}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
                   {track.artists.length > 0 ? (
                     track.artists.map((a, i) => (
@@ -1671,7 +1672,7 @@ export function BrowseNew(props: {
                 <img src={`/api/art/${track.art_path}`} alt="" className="w-8 h-8 sm:w-10 sm:h-10 rounded flex-shrink-0" />
               )}
               <div className="flex-1 min-w-0">
-                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span>{track.source_plugin_id && <PluginDownloadBadge />}</div>
+                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span><PlayingTrackIndicator trackId={track.id} />{track.source_plugin_id && <PluginDownloadBadge />}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
                   {track.artists.length > 0 ? (
                     track.artists.map((a, i) => (
@@ -1762,7 +1763,7 @@ export function BrowseNew(props: {
                 <img src={`/api/art/${track.art_path}`} alt="" className="w-8 h-8 sm:w-10 sm:h-10 rounded flex-shrink-0" />
               )}
               <div className="flex-1 min-w-0">
-                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span>{track.source_plugin_id && <PluginDownloadBadge />}</div>
+                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{track.title || 'Untitled'}</span><PlayingTrackIndicator trackId={track.id} />{track.source_plugin_id && <PluginDownloadBadge />}</div>
                 <div className="text-xs sm:text-sm text-slate-400 truncate">
                   {track.artists.length > 0 ? (
                     track.artists.map((a, i) => (
