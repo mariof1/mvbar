@@ -91,7 +91,14 @@ async def main():
     if not directory.is_dir():
         raise ValueError("Staging directory is missing")
     cover_url = job.get("coverUrl")
-    artwork = await asyncio.to_thread(download_artwork, cover_url) if cover_url else None
+    artwork = None
+    if cover_url:
+        try:
+            artwork = await asyncio.to_thread(download_artwork, cover_url)
+        except ArtworkError as error:
+            # Cover art is optional. Audio should still download if the Deezer
+            # CDN is unavailable or returns an unsupported image.
+            print(f"Artwork warning: {error}", file=sys.stderr, flush=True)
     config = Config.defaults()
     config.session.deezer.arl = os.environ["DEEZER_ARL"]
     client = DeezerClient(config)
@@ -123,7 +130,12 @@ async def main():
                 if value:
                     audio[key] = [str(item) for item in value] if isinstance(value, list) else [str(value)]
             audio.save()
-            embed_artwork(output, extension, artwork)
+            try:
+                embed_artwork(output, extension, artwork)
+            except Exception:
+                # Embedded artwork is best-effort and must never invalidate a
+                # successfully downloaded audio file.
+                print("Artwork warning: cover could not be embedded", file=sys.stderr, flush=True)
             extensions.append(extension)
             if "tracks" in job:
                 print(json.dumps({"progress": {"completed": index, "total": len(tracks)}}), flush=True)
@@ -140,5 +152,11 @@ if __name__ == "__main__":
         asyncio.run(main())
     except Exception as error:
         # Do not include tracebacks or session credentials in API responses.
-        print(str(error) if isinstance(error, ArtworkError) else f"Deezer download failed: {type(error).__name__}", file=sys.stderr)
+        error_name = type(error).__name__
+        if error_name == "NonStreamableError":
+            print("DEEZER_UNAVAILABLE: track is not streamable for this Deezer account or region", file=sys.stderr)
+        elif isinstance(error, ArtworkError):
+            print(str(error), file=sys.stderr)
+        else:
+            print(f"Deezer download failed: {error_name}", file=sys.stderr)
         sys.exit(1)
