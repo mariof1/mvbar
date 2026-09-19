@@ -116,7 +116,7 @@ async function roundTrip(extension) {
 }
 
 test('metadata editor round-trips supported audio formats through the worker parser', { skip: !canRun }, async (t) => {
-  for (const extension of ['mp3', 'flac', 'm4a', 'ogg', 'opus', 'wav']) {
+  for (const extension of ['mp3', 'flac', 'm4a', 'ogg', 'opus', 'wav', 'aac']) {
     await t.test(extension, async () => {
       await roundTrip(extension);
     });
