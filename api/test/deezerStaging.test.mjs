@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/
 import os from 'node:os';
 import path from 'node:path';
 import unzipper from 'unzipper';
-import { assertDeezerStagingReady, cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, publishStagedTrack, resolveDeezerTrackTagMetadata, searchDeezerAlbums, searchDeezerTracks, stagedAlbumComplete, validStagedAlbumIdentifier, verifiedDeezerAlbum, verifiedDeezerTrack, validStagedFilename } from '../dist/pluginSystem/deezerStaging.js';
+import { assertDeezerStagingReady, cleanupLegacyStagedAlbumArchives, createStagedAlbumArchive, enrichDeezerTrackForImport, publishStagedTrack, resolveDeezerTrackTagMetadata, searchDeezerAlbums, searchDeezerTracks, stagedAlbumComplete, validStagedAlbumIdentifier, verifiedDeezerAlbum, verifiedDeezerTrack, validStagedFilename } from '../dist/pluginSystem/deezerStaging.js';
 
 async function streamBuffer(stream) {
   const chunks = [];
@@ -89,10 +89,68 @@ test('Deezer matching keeps the main recording and rejects alternate versions', 
   }
 });
 
+test('rich Deezer track import adds BPM, contributors and LRCLIB lyrics', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.deezer.com' && url.pathname === '/track/42') {
+      return new Response(JSON.stringify({
+        id: 42,
+        title: 'One More Time',
+        duration: 320,
+        bpm: 123.6,
+        gain: -7.25,
+        artist: { id: 27, name: 'Daft Punk' },
+        contributors: [
+          { id: 27, name: 'Daft Punk', role: 'Main' },
+          { id: 99, name: 'Romanthony', role: 'Featured' },
+          { id: 100, name: 'daft punk', role: 'Duplicate' },
+        ],
+        album: { id: 1, title: 'Discovery' },
+      }), { status: 200 });
+    }
+    if (url.hostname === 'lrclib.net') {
+      return new Response(JSON.stringify({
+        syncedLyrics: '[00:01.00]One more time\n[00:03.00]Music got me feeling so free',
+      }), { status: 200 });
+    }
+    return new Response('{}', { status: 404 });
+  };
+  try {
+    const base = {
+      id: '42',
+      title: 'One More Time',
+      artist: 'Daft Punk',
+      album: 'Discovery',
+      durationMs: 320000,
+      isrc: null,
+      link: null,
+      score: 100,
+      discNumber: 1,
+      trackNumber: 8,
+      cover: null,
+      albumId: '1',
+      artists: ['Daft Punk'],
+      bpm: null,
+      gainDb: null,
+    };
+    const track = await enrichDeezerTrackForImport(base, { fetchDetail: true, lyrics: true });
+    assert.deepEqual(track.artists, ['Daft Punk', 'Romanthony']);
+    assert.equal(track.bpm, 124);
+    assert.equal(track.gainDb, -7.25);
+    assert.equal(track.lyrics?.synced, true);
+    assert.match(track.lyrics?.text ?? '', /One more time/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('verified song artwork uses Deezer CDN and rejects lookalike hosts', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({
-    id: 42, title: 'One More Time', artist: { name: 'Daft Punk' },
+    id: 42, title: 'One More Time', bpm: 123.4, gain: -6.5,
+    artist: { name: 'Daft Punk' },
+    contributors: [{ name: 'Daft Punk' }, { name: 'Romanthony' }],
     album: {
       title: 'Discovery',
       cover_xl: 'https://cdn-images.dzcdn.net.evil.test/images/cover/fake.jpg',
@@ -102,6 +160,9 @@ test('verified song artwork uses Deezer CDN and rejects lookalike hosts', async 
   try {
     const track = await verifiedDeezerTrack('42', 'Daft Punk', 'One More Time');
     assert.equal(track.cover, 'https://cdn-images.dzcdn.net/images/cover/real/500x500.jpg');
+    assert.equal(track.bpm, 123);
+    assert.equal(track.gainDb, -6.5);
+    assert.deepEqual(track.artists, ['Daft Punk', 'Romanthony']);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -158,6 +219,9 @@ test('Deezer album selection rejects other versions and validates every paginate
     if (url.pathname === '/album/42') return new Response(JSON.stringify({
       id: 42, title: 'Discovery', artist: { name: 'Daft Punk' }, record_type: 'album', nb_tracks: 101,
       release_date: '2001-03-07',
+      label: 'Virgin',
+      upc: '724384960650',
+      gain: -8.2,
       genres: { data: [{ id: 106, name: 'Electro' }, { id: 113, name: 'Dance' }] },
       cover_medium: 'https://cdn-images.dzcdn.net/images/cover/discovery/250x250.jpg',
       cover_xl: 'https://cdn-images.dzcdn.net/images/cover/discovery/1000x1000.jpg',
@@ -179,6 +243,10 @@ test('Deezer album selection rejects other versions and validates every paginate
     assert.equal(album.cover, 'https://cdn-images.dzcdn.net/images/cover/discovery/250x250.jpg');
     assert.equal(album.artwork, 'https://cdn-images.dzcdn.net/images/cover/discovery/1000x1000.jpg');
     assert.deepEqual(album.genres, ['Electro', 'Dance']);
+    assert.equal(album.publisher, 'Virgin');
+    assert.equal(album.barcode, '724384960650');
+    assert.equal(album.recordType, 'album');
+    assert.equal(album.gainDb, -8.2);
     assert.equal(album.tracks.length, 101);
     assert.equal(album.tracks[100].discNumber, 2);
     assert.equal(album.tracks[100].trackNumber, 1);
