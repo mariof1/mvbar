@@ -8,6 +8,7 @@ import { AddMenu } from './AddMenu';
 import { trackArtistLabel } from './artistDisplay';
 import { formatCalendarDate } from './format';
 import { useLatestRequest } from './useLatestRequest';
+import { PlayingTrackIndicator } from './PlayingTrackIndicator';
 
 export function History(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
@@ -116,7 +117,7 @@ export function History(props: {
               className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/70 sm:gap-4">
               <span className="w-6 flex-shrink-0 text-center text-xs text-slate-500 sm:w-8 sm:text-sm">{idx + 1}</span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-white sm:text-base">{t.title ?? t.path}</span>
+                <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{t.title ?? t.path}</span><PlayingTrackIndicator trackId={t.id} /></span>
                 <span className="block truncate text-xs text-slate-400 sm:text-sm">{[trackArtistLabel(t), t.album].filter(Boolean).join(' • ')}</span>
               </span>
             </button>
