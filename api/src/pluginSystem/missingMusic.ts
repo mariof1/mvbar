@@ -745,7 +745,12 @@ function serializePlaylistImport(row: DeezerPlaylistImportRow) {
     totalTracks: Number(row.total_tracks),
     addedTracks: Number(row.added_tracks),
     failedTracks: Number(row.failed_tracks),
-    pendingTracks: Math.max(0, Number(row.total_tracks) - Number(row.added_tracks) - Number(row.failed_tracks)),
+    unavailableTracks: Number(row.unavailable_tracks ?? 0),
+    retryableFailedTracks: Number(row.failed_tracks),
+    pendingTracks: Math.max(
+      0,
+      Number(row.total_tracks) - Number(row.added_tracks) - Number(row.failed_tracks) - Number(row.unavailable_tracks ?? 0),
+    ),
     syncEnabled: row.sync_enabled === true,
     syncIntervalHours: Number(row.sync_interval_hours || DEFAULT_DEEZER_PLAYLIST_SYNC_INTERVAL_HOURS),
     nextSyncAt: row.next_sync_at,
