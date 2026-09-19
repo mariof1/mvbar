@@ -11,6 +11,7 @@ import { formatCount } from './format';
 import { useToastStore } from './Toast';
 import { useLatestRequest } from './useLatestRequest';
 import { PluginDownloadBadge } from './PluginDownloadBadge';
+import { PlayingTrackIndicator } from './PlayingTrackIndicator';
 
 type Album = {
   album: string;
@@ -236,7 +237,7 @@ export function RecentlyAdded({
                   {track.track_num || idx + 1}
                 </span>
                 <span className="flex-1 min-w-0">
-                  <span className="flex min-w-0 items-center gap-2 text-white"><span className="truncate">{track.title}</span>{track.source_plugin_id && <PluginDownloadBadge />}</span>
+                  <span className="flex min-w-0 items-center gap-2 text-white"><span className="truncate">{track.title}</span><PlayingTrackIndicator trackId={track.id} />{track.source_plugin_id && <PluginDownloadBadge />}</span>
                   <span className="block text-slate-400 text-sm truncate">{trackArtistLabel(track)}</span>
                 </span>
                 <span className="text-slate-500 text-sm">{formatDuration(track.duration_ms)}</span>
