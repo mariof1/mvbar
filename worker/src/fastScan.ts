@@ -122,6 +122,7 @@ interface TrackData {
   albumartists: string[];  // Array of individual album artist names
   composers: string[];     // Array of composer names
   conductors: string[];    // Array of conductor names
+  lyricists: string[];     // Array of songwriter/lyricist names
   trackNumber: number | null;
   trackTotal: number | null;
   discNumber: number | null;
@@ -510,6 +511,10 @@ async function batchUpsertTracks(tracks: TrackData[]): Promise<void> {
       for (const name of track.conductors) {
         if (name?.trim()) creditRelations.push({ trackId, name: name.trim(), role: 'conductor', position: position++ });
       }
+      position = 0;
+      for (const name of track.lyricists) {
+        if (name?.trim()) creditRelations.push({ trackId, name: name.trim(), role: 'lyricist', position: position++ });
+      }
 
       if (track.country) {
         for (const value of track.country.split(/[;,]/).map((item) => item.trim()).filter(Boolean)) {
@@ -715,6 +720,7 @@ export async function refreshTrackMetadata(musicDir: string, relPath: string, ch
     albumartists: tags.albumartists,
     composers: tags.composers || [],
     conductors: tags.conductors || [],
+    lyricists: tags.lyricists || [],
     trackNumber: tags.trackNumber,
     trackTotal: tags.trackTotal,
     discNumber: tags.discNumber,
@@ -1226,6 +1232,7 @@ export async function runFastScan(
             albumartists: tags.albumartists,
             composers: tags.composers || [],
             conductors: tags.conductors || [],
+            lyricists: tags.lyricists || [],
             trackNumber: tags.trackNumber,
             trackTotal: tags.trackTotal,
             discNumber: tags.discNumber,
