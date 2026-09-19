@@ -1,5 +1,5 @@
 name: One-time verify Deezer downloader resilience
-# rerun after local quality fallback and sync syntax fix
+# rerun after structural placeholder repair
 
 on:
   push:
