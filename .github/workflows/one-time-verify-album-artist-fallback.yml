@@ -1,0 +1,56 @@
+name: One-time verify album artist fallback
+
+on:
+  push:
+    branches: [fix/album-artist-fallback]
+    paths:
+      - '.github/workflows/one-time-verify-album-artist-fallback.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mvbar
+          POSTGRES_PASSWORD: mvbar
+          POSTGRES_DB: mvbar_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mvbar -d mvbar_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      TEST_DATABASE_URL: postgresql://mvbar:mvbar@127.0.0.1:5432/mvbar_test
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/album-artist-fallback
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - name: Build and lint API
+        working-directory: api
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+      - name: Run album browse regression
+        working-directory: api
+        run: node --test test/albumlessBrowse.integration.test.mjs
+      - name: Remove verification workflow
+        run: |
+          git rm .github/workflows/one-time-verify-album-artist-fallback.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Remove album artist verification workflow"
+          git push origin HEAD:fix/album-artist-fallback
