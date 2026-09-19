@@ -26,6 +26,7 @@ import { trackArtistLabel } from './artistDisplay';
 import { formatCalendarDate } from './format';
 import { useRoute, useRouter } from './router';
 import { useLatestRequest } from './useLatestRequest';
+import { PlayingTrackIndicator } from './PlayingTrackIndicator';
 
 type SearchResult = SocialUser & {
   relationshipId: number | null;
@@ -366,7 +367,7 @@ export function Social() {
                 </span>
               </button>
               <div className="min-w-0 flex-1 pr-4">
-                <h2 className="truncate font-semibold text-white">{share.track.title || 'Unknown Track'}</h2>
+                <h2 className="flex min-w-0 items-center gap-2 font-semibold text-white"><span className="truncate">{share.track.title || 'Unknown Track'}</span><PlayingTrackIndicator trackId={share.track.id} /></h2>
                 <p className="truncate text-sm text-slate-400">{[trackArtistLabel(share.track), share.track.album].filter(Boolean).join(' • ')}</p>
                 <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                   <Avatar user={share.sender} size="sm" />
