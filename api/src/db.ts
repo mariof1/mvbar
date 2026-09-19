@@ -1193,6 +1193,7 @@ export async function initDb() {
       request_id text references plugin_media_requests(id) on delete set null,
       track_id bigint references tracks(id) on delete set null,
       state text not null default 'pending' check (state in ('pending','requested','downloading','added','failed')),
+      unavailable boolean not null default false,
       error text,
       primary key(import_id, position)
     );
@@ -1209,6 +1210,7 @@ export async function initDb() {
   await pool.query('create index if not exists plugin_deezer_playlist_imports_sync_due_idx on plugin_deezer_playlist_imports(next_sync_at) where sync_enabled=true');
   await pool.query('alter table plugin_deezer_playlist_items add column if not exists track_number integer');
   await pool.query('alter table plugin_deezer_playlist_items add column if not exists disc_number integer');
+  await pool.query('alter table plugin_deezer_playlist_items add column if not exists unavailable boolean not null default false');
   await pool.query('alter table plugin_media_requests add column if not exists deezer_artist_id text');
   await pool.query('alter table plugin_media_requests add column if not exists deezer_album_id text');
   await pool.query('alter table plugin_media_requests add column if not exists deezer_track_id text');
