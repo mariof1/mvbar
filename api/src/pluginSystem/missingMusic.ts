@@ -971,8 +971,8 @@ async function syncDeezerPlaylistImport(
       for (const [index, track] of remoteTracks.entries()) {
         const previous = currentByTrackId.get(track.id);
         const base = params.length;
-        values.push('(' + Array.from({ length: 17 }, (_, offset) => '
-          importRow.id,
+        values.push('(' + Array.from({ length: 17 }, (_, offset) => '$' + (base + offset + 1)).join(',') + ')');
+        params.push(          importRow.id,
           index,
           track.id,
           track.albumId,
