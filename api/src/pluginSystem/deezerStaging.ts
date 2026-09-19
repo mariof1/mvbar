@@ -679,11 +679,11 @@ export function resolveDeezerTrackTagMetadata(
     albumArtist: existingAlbum?.album_artist?.trim() || remoteAlbum?.artist?.trim() || undefined,
     releaseDate: existingAlbum?.year ? String(existingAlbum.year) : remoteAlbum?.releaseDate || undefined,
     genres: localGenres.length ? localGenres : (remoteAlbum?.genres ?? []),
-    publisher: remoteAlbum?.publisher || undefined,
-    barcode: remoteAlbum?.barcode || undefined,
-    recordType: remoteAlbum?.recordType || undefined,
-    albumGainDb: remoteAlbum?.gainDb ?? undefined,
-    albumId: remoteAlbum?.id || undefined,
+    ...(remoteAlbum?.publisher ? { publisher: remoteAlbum.publisher } : {}),
+    ...(remoteAlbum?.barcode ? { barcode: remoteAlbum.barcode } : {}),
+    ...(remoteAlbum?.recordType ? { recordType: remoteAlbum.recordType } : {}),
+    ...(remoteAlbum?.gainDb != null ? { albumGainDb: remoteAlbum.gainDb } : {}),
+    ...(remoteAlbum?.id ? { albumId: remoteAlbum.id } : {}),
   };
 }
 
