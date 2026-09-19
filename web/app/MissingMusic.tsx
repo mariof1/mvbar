@@ -373,6 +373,9 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   const [playlistsLoading, setPlaylistsLoading] = useState(false);
   const [playlistsLoaded, setPlaylistsLoaded] = useState(false);
   const [playlistImportBusy, setPlaylistImportBusy] = useState<string | null>(null);
+  const [playlistPreviewTarget, setPlaylistPreviewTarget] = useState<DeezerPlaylistCard | null>(null);
+  const [playlistPreview, setPlaylistPreview] = useState<DeezerPlaylistPreview | null>(null);
+  const [playlistPreviewLoading, setPlaylistPreviewLoading] = useState(false);
   const [catalogSearching, setCatalogSearching] = useState(false);
   const [catalogSearched, setCatalogSearched] = useState(false);
   const [artist, setArtist] = useState<Artist | null>(null);
@@ -403,6 +406,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   const localSearchRequestId = useRef(0);
   const requestsRequestId = useRef(0);
   const playlistSearchRequestId = useRef(0);
+  const playlistPreviewRequestId = useRef(0);
   const deezerLookupId = useRef(0);
 
   const loadArtists = useCallback(async (search = '') => {
@@ -461,6 +465,38 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
       if (requestId === playlistSearchRequestId.current) setPlaylistsLoading(false);
     }
   }, [token]);
+
+  const previewDeezerPlaylist = useCallback(async (playlist: DeezerPlaylistCard) => {
+    if (!token) return;
+    const requestId = ++playlistPreviewRequestId.current;
+    setPlaylistPreviewTarget(playlist);
+    setPlaylistPreview(null);
+    setPlaylistPreviewLoading(true);
+    setError('');
+    try {
+      const data = await apiFetch(
+        `/plugins/missing-music/deezer-playlists/${playlist.id}`,
+        {},
+        token,
+      ) as DeezerPlaylistPreview;
+      if (requestId === playlistPreviewRequestId.current) setPlaylistPreview(data);
+    } catch (cause) {
+      if (requestId === playlistPreviewRequestId.current) {
+        const message = messageForError(cause);
+        setError(message);
+        showToast(message, 'error', 'top-right');
+      }
+    } finally {
+      if (requestId === playlistPreviewRequestId.current) setPlaylistPreviewLoading(false);
+    }
+  }, [showToast, token]);
+
+  const closePlaylistPreview = useCallback(() => {
+    playlistPreviewRequestId.current += 1;
+    setPlaylistPreviewTarget(null);
+    setPlaylistPreview(null);
+    setPlaylistPreviewLoading(false);
+  }, []);
 
   const loadStatus = useCallback(async () => {
     if (!token) return;
