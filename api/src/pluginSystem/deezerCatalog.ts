@@ -8,6 +8,7 @@ export type DeezerAlbum = {
   id: string; title: string; artistId: string; artist: string; trackCount: number;
   releaseDate: string | null; recordType: 'Album' | 'EP' | 'Single' | 'Other';
   secondaryTypes: string[]; genres: string[]; cover: string | null; explicit: boolean; baseTitle: string;
+  publisher: string | null; barcode: string | null; gainDb: number | null;
 };
 export type DeezerTrack = {
   id: string; title: string; artist: string; artistId: string | null; albumId: string; album: string; isrc: string | null;
@@ -34,6 +35,7 @@ type RawAlbum = {
   id?: number; title?: string; cover_xl?: string; cover_big?: string; cover_medium?: string; nb_tracks?: number;
   release_date?: string; record_type?: string; explicit_lyrics?: boolean; artist?: { id?: number; name?: string };
   genres?: { data?: Array<{ id?: number; name?: string }> };
+  label?: string; upc?: string; gain?: number;
 };
 type RawTrack = {
   id?: number; title?: string; duration?: number; isrc?: string; disk_number?: number; track_position?: number;
@@ -162,6 +164,10 @@ function albumGenres(raw: RawAlbum) {
   }
   return genres;
 }
+function albumGain(raw: RawAlbum) {
+  const gain = Number(raw.gain);
+  return Number.isFinite(gain) && Math.abs(gain) <= 100 ? gain : null;
+}
 function mapAlbum(raw: RawAlbum, artistId: string, artistName: string): DeezerAlbum | null {
   if (!Number.isSafeInteger(raw.id) || !raw.id || !raw.title) return null;
   return {
@@ -170,6 +176,9 @@ function mapAlbum(raw: RawAlbum, artistId: string, artistName: string): DeezerAl
     releaseDate: /^\d{4}-\d{2}-\d{2}$/.test(raw.release_date || '') ? raw.release_date! : null,
     recordType: recordType(raw), secondaryTypes: secondary(raw), genres: albumGenres(raw),
     cover: cover(raw), explicit: raw.explicit_lyrics === true, baseTitle: deezerBaseAlbumTitle(raw.title),
+    publisher: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : null,
+    barcode: typeof raw.upc === 'string' && raw.upc.trim() ? raw.upc.trim() : null,
+    gainDb: albumGain(raw),
   };
 }
 
