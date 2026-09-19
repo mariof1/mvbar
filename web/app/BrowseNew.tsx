@@ -92,6 +92,58 @@ type AlbumDetail = {
 
 type AlbumSelection = { artist: string; album: string; artistId?: number };
 
+type MetadataAdvancedForm = {
+  trackTotal: string;
+  discTotal: string;
+  releaseDate: string;
+  originalYear: string;
+  bpm: string;
+  initialKey: string;
+  composers: string;
+  conductors: string;
+  publisher: string;
+  copyright: string;
+  comment: string;
+  mood: string;
+  grouping: string;
+  isrc: string;
+  compilation: boolean;
+  titleSort: string;
+  artistSort: string;
+  albumSort: string;
+  albumArtistSort: string;
+  musicbrainzTrackId: string;
+  musicbrainzReleaseId: string;
+  musicbrainzArtistId: string;
+  musicbrainzAlbumArtistId: string;
+};
+
+const EMPTY_METADATA_ADVANCED: MetadataAdvancedForm = {
+  trackTotal: '',
+  discTotal: '',
+  releaseDate: '',
+  originalYear: '',
+  bpm: '',
+  initialKey: '',
+  composers: '',
+  conductors: '',
+  publisher: '',
+  copyright: '',
+  comment: '',
+  mood: '',
+  grouping: '',
+  isrc: '',
+  compilation: false,
+  titleSort: '',
+  artistSort: '',
+  albumSort: '',
+  albumArtistSort: '',
+  musicbrainzTrackId: '',
+  musicbrainzReleaseId: '',
+  musicbrainzArtistId: '',
+  musicbrainzAlbumArtistId: '',
+};
+
 // Genre color palette
 const GENRE_COLORS = [
   'from-rose-500 to-pink-600',
@@ -322,10 +374,10 @@ export function BrowseNew(props: {
   const [editAlbumArtist, setEditAlbumArtist] = useState('');
   const [editTrackNumber, setEditTrackNumber] = useState('');
   const [editDiscNumber, setEditDiscNumber] = useState('');
-  const [editYear, setEditYear] = useState('');
   const [editGenre, setEditGenre] = useState('');
   const [editCountry, setEditCountry] = useState('');
   const [editLanguage, setEditLanguage] = useState('');
+  const [editAdvanced, setEditAdvanced] = useState<MetadataAdvancedForm>(EMPTY_METADATA_ADVANCED);
 
   const [editInitial, setEditInitial] = useState<{
     title: string;
@@ -334,10 +386,10 @@ export function BrowseNew(props: {
     albumArtist: string;
     trackNumber: string;
     discNumber: string;
-    year: string;
     genre: string;
     country: string;
     language: string;
+    advanced: MetadataAdvancedForm;
   } | null>(null);
   useBodyScrollLock(editOpen);
 
@@ -958,45 +1010,64 @@ export function BrowseNew(props: {
     const openEditTrack = (t: Track) => {
       setEditTrack(t);
       setEditTitle(t.title ?? '');
-      const a = (t.artists && t.artists.length > 0)
-        ? t.artists.map((x) => x.name).join('\n')
-        : (t.artist ?? '');
-      setEditArtists(a);
-      setEditAlbum(albumDetail.name);
-      const aa = (t.album_artist ?? '')
+      const splitMulti = (value: string | null | undefined) => (value ?? '')
         .split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/)
-        .map((x) => x.trim())
+        .map((part) => part.trim())
         .filter(Boolean)
         .join('\n');
-      setEditAlbumArtist(aa);
+      const artists = (t.artists && t.artists.length > 0)
+        ? t.artists.map((artist) => artist.name).join('\n')
+        : splitMulti(t.artist);
+      const albumArtists = splitMulti(t.album_artist);
+      const genres = splitMulti(t.genre);
+      const countries = splitMulti(t.country);
+      const languages = splitMulti(t.language);
+      const advanced: MetadataAdvancedForm = {
+        trackTotal: t.trackTotal ? String(t.trackTotal) : '',
+        discTotal: t.discTotal ? String(t.discTotal) : '',
+        releaseDate: t.release_date ?? (t.year ? String(t.year) : ''),
+        originalYear: t.original_year ? String(t.original_year) : '',
+        bpm: t.bpm ? String(t.bpm) : '',
+        initialKey: t.initial_key ?? '',
+        composers: splitMulti(t.composer),
+        conductors: splitMulti(t.conductor),
+        publisher: t.publisher ?? '',
+        copyright: t.copyright ?? '',
+        comment: t.comment ?? '',
+        mood: t.mood ?? '',
+        grouping: t.grouping ?? '',
+        isrc: t.isrc ?? '',
+        compilation: Boolean(t.compilation),
+        titleSort: t.title_sort ?? '',
+        artistSort: t.artist_sort ?? '',
+        albumSort: t.album_sort ?? '',
+        albumArtistSort: t.album_artist_sort ?? '',
+        musicbrainzTrackId: t.musicbrainz_track_id ?? '',
+        musicbrainzReleaseId: t.musicbrainz_release_id ?? '',
+        musicbrainzArtistId: t.musicbrainz_artist_id ?? '',
+        musicbrainzAlbumArtistId: t.musicbrainz_album_artist_id ?? '',
+      };
+
+      setEditArtists(artists);
+      setEditAlbum(t.album ?? albumDetail.name);
+      setEditAlbumArtist(albumArtists);
       setEditTrackNumber(t.trackNumber ? String(t.trackNumber) : '');
       setEditDiscNumber(t.discNumber ? String(t.discNumber) : '');
-      setEditYear(t.year ? String(t.year) : '');
-      const g = (t.genre ?? '').split(';').map((x) => x.trim()).filter(Boolean).join('\n');
-      setEditGenre(g);
-      const c = (t.country ?? '')
-        .split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/)
-        .map((x) => x.trim())
-        .filter(Boolean)
-        .join('\n');
-      setEditCountry(c);
-      const l = (t.language ?? '')
-        .split(/(?:\s*;\s*|\0|\uFEFF|\\n|\r?\n)+/)
-        .map((x) => x.trim())
-        .filter(Boolean)
-        .join('\n');
-      setEditLanguage(l);
+      setEditGenre(genres);
+      setEditCountry(countries);
+      setEditLanguage(languages);
+      setEditAdvanced(advanced);
       setEditInitial({
         title: t.title ?? '',
-        artists: a,
-        album: albumDetail.name,
-        albumArtist: aa,
+        artists,
+        album: t.album ?? albumDetail.name,
+        albumArtist: albumArtists,
         trackNumber: t.trackNumber ? String(t.trackNumber) : '',
         discNumber: t.discNumber ? String(t.discNumber) : '',
-        year: t.year ? String(t.year) : '',
-        genre: g,
-        country: c,
-        language: l,
+        genre: genres,
+        country: countries,
+        language: languages,
+        advanced,
       });
       setEditError(null);
       setEditOpen(true);
@@ -1121,8 +1192,7 @@ export function BrowseNew(props: {
                       </svg>
                     </button>
 
-                    {writableLibraryIds.has(track.library_id ?? -1) && (/\.(mp3|flac)$/i.test(track.path ?? '')) &&
-                      ((track.path ?? '').toLowerCase().endsWith('.mp3') || track.source_plugin_id === 'mvbar.missing-music') && (
+                    {writableLibraryIds.has(track.library_id ?? -1) && /\.(mp3|flac|m4a|mp4|ogg|opus|wav)$/i.test(track.path ?? '') && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
