@@ -31,6 +31,7 @@ import { formatArtistValue, trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
 import { PluginDownloadBadge } from './PluginDownloadBadge';
 import { useToastStore } from './Toast';
+import { PlayingTrackIndicator } from './PlayingTrackIndicator';
 
 type Hit = {
   id: number;
@@ -880,7 +881,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                             />
                           </span>
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium text-white">{track.title || track.path}</span>
+                            <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-white"><span className="truncate">{track.title || track.path}</span><PlayingTrackIndicator trackId={track.id} /></span>
                             <span className="block truncate text-xs text-slate-500">{[track.displayArtist || track.artist, track.album].filter(Boolean).join(' · ') || 'Unknown artist'}</span>
                           </span>
                           <svg className="h-4 w-4 flex-none text-slate-600 transition group-hover:text-white" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
@@ -1208,7 +1209,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
 
                       {/* Track info */}
                       <button onClick={() => handlePlay(t)} className="flex-1 min-w-0 text-left">
-                        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white"><span className="truncate">{t.title ?? t.path}</span>{t.source_plugin_id && <PluginDownloadBadge />}</div>
+                        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white"><span className="truncate">{t.title ?? t.path}</span><PlayingTrackIndicator trackId={t.id} />{t.source_plugin_id && <PluginDownloadBadge />}</div>
                         <div className="text-xs text-slate-400 truncate">
                           {[trackArtistLabel(t), t.album].filter(Boolean).join(' · ')}
                         </div>
@@ -1290,7 +1291,7 @@ export function SearchModal({ isOpen, onClose, onPlay, onAddToQueue, onPlayAll, 
                         >
                           <RecentSearchArtwork item={recent} />
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium text-white">{recent.title}</span>
+                            <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-white"><span className="truncate">{recent.title}</span>{recent.itemType === 'track' && <PlayingTrackIndicator trackId={Number(recent.payload.id)} />}</span>
                             {recent.subtitle && <span className="block truncate text-xs text-slate-500">{recent.subtitle}</span>}
                           </span>
                         </button>
