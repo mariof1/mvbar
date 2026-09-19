@@ -1216,9 +1216,12 @@ async function reconcileDeezerPlaylistImport(plugin: MissingMusicPluginRow, impo
 
     const request = item.request_id ? requestsById.get(item.request_id) : undefined;
     if (request && ['failed','rejected','cancelled'].includes(request.status)) {
+      const deezerState = (request.metadata?.deezer as { state?: string } | undefined)?.state;
+      const unavailable = deezerState === 'unavailable'
+        || request.provider_error === 'Unavailable on Deezer for this account or region';
       await db().query(
-        "update plugin_deezer_playlist_items set state='failed',error=$3 where import_id=$1 and position=$2",
-        [importRow.id, item.position, request.provider_error ?? 'Deezer download failed']
+        "update plugin_deezer_playlist_items set state='failed',unavailable=$3,error=$4 where import_id=$1 and position=$2",
+        [importRow.id, item.position, unavailable, request.provider_error ?? 'Deezer download failed']
       );
       continue;
     }
@@ -1238,12 +1241,14 @@ async function reconcileDeezerPlaylistImport(plugin: MissingMusicPluginRow, impo
     total: string | number;
     added: string | number;
     failed: string | number;
+    unavailable: string | number;
     downloaded: string | number;
     reused: string | number;
   }>(
     "select count(*) total," +
     "count(*) filter(where state='added') added," +
-    "count(*) filter(where state='failed') failed," +
+    "count(*) filter(where state='failed' and unavailable=false) failed," +
+    "count(*) filter(where state='failed' and unavailable=true) unavailable," +
     "count(*) filter(where state='added' and request_id is not null) downloaded," +
     "count(*) filter(where state='added' and request_id is null) reused " +
     "from plugin_deezer_playlist_items where import_id=$1",
@@ -1252,15 +1257,16 @@ async function reconcileDeezerPlaylistImport(plugin: MissingMusicPluginRow, impo
   const total = Number(counts?.total ?? 0);
   const added = Number(counts?.added ?? 0);
   const failed = Number(counts?.failed ?? 0);
+  const unavailable = Number(counts?.unavailable ?? 0);
   const downloaded = Number(counts?.downloaded ?? 0);
   const reused = Number(counts?.reused ?? 0);
-  const status: DeezerPlaylistImportRow['status'] = total > 0 && added + failed >= total
-    ? (failed > 0 ? 'partial' : 'completed')
+  const status: DeezerPlaylistImportRow['status'] = total > 0 && added + failed + unavailable >= total
+    ? (failed > 0 || unavailable > 0 ? 'partial' : 'completed')
     : 'downloading';
   const updated = (await db().query<DeezerPlaylistImportRow>(
-    "update plugin_deezer_playlist_imports set status=$2,total_tracks=$3,added_tracks=$4,failed_tracks=$5,updated_at=now() " +
+    "update plugin_deezer_playlist_imports set status=$2,total_tracks=$3,added_tracks=$4,failed_tracks=$5,unavailable_tracks=$6,updated_at=now() " +
     "where id=$1 returning *",
-    [importRow.id, status, total, added, failed]
+    [importRow.id, status, total, added, failed, unavailable]
   )).rows[0];
 
   const changed = status !== importRow.status
@@ -1272,6 +1278,7 @@ async function reconcileDeezerPlaylistImport(plugin: MissingMusicPluginRow, impo
     if (downloaded > 0) parts.push(`${downloaded} downloaded`);
     if (reused > 0) parts.push(`${reused} already in library`);
     if (failed > 0) parts.push(`${failed} failed`);
+    if (unavailable > 0) parts.push(`${unavailable} unavailable on Deezer`);
     broadcastToUser(importRow.user_id, 'missing-music:update', {
       event: final ? 'playlist-import-complete' : 'playlist-import-progress',
       requestId: importRow.id,
