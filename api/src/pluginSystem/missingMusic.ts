@@ -1469,14 +1469,23 @@ async function downloadDeezerRequest(request: MediaRequestRow, itemId: string, l
       await notifyRequest(row, 'staged', 'Download is ready and being added to the library');
     }
   } catch (error) {
-    const message = errorMessage(error).slice(0, 500);
+    const permanentlyUnavailable = request.item_type === 'track' && isPermanentDeezerUnavailableError(error);
+    const message = permanentlyUnavailable
+      ? 'Unavailable on Deezer for this account or region'
+      : errorMessage(error).slice(0, 500);
     try {
       const row = await updateRequest(request.id, {
         status: 'failed',
         provider_error: message,
-        metadata: { ...request.metadata, deezer: { state: 'failed', [request.item_type === 'album' ? 'albumId' : 'trackId']: itemId } },
+        metadata: {
+          ...request.metadata,
+          deezer: {
+            state: permanentlyUnavailable ? 'unavailable' : 'failed',
+            [request.item_type === 'album' ? 'albumId' : 'trackId']: itemId,
+          },
+        },
       });
-      if (row) await notifyRequest(row, 'failed', message);
+      if (row) await notifyRequest(row, permanentlyUnavailable ? 'unavailable' : 'failed', message);
     } catch (databaseError) {
       logger.error('missing-music', `Could not record Deezer staging failure for ${request.id}: ${errorMessage(databaseError)}`);
     }
