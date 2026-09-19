@@ -64,6 +64,7 @@ export type TagResult = {
   albumartists: string[];
   composers: string[];
   conductors: string[];
+  lyricists: string[];
   
   // Track/disc numbers
   trackNumber: number | null;
@@ -164,6 +165,12 @@ export async function readTags(filePath: string): Promise<TagResult> {
     ...nativeValues(m, ['tpe3', 'TPE3', 'conductor', 'CONDUCTOR', '----:com.apple.iTunes:CONDUCTOR'])
   ];
   const conductor = conductorRaw.length ? sanitize(conductorRaw.join('; ')) : null;
+
+  const lyricistRaw = [
+    ...(commonAny.lyricist ? (Array.isArray(commonAny.lyricist) ? commonAny.lyricist : [commonAny.lyricist]) : []),
+    ...(commonAny.author ? (Array.isArray(commonAny.author) ? commonAny.author : [commonAny.author]) : []),
+    ...nativeValues(m, ['text', 'TEXT', 'lyricist', 'LYRICIST', 'author', 'AUTHOR', 'writer', 'WRITER'])
+  ];
   
   // Publisher/Label (may be array in music-metadata)
   const publisherRaw = firstOf(commonAny.label) ?? firstOf(commonAny.publisher) ?? 
@@ -396,10 +403,11 @@ export async function readTags(filePath: string): Promise<TagResult> {
   // === Composer/Conductor arrays for track_credits ===
   const composers = dedupeFold(composerRaw.flatMap((v) => splitArtistValue(String(v ?? ''))));
   const conductors = dedupeFold(conductorRaw.flatMap((v) => splitArtistValue(String(v ?? ''))));
+  const lyricists = dedupeFold(lyricistRaw.flatMap((v) => splitArtistValue(String(v ?? ''))));
 
   // Canonicalize across artist+albumartist so accent-variants map to the same DB artist row.
   const canonByKey = new Map<string, string>();
-  for (const v of [...artists, ...albumartists, ...composers, ...conductors]) {
+  for (const v of [...artists, ...albumartists, ...composers, ...conductors, ...lyricists]) {
     const k = foldKey(v);
     if (!k) continue;
     const cur = canonByKey.get(k);
@@ -413,6 +421,7 @@ export async function readTags(filePath: string): Promise<TagResult> {
   const canon = (v: string) => canonByKey.get(foldKey(v)) ?? v;
   artists = dedupeFold(artists.map(canon));
   albumartists = dedupeFold(albumartists.map(canon));
+  const canonicalLyricists = dedupeFold(lyricists.map(canon));
 
   // Keep the legacy scalar columns canonical as well. A large part of the API,
   // Subsonic support, and older clients consume these fields directly.
@@ -424,7 +433,7 @@ export async function readTags(filePath: string): Promise<TagResult> {
   return {
     title, artist, album, albumartist, genre, country, language, year, durationMs, artMime, artData,
     embeddedLyrics, embeddedLyricsSynced,
-    artists, albumartists, composers, conductors,
+    artists, albumartists, composers, conductors, lyricists: canonicalLyricists,
     trackNumber, trackTotal, discNumber, discTotal,
     bpm, initialKey, composer, conductor, publisher, copyright, comment, mood, grouping,
     isrc, releaseDate, originalYear, compilation,
