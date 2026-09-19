@@ -208,6 +208,155 @@ function Spinner() {
   return <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />;
 }
 
+function DeezerPlaylistPreviewModal({
+  playlist,
+  preview,
+  loading,
+  imported,
+  importEnabled,
+  importBusy,
+  onClose,
+  onImport,
+}: {
+  playlist: DeezerPlaylistCard | null;
+  preview: DeezerPlaylistPreview | null;
+  loading: boolean;
+  imported: DeezerPlaylistImport | null;
+  importEnabled: boolean;
+  importBusy: boolean;
+  onClose: () => void;
+  onImport: (playlist: DeezerPlaylistCard) => void;
+}) {
+  useBodyScrollLock(Boolean(playlist));
+
+  useEffect(() => {
+    if (!playlist) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose, playlist]);
+
+  if (!playlist) return null;
+
+  const detail = preview?.playlist ?? playlist;
+  const tracks = preview?.tracks ?? [];
+  const active = imported?.status === 'queued' || imported?.status === 'downloading';
+  const complete = imported?.status === 'completed' || imported?.status === 'partial';
+
+  return (
+    <div
+      className="fixed inset-0 z-[320] flex items-end justify-center bg-black/75 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+      role="presentation"
+      onClick={onClose}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="deezer-playlist-preview-title"
+        className="flex max-h-[94vh] w-full flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-slate-950 shadow-2xl sm:max-w-4xl sm:rounded-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-4 border-b border-white/10 p-4 sm:p-5">
+          <div className="relative h-20 w-20 flex-none overflow-hidden rounded-xl bg-gradient-to-br from-violet-500/20 to-cyan-500/20 sm:h-24 sm:w-24">
+            {detail.cover ? (
+              <img src={detail.cover} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <div className="flex h-full items-center justify-center text-3xl text-white/20">♫</div>
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 id="deezer-playlist-preview-title" className="truncate text-xl font-semibold text-white">
+                  {detail.title}
+                </h3>
+                <p className="mt-1 text-sm text-white/45">
+                  {[detail.creator ? `by ${detail.creator}` : null, formatCount(detail.trackCount || tracks.length, 'track')].filter(Boolean).join(' · ')}
+                </p>
+                {detail.description && (
+                  <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-white/40">{detail.description}</p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border border-white/10 px-3 py-2 text-sm text-white/60 hover:bg-white/10 hover:text-white"
+                aria-label="Close playlist preview"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {complete && imported ? (
+                <a
+                  href={`#/playlist/${imported.playlistId}`}
+                  className="rounded-lg bg-emerald-400/15 px-4 py-2 text-sm font-semibold text-emerald-200 hover:bg-emerald-400/25"
+                >
+                  Open imported playlist
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onImport(detail)}
+                  disabled={!importEnabled || active || importBusy || loading}
+                  className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-black hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {importBusy
+                    ? 'Starting…'
+                    : active && imported
+                      ? `Importing ${imported.addedTracks}/${imported.totalTracks}`
+                      : 'Import playlist'}
+                </button>
+              )}
+              {detail.link && (
+                <a
+                  href={detail.link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-lg border border-white/10 px-4 py-2 text-sm text-white/60 hover:bg-white/10 hover:text-white"
+                >
+                  Open in Deezer ↗
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center gap-3 py-20 text-sm text-white/50">
+              <Spinner /> Loading playlist tracks…
+            </div>
+          ) : tracks.length ? (
+            <div className="divide-y divide-white/[0.06]">
+              {tracks.map((track) => (
+                <div key={track.id} className="grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 sm:grid-cols-[2.5rem_minmax(0,1.2fr)_minmax(0,1fr)_5rem] sm:px-5">
+                  <span className="text-right text-xs tabular-nums text-white/30">{track.position}</span>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-white/85">{track.title}</div>
+                    <div className="truncate text-xs text-white/40 sm:hidden">
+                      {track.artist}{track.album ? ` · ${track.album}` : ''}
+                    </div>
+                  </div>
+                  <div className="hidden min-w-0 sm:block">
+                    <div className="truncate text-xs text-white/55">{track.artist}</div>
+                    <div className="truncate text-xs text-white/30">{track.album}</div>
+                  </div>
+                  <span className="text-right text-xs tabular-nums text-white/35">{formatDuration(track.durationMs)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-20 text-center text-sm text-white/40">No tracks were returned for this playlist.</div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; name: string } }) {
   const token = useAuth((state) => state.token);
   const user = useAuth((state) => state.user);
