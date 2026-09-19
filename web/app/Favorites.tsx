@@ -10,6 +10,7 @@ import { useToastStore } from './Toast';
 import { AddMenu } from './AddMenu';
 import { trackArtistLabel } from './artistDisplay';
 import { PluginDownloadBadge } from './PluginDownloadBadge';
+import { PlayingTrackIndicator } from './PlayingTrackIndicator';
 
 export function Favorites(props: {
   onPlay?: (t: { id: number; title: string | null; artist: string | null }) => void;
@@ -231,7 +232,7 @@ export function Favorites(props: {
 
               {/* Track Info */}
               <div className="min-w-0 flex-1">
-                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{t.title ?? t.path}</span>{t.source_plugin_id && <PluginDownloadBadge />}</div>
+                <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-white sm:text-base"><span className="truncate">{t.title ?? t.path}</span><PlayingTrackIndicator trackId={t.id} />{t.source_plugin_id && <PluginDownloadBadge />}</div>
                 <div className="truncate text-xs text-slate-400 sm:text-sm">
                   {[trackArtistLabel(t), t.album].filter(Boolean).join(' • ')}
                 </div>
