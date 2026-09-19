@@ -9,18 +9,15 @@ export function usePlayingTrackId(): number | null {
     const id = Number(state.queue[state.index]?.id);
     return Number.isFinite(id) && id > 0 ? id : null;
   });
-  const localDeviceId = useMvbarConnect((state) => state.localDeviceId);
-  const selectedDevice = useMvbarConnect((state) => (
-    state.devices.find((device) => device.id === state.selectedDeviceId) ?? null
-  ));
-
-  if (selectedDevice && selectedDevice.id !== localDeviceId) {
+  const remotePlayingTrackId = useMvbarConnect((state) => {
+    const selectedDevice = state.devices.find((device) => device.id === state.selectedDeviceId) ?? null;
+    if (!selectedDevice || selectedDevice.id === state.localDeviceId) return undefined;
     if (!selectedDevice.state.isPlaying || !selectedDevice.state.track) return null;
     const id = Number(selectedDevice.state.track.id);
     return Number.isFinite(id) && id > 0 ? id : null;
-  }
+  });
 
-  return localPlayingTrackId;
+  return remotePlayingTrackId === undefined ? localPlayingTrackId : remotePlayingTrackId;
 }
 
 export function PlayingTrackIndicator({
