@@ -2296,6 +2296,7 @@ export function AppShellNew() {
     queue,
     index,
     isOpen,
+    setIsPlaying: setLocalMusicPlaying,
     playIndex: playIndexLocally,
     addManyToQueue: addManyToQueueLocally,
     playNextMany: playNextManyLocally,
@@ -2542,10 +2543,21 @@ export function AppShellNew() {
       });
     };
     const publishProgress = () => publish(false);
-    const publishImmediately = () => publish(true);
+    const publishImmediately = () => {
+      setLocalMusicPlaying(isOpen && !audio.paused && !audio.ended);
+      publish(true);
+    };
+    const publishStopped = () => {
+      setLocalMusicPlaying(false);
+      publish(true);
+    };
     audio.addEventListener('timeupdate', publishProgress);
     audio.addEventListener('play', publishImmediately);
+    audio.addEventListener('playing', publishImmediately);
     audio.addEventListener('pause', publishImmediately);
+    audio.addEventListener('ended', publishStopped);
+    audio.addEventListener('error', publishStopped);
+    audio.addEventListener('emptied', publishStopped);
     audio.addEventListener('loadedmetadata', publishImmediately);
     audio.addEventListener('seeked', publishImmediately);
     audio.addEventListener('volumechange', publishImmediately);
@@ -2553,12 +2565,16 @@ export function AppShellNew() {
     return () => {
       audio.removeEventListener('timeupdate', publishProgress);
       audio.removeEventListener('play', publishImmediately);
+      audio.removeEventListener('playing', publishImmediately);
       audio.removeEventListener('pause', publishImmediately);
+      audio.removeEventListener('ended', publishStopped);
+      audio.removeEventListener('error', publishStopped);
+      audio.removeEventListener('emptied', publishStopped);
       audio.removeEventListener('loadedmetadata', publishImmediately);
       audio.removeEventListener('seeked', publishImmediately);
       audio.removeEventListener('volumechange', publishImmediately);
     };
-  }, [asConnectTrack, index, isOpen, nowPlaying, queue]);
+  }, [asConnectTrack, index, isOpen, nowPlaying, queue, setLocalMusicPlaying]);
 
   const transferPending = useRef(false);
   const handleConnectDevice = useCallback(async (target: MvbarConnectDevice) => {
