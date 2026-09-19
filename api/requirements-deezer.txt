@@ -1,1 +1,3 @@
 streamrip==2.1.0
+
+mutagen==1.47.0
