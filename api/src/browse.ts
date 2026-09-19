@@ -842,7 +842,12 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       r = await db().query(
         `
         select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
-               t.track_number, t.track_total, t.disc_number, t.disc_total, t.source_plugin_id, t.library_id
+               t.track_number, t.track_total, t.disc_number, t.disc_total,
+               t.bpm, t.initial_key, t.composer, t.conductor, t.publisher, t.copyright, t.comment, t.mood, t.grouping,
+               t.isrc, t.release_date, t.original_year, t.compilation,
+               t.title_sort, t.artist_sort, t.album_sort, t.album_artist_sort,
+               t.musicbrainz_track_id, t.musicbrainz_release_id, t.musicbrainz_artist_id, t.musicbrainz_album_artist_id,
+               t.source_plugin_id, t.library_id
         from active_tracks t
         join track_artists ta on ta.track_id = t.id
         where ta.artist_id = $1
@@ -879,7 +884,12 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         r = await db().query(
           `
           select distinct on (t.id) t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
-                 t.track_number, t.track_total, t.disc_number, t.disc_total, t.source_plugin_id, t.library_id
+                 t.track_number, t.track_total, t.disc_number, t.disc_total,
+               t.bpm, t.initial_key, t.composer, t.conductor, t.publisher, t.copyright, t.comment, t.mood, t.grouping,
+               t.isrc, t.release_date, t.original_year, t.compilation,
+               t.title_sort, t.artist_sort, t.album_sort, t.album_artist_sort,
+               t.musicbrainz_track_id, t.musicbrainz_release_id, t.musicbrainz_artist_id, t.musicbrainz_album_artist_id,
+               t.source_plugin_id, t.library_id
           from active_tracks t
           join track_artists ta on ta.track_id = t.id
           where ta.artist_id = $1
@@ -904,7 +914,12 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
         r = await db().query(
           `
           select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
-                 t.track_number, t.track_total, t.disc_number, t.disc_total, t.source_plugin_id, t.library_id
+                 t.track_number, t.track_total, t.disc_number, t.disc_total,
+               t.bpm, t.initial_key, t.composer, t.conductor, t.publisher, t.copyright, t.comment, t.mood, t.grouping,
+               t.isrc, t.release_date, t.original_year, t.compilation,
+               t.title_sort, t.artist_sort, t.album_sort, t.album_artist_sort,
+               t.musicbrainz_track_id, t.musicbrainz_release_id, t.musicbrainz_artist_id, t.musicbrainz_album_artist_id,
+               t.source_plugin_id, t.library_id
           from active_tracks t
           where ${albumNameSql} = $2 and (
             t.album_artist = $1 
@@ -924,7 +939,12 @@ export const browsePlugin: FastifyPluginAsync = fp(async (app) => {
       r = await db().query(
         `
         select t.id, t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.art_path, t.art_hash, t.path, t.genre, t.country, t.language, t.year,
-               t.track_number, t.track_total, t.disc_number, t.disc_total, t.source_plugin_id, t.library_id
+               t.track_number, t.track_total, t.disc_number, t.disc_total,
+               t.bpm, t.initial_key, t.composer, t.conductor, t.publisher, t.copyright, t.comment, t.mood, t.grouping,
+               t.isrc, t.release_date, t.original_year, t.compilation,
+               t.title_sort, t.artist_sort, t.album_sort, t.album_artist_sort,
+               t.musicbrainz_track_id, t.musicbrainz_release_id, t.musicbrainz_artist_id, t.musicbrainz_album_artist_id,
+               t.source_plugin_id, t.library_id
         from active_tracks t
         where ${albumNameSql} = $1
         ${libFilter}
