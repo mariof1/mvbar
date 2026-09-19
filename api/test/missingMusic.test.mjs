@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import {
   albumTrackIsMissing,
   availableDeezerDownloadSlots,
+  isPermanentDeezerUnavailableError,
   isPrivateNetworkAddress,
   normalizeCatalogText,
   normalizeLocalAlbumTitle,
@@ -14,6 +15,12 @@ import {
   sameProviderOrigin,
   validateMissingMusicConfig,
 } from '../dist/pluginSystem/missingMusic.js';
+
+test('NonStreamable Deezer errors are classified as permanent unavailability', () => {
+  assert.equal(isPermanentDeezerUnavailableError(new Error('DEEZER_UNAVAILABLE: track is not streamable')), true);
+  assert.equal(isPermanentDeezerUnavailableError(new Error('Deezer download failed: NonStreamableError')), true);
+  assert.equal(isPermanentDeezerUnavailableError(new Error('Deezer download timed out')), false);
+});
 
 test('Deezer download slots enforce a global concurrency ceiling', () => {
   assert.equal(availableDeezerDownloadSlots(0, 3), 3);
