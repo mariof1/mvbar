@@ -1622,7 +1622,10 @@ export async function runMissingMusicJobs() {
     if (!plugin) return;
 
     const providerConfigured = Boolean(plugin.config.providerBaseUrl?.trim());
-    if (!providerConfigured) await reconcileDeezerPlaylistImports(plugin);
+    if (!providerConfigured) {
+      await syncDueDeezerPlaylists(plugin);
+      await reconcileDeezerPlaylistImports(plugin);
+    }
 
     const availableSlots = availableDeezerDownloadSlots(deezerJobs.size + deezerStarting);
     const jobs = providerConfigured
