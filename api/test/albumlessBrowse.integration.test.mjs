@@ -37,6 +37,8 @@ test('albumless tracks are browseable without changing tags or leaking libraries
   const artist=await app.inject('/api/browse/artist/'+artists[0]);
   assert.equal(artist.statusCode,200,artist.body);
   assert.ok(artist.json().albums.some(a=>a.album==='Unknown Album — Albumless Night'&&a.track_count===3));
+  assert.ok(artist.json().albums.some(a=>a.album==='Real Album'&&a.track_count===1),'real album without album artist should stay under Albums');
+  assert.ok(!artist.json().appearsOn.some(a=>a.album==='Real Album'),'real album without album artist must not appear under Appears On');
   const scoped=await app.inject('/api/browse/album?album='+encodeURIComponent('Unknown Album — Albumless Night')+'&artistId='+artists[0]);
   assert.equal(scoped.statusCode,200,scoped.body);
   await db().query("delete from user_libraries where user_id='albumless_probe'");
