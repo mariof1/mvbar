@@ -717,6 +717,15 @@ function matchPlaylistImportItem(item: DeezerPlaylistImportItemRow, candidates: 
   return matchDeezerTrack(remote, relevant);
 }
 
+function uniqueDeezerPlaylistTracks(tracks: DeezerTrack[]) {
+  const seen = new Set<string>();
+  return tracks.filter((track) => {
+    if (seen.has(track.id)) return false;
+    seen.add(track.id);
+    return true;
+  });
+}
+
 function serializePlaylistImport(row: DeezerPlaylistImportRow) {
   return {
     id: row.id,
@@ -757,12 +766,7 @@ async function startDeezerPlaylistImport(
 
   await ensureMissingMusicLibraryAccess(userId);
   const { playlist, tracks } = await deezerPlaylistTracks(playlistId, 1000);
-  const seenTrackIds = new Set<string>();
-  const uniqueTracks = tracks.filter((track) => {
-    if (seenTrackIds.has(track.id)) return false;
-    seenTrackIds.add(track.id);
-    return true;
-  });
+  const uniqueTracks = uniqueDeezerPlaylistTracks(tracks);
   if (!uniqueTracks.length) throw new Error('This Deezer playlist has no downloadable tracks');
 
   const client = await db().connect();
