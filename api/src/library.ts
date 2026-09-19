@@ -21,7 +21,7 @@ import path from 'node:path';
 const LIBRARY_READ_ONLY = process.env.LIBRARY_READ_ONLY === '1';
 const LIBRARY_PROBE_TIMEOUT_MS = 3000;
 const AUDIO_METADATA_EDITOR = fileURLToPath(new URL('../scripts/edit_audio_metadata.py', import.meta.url));
-const EDITABLE_AUDIO_EXTENSIONS = new Set(['.mp3', '.flac', '.m4a', '.mp4', '.ogg', '.opus', '.wav']);
+const EDITABLE_AUDIO_EXTENSIONS = new Set(['.mp3', '.flac', '.m4a', '.mp4', '.ogg', '.opus', '.wav', '.aac']);
 const METADATA_REFRESH_TIMEOUT_MS = 30_000;
 
 type MetadataUpdate = {
