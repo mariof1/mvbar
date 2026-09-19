@@ -5,7 +5,7 @@ import Redis from 'ioredis';
 import { audit, db, initDb } from './db.js';
 import * as transcodeJobs from './transcodeRepo.js';
 import { transcodeTrackToHls } from './transcoder.js';
-import { runFastScan } from './fastScan.js';
+import { refreshTrackMetadata, runFastScan } from './fastScan.js';
 import {
   deactivateRemovedAudiobookLibraries,
   retireUnavailableStagingTracks,
@@ -148,6 +148,8 @@ let musicArtReconciliationInProgress = true;
 
 // Listen for rescan/cancel commands from API (must be active during long scans)
 const subscriber = new Redis(REDIS_URL);
+const commandResults = new Redis(REDIS_URL);
+commandResults.on('error', (error) => logger.warn('worker', `Command result Redis error: ${error.message}`));
 subscriber.subscribe('library:commands', 'podcast:commands', (err) => {
   if (err) logger.error('worker', `Failed to subscribe to commands: ${err.message}`);
   else logger.info('worker', 'Listening for library and podcast commands');
@@ -160,6 +162,34 @@ subscriber.on('message', async (channel, message) => {
       if (cmd.command === 'refresh') {
         logger.info('podcast', `Manual refresh triggered by ${cmd.by || 'unknown'}`);
         void refreshAllPodcasts();
+      }
+      return;
+    }
+    if (cmd.command === 'refresh_track_metadata') {
+      const requestId = typeof cmd.requestId === 'string' && /^[0-9a-f-]{36}$/i.test(cmd.requestId)
+        ? cmd.requestId
+        : null;
+      if (!requestId) {
+        logger.warn('metadata', 'Ignoring metadata refresh with invalid request id');
+        return;
+      }
+      const resultKey = `metadata:refresh:${requestId}`;
+      const mountPath = typeof cmd.mountPath === 'string' && musicDirs.includes(cmd.mountPath)
+        ? cmd.mountPath
+        : null;
+      const relPath = typeof cmd.path === 'string' ? cmd.path : '';
+      if (!mountPath || !relPath) {
+        await commandResults.set(resultKey, JSON.stringify({ ok: false, error: 'Invalid metadata refresh target' }), 'EX', 60);
+        return;
+      }
+      try {
+        const result = await refreshTrackMetadata(mountPath, relPath);
+        await commandResults.set(resultKey, JSON.stringify({ ok: true, ...result }), 'EX', 60);
+        logger.info('metadata', `Refreshed metadata for ${relPath}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await commandResults.set(resultKey, JSON.stringify({ ok: false, error: message }), 'EX', 60);
+        logger.warn('metadata', `Metadata refresh failed for ${relPath}: ${message}`);
       }
       return;
     }
@@ -380,6 +410,7 @@ let shouldShutdown = false;
 
 async function gracefulShutdown(signal: string) {
   logger.info('worker', `Received ${signal}, shutting down...`);
+  try { commandResults.disconnect(); } catch { /* ignore */ }
   shouldShutdown = true;
   await subscriber.unsubscribe();
   await subscriber.quit();
