@@ -1,0 +1,57 @@
+name: One-time verify metadata overhaul
+
+on:
+  push:
+    branches: [fix/metadata-editor-overhaul]
+    paths:
+      - '.github/workflows/one-time-verify-metadata-overhaul.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/metadata-editor-overhaul
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            api/package-lock.json
+            worker/package-lock.json
+            web/package-lock.json
+      - name: Verify Python editor
+        run: |
+          python3 -m venv /tmp/mvbar-meta
+          /tmp/mvbar-meta/bin/pip install --quiet mutagen==1.47.0
+          /tmp/mvbar-meta/bin/python -m py_compile api/scripts/edit_audio_metadata.py
+      - name: Test API
+        working-directory: api
+        run: |
+          npm ci
+          npm run lint
+          npm test
+      - name: Test worker
+        working-directory: worker
+        run: |
+          npm ci
+          npm run lint
+          npm test
+      - name: Build web
+        working-directory: web
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+      - name: Remove verification workflow
+        run: |
+          git rm .github/workflows/one-time-verify-metadata-overhaul.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Remove metadata overhaul verification workflow"
+          git push origin HEAD:fix/metadata-editor-overhaul
