@@ -2886,10 +2886,17 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
         [importRow.id, Number(importRow.playlist_id), importRow.user_id]
       );
 
-      const counts = (await client.query<{ total: string | number; added: string | number; failed: string | number; outstanding: string | number }>(
+      const counts = (await client.query<{
+        total: string | number;
+        added: string | number;
+        failed: string | number;
+        unavailable: string | number;
+        outstanding: string | number;
+      }>(
         "select count(*) total," +
         "count(*) filter(where state='added') added," +
-        "count(*) filter(where state='failed') failed," +
+        "count(*) filter(where state='failed' and unavailable=false) failed," +
+        "count(*) filter(where state='failed' and unavailable=true) unavailable," +
         "count(*) filter(where state not in ('added','failed')) outstanding " +
         "from plugin_deezer_playlist_items where import_id=$1",
         [importRow.id]
@@ -2897,8 +2904,11 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
       const total = Number(counts?.total ?? 0);
       const added = Number(counts?.added ?? 0);
       const failed = Number(counts?.failed ?? 0);
+      const unavailable = Number(counts?.unavailable ?? 0);
       const outstanding = Number(counts?.outstanding ?? 0);
-      const status: DeezerPlaylistImportRow['status'] = outstanding > 0 ? 'queued' : failed > 0 ? 'partial' : 'completed';
+      const status: DeezerPlaylistImportRow['status'] = outstanding > 0
+        ? 'queued'
+        : (failed > 0 || unavailable > 0) ? 'partial' : 'completed';
 
       await client.query(
         'update playlists set artwork_url=coalesce($2,artwork_url) where id=$1 and user_id=$3',
@@ -2907,10 +2917,10 @@ export const missingMusicPlugin: FastifyPluginAsync = fp(async (app) => {
 
       updated = (await client.query<DeezerPlaylistImportRow>(
         "update plugin_deezer_playlist_imports set title=$2,artwork_url=$3,status=$4,total_tracks=$5," +
-        "added_tracks=$6,failed_tracks=$7,last_synced_at=now(),last_sync_error=null,last_sync_added=$8,last_sync_removed=$9," +
+        "added_tracks=$6,failed_tracks=$7,unavailable_tracks=$8,last_synced_at=now(),last_sync_error=null,last_sync_added=$9,last_sync_removed=$10," +
         "next_sync_at=case when sync_enabled then now() + sync_interval_hours * interval '1 hour' else null end,updated_at=now() " +
         "where id=$1 returning *",
-        [importRow.id, playlist.title, playlist.cover, status, total, added, failed, addedCount, removedCount]
+        [importRow.id, playlist.title, playlist.cover, status, total, added, failed, unavailable, addedCount, removedCount]
       )).rows[0];
 
       await client.query('commit');
