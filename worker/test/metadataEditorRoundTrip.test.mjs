@@ -80,6 +80,7 @@ async function roundTrip(extension) {
     assert.equal(tags.discNumber, 1);
     assert.equal(tags.discTotal, 2);
     assert.equal(tags.year, 2001);
+    assert.match(tags.releaseDate || '', /^2001-03-07/);
     assert.equal(tags.bpm, 128);
     assert.equal(tags.initialKey, 'F#m');
     assert.equal(tags.isrc, payload.isrc);
@@ -99,6 +100,16 @@ async function roundTrip(extension) {
     assert.equal(updated.discTotal, 2);
     assert.ok(updated.artists.includes('Artist B'));
     assert.ok((updated.genre || '').includes('Dance'));
+
+    const clear = spawnSync(python, [editor, file], {
+      input: JSON.stringify({ bpm: null, genres: null, releaseDate: null }),
+      encoding: 'utf8',
+    });
+    assert.equal(clear.status, 0, clear.stderr || 'metadata clear failed for ' + extension);
+    const cleared = await readTags(file);
+    assert.equal(cleared.bpm, null);
+    assert.equal(cleared.genre, null);
+    assert.equal(cleared.releaseDate, null);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
