@@ -863,6 +863,30 @@ async function startDeezerPlaylistImport(
 
   return { alreadyImported: false, importRow };
 }
+const deezerPlaylistSyncJobs = new Set<string>();
+
+async function broadcastImportedPlaylistUpdated(importRow: DeezerPlaylistImportRow) {
+  const userIds = await playlistUserIds(Number(importRow.playlist_id));
+  for (const userId of userIds) {
+    broadcastToUser(userId, 'playlist:updated', {
+      playlistId: Number(importRow.playlist_id),
+      id: Number(importRow.playlist_id),
+      name: importRow.title,
+      by: importRow.user_id,
+    });
+  }
+}
+
+async function recordDeezerPlaylistSyncFailure(importRow: DeezerPlaylistImportRow, error: unknown) {
+  const message = errorMessage(error).slice(0, 1000);
+  await db().query(
+    "update plugin_deezer_playlist_imports set last_sync_error=$2, " +
+    "next_sync_at=case when sync_enabled then now() + sync_interval_hours * interval '1 hour' else null end, " +
+    "updated_at=now() where id=$1",
+    [importRow.id, message]
+  );
+  return message;
+}
 async function addImportedPlaylistTrack(
   importRow: DeezerPlaylistImportRow,
   item: DeezerPlaylistImportItemRow,
