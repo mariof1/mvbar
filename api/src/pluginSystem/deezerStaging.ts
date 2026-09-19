@@ -1,11 +1,12 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import { constants } from 'node:fs';
-import { copyFile, link, mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { copyFile, link, mkdir, readdir, realpath, rename, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ZipArchive } from 'archiver';
 import { probeWritableDirectory } from '../libraryWritability.js';
+import { DEEZER_MAX_ALBUM_TRACKS } from './deezerCatalog.js';
 
 const DEEZER_ORIGIN = 'https://api.deezer.com';
 const DOWNLOAD_SCRIPT = fileURLToPath(new URL('../../scripts/deezer_download.py', import.meta.url));
@@ -47,8 +48,8 @@ type RawTrack = {
   duration?: number;
   isrc?: string;
   link?: string;
-  artist?: { name?: string };
-  album?: { title?: string; cover_xl?: string; cover_big?: string; cover_medium?: string };
+  artist?: { id?: number; name?: string };
+  album?: { id?: number; title?: string; cover_xl?: string; cover_big?: string; cover_medium?: string };
   disk_number?: number;
   track_position?: number;
 };
@@ -82,20 +83,38 @@ function deezerCover(...candidates: Array<string | undefined>) {
   return null;
 }
 
-function scoreTrack(raw: RawTrack, artist: string, title: string, album?: string | null) {
+function scoreTrack(
+  raw: RawTrack,
+  artist: string,
+  title: string,
+  album?: string | null,
+  artistId?: string | null,
+  albumId?: string | null,
+) {
   const wantArtist = normalized(artist);
   const wantTitle = normalized(title);
   const gotArtist = normalized(raw.artist?.name ?? '');
   const gotTitle = normalized(raw.title ?? raw.title_short ?? '');
+  const gotArtistId = raw.artist?.id ? String(raw.artist.id) : null;
+  const gotAlbumId = raw.album?.id ? String(raw.album.id) : null;
   if (!wantArtist || !wantTitle || !gotArtist || gotTitle !== wantTitle) return 0;
-  const artistScore = gotArtist === wantArtist ? 50 : gotArtist.includes(wantArtist) || wantArtist.includes(gotArtist) ? 30 : 0;
-  const albumScore = album && normalized(raw.album?.title ?? '') === normalized(album) ? 10 : 0;
-  return artistScore + 50 + albumScore;
+  if (artistId && gotArtistId !== artistId) return 0;
+  if (albumId && gotAlbumId !== albumId) return 0;
+  if (gotArtist !== wantArtist) return 0;
+  if (album && normalized(raw.album?.title ?? '') !== normalized(album)) return 0;
+  return 100 + (album ? 10 : 0);
 }
 
-function mapTrack(raw: RawTrack, artist: string, title: string, album?: string | null): DeezerTrack | null {
+function mapTrack(
+  raw: RawTrack,
+  artist: string,
+  title: string,
+  album?: string | null,
+  artistId?: string | null,
+  albumId?: string | null,
+): DeezerTrack | null {
   if (!Number.isSafeInteger(raw.id) || !raw.id || !raw.title || !raw.artist?.name) return null;
-  const score = scoreTrack(raw, artist, title, album);
+  const score = scoreTrack(raw, artist, title, album, artistId, albumId);
   if (score < 75) return null;
   return {
     id: String(raw.id), title: raw.title, artist: raw.artist.name, album: raw.album?.title ?? '',
@@ -181,7 +200,7 @@ export async function verifiedDeezerAlbum(id: string, artist: string, title: str
   const detail = await deezerJson(new URL(`/album/${id}`, DEEZER_ORIGIN)) as RawAlbum;
   const album = mapAlbum(detail, artist, title);
   if (!album || album.id !== id) throw new Error('This Deezer album does not match the requested album');
-  if (album.trackCount < 1 || album.trackCount > 200) throw new Error('Album track count is unavailable or too large');
+  if (album.trackCount < 1 || album.trackCount > DEEZER_MAX_ALBUM_TRACKS) throw new Error('Album track count is unavailable or too large');
   const tracks: DeezerAlbumTrack[] = [];
   for (let index = 0; index < album.trackCount; index += 100) {
     const url = new URL(`/album/${id}/tracks`, DEEZER_ORIGIN);
@@ -208,12 +227,26 @@ export async function verifiedDeezerAlbum(id: string, artist: string, title: str
   return { ...album, tracks };
 }
 
-export async function verifiedDeezerTrack(id: string, artist: string, title: string, album?: string | null): Promise<DeezerTrack> {
+export async function verifiedDeezerTrack(
+  id: string,
+  artist: string,
+  title: string,
+  album?: string | null,
+  artistId?: string | null,
+  albumId?: string | null,
+): Promise<DeezerTrack> {
   if (!/^\d{1,16}$/.test(id)) throw new Error('Invalid Deezer track id');
+  if (artistId && !/^\d{1,16}$/.test(artistId)) throw new Error('Invalid Deezer artist id');
+  if (albumId && !/^\d{1,16}$/.test(albumId)) throw new Error('Invalid Deezer album id');
   const url = new URL(`/track/${id}`, DEEZER_ORIGIN);
-  const track = mapTrack(await deezerJson(url) as RawTrack, artist, title, album);
+  const track = mapTrack(await deezerJson(url) as RawTrack, artist, title, album, artistId, albumId);
   if (!track || track.id !== id) throw new Error('This Deezer track does not match the requested song');
   return track;
+}
+
+function pathsOverlap(left: string, right: string) {
+  const inside = (relative: string) => !relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
+  return inside(path.relative(left, right)) || inside(path.relative(right, left));
 }
 
 export function deezerStagingConfig() {
@@ -221,12 +254,12 @@ export function deezerStagingConfig() {
   const arl = process.env.DEEZER_ARL?.trim() ?? '';
   const quality = Number(process.env.DEEZER_QUALITY ?? 0);
   const resolved = directory ? path.resolve(directory) : '';
-  const roots = (process.env.MUSIC_DIRS ?? process.env.MUSIC_DIR ?? '/music').split(',').map(root => root.trim()).filter(Boolean);
-  const inside = (relative: string) => !relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
-  const overlapsMusic = Boolean(resolved && roots.some(root =>
-    inside(path.relative(path.resolve(root), resolved)) || inside(path.relative(resolved, path.resolve(root)))));
+  const roots = (process.env.MUSIC_DIRS ?? process.env.MUSIC_DIR ?? '/music')
+    .split(',').map(root => root.trim()).filter(Boolean).map(root => path.resolve(root));
+  const overlapsMusic = Boolean(resolved && roots.some(root => pathsOverlap(root, resolved)));
   return {
     directory: resolved,
+    musicRoots: roots,
     arl,
     python: process.env.DEEZER_PYTHON?.trim() || (process.platform === 'win32' ? 'python' : 'python3'),
     quality: Number.isInteger(quality) && quality >= 0 && quality <= 2 ? quality : 0,
@@ -245,6 +278,29 @@ export async function assertDeezerStagingReady() {
     throw new Error('Deezer staging directory is unavailable. Restore its mount before downloading.');
   }
   if (!details.isDirectory()) throw new Error('Deezer staging path is not a directory');
+
+  let stagingRealPath: string;
+  try {
+    stagingRealPath = await realpath(config.directory);
+  } catch {
+    throw new Error('Deezer staging directory is unavailable. Restore its mount before downloading.');
+  }
+  for (const root of config.musicRoots) {
+    let rootRealPath: string;
+    try {
+      rootRealPath = await realpath(root);
+    } catch {
+      continue;
+    }
+    if (pathsOverlap(rootRealPath, stagingRealPath)) {
+      throw new Error('DEEZER_DOWNLOAD_DIR must be separate from MUSIC_DIRS');
+    }
+    const rootDetails = await stat(rootRealPath).catch(() => null);
+    if (rootDetails && rootDetails.dev === details.dev && rootDetails.ino === details.ino) {
+      throw new Error('DEEZER_DOWNLOAD_DIR must be separate from MUSIC_DIRS');
+    }
+  }
+
   if (!await probeWritableDirectory(config.directory)) {
     throw new Error('Deezer staging directory is not writable');
   }
@@ -332,7 +388,7 @@ function runPython(python: string, input: object, arl: string, timeoutMs = 15 * 
 
 export async function stageDeezerAlbum(album: VerifiedDeezerAlbum, onProgress?: AlbumProgress): Promise<string> {
   const config = await assertDeezerStagingReady();
-  if (album.tracks.length !== album.trackCount || album.trackCount < 1 || album.trackCount > 200) {
+  if (album.tracks.length !== album.trackCount || album.trackCount < 1 || album.trackCount > DEEZER_MAX_ALBUM_TRACKS) {
     throw new Error('Album track list is incomplete');
   }
   const working = path.join(config.directory, `.incoming-${crypto.randomUUID()}`);

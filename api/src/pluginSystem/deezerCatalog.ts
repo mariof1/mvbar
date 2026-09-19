@@ -1,6 +1,7 @@
 const ORIGIN = 'https://api.deezer.com';
 const TIMEOUT_MS = 12000;
 const MAX_BYTES = 2 * 1024 * 1024;
+export const DEEZER_MAX_ALBUM_TRACKS = 200;
 
 export type DeezerArtist = { id: string; name: string; cover: string | null; link: string | null; score: number };
 export type DeezerAlbum = {
@@ -111,14 +112,32 @@ async function json(url: URL): Promise<any> {
   if (value?.error) throw new Error(value.error.message || 'Deezer catalog rejected the request');
   return value;
 }
-function secondary(raw: RawAlbum) {
+export function deezerSecondaryTypes(title: string, recordType = '', artistId?: number | null) {
   const out: string[] = [];
-  const type = (raw.record_type || '').toLowerCase();
-  if (type === 'compile' || type === 'compilation' || raw.artist?.id === 5080) out.push('Compilation');
-  if (/\blive\b/i.test(raw.title || '')) out.push('Live');
-  if (/\bremix(?:es)?\b/i.test(raw.title || '')) out.push('Remix');
-  if (/\bsoundtrack\b|\boriginal motion picture\b/i.test(raw.title || '')) out.push('Soundtrack');
+  const type = recordType.toLowerCase();
+  const value = title.trim();
+  if (type === 'compile' || type === 'compilation' || artistId === 5080) out.push('Compilation');
+  if (
+    /^live(?:\s+(?:album|recording))?$/i.test(value)
+    || /(?:\(|\[)\s*live\b[^)\]]*(?:\)|\])/i.test(value)
+    || /\blive\s+(?:at|in|from)\b/i.test(value)
+    || /(?:[-–—:]\s*)live(?:\s+(?:album|version|recording))?\s*$/i.test(value)
+  ) out.push('Live');
+  if (
+    /^(?:the\s+)?remixes?$/i.test(value)
+    || /(?:\(|\[)[^)\]]*\bremix(?:es|ed)?\b[^)\]]*(?:\)|\])/i.test(value)
+    || /(?:[-–—:]\s*)remix(?:es|ed)?\s*$/i.test(value)
+  ) out.push('Remix');
+  if (
+    /^soundtrack$/i.test(value)
+    || /\boriginal (?:motion picture )?soundtrack\b/i.test(value)
+    || /\bsoundtrack\s+(?:from|to)\b/i.test(value)
+    || /(?:[-–—:]\s*)soundtrack\s*$/i.test(value)
+  ) out.push('Soundtrack');
   return [...new Set(out)];
+}
+function secondary(raw: RawAlbum) {
+  return deezerSecondaryTypes(raw.title || '', raw.record_type || '', raw.artist?.id ?? null);
 }
 function recordType(raw: RawAlbum): DeezerAlbum['recordType'] {
   const type = (raw.record_type || '').toLowerCase();
@@ -186,7 +205,7 @@ export async function deezerAlbum(id: string) {
   if (!a || a.id!==id) throw new Error('Deezer album is unavailable'); return a;
 }
 export async function deezerAlbumTracks(id: string): Promise<{album:DeezerAlbum;tracks:DeezerTrack[]}> {
-  const album=await deezerAlbum(id); if (!album.trackCount || album.trackCount>300) throw new Error('Deezer album track count is unavailable or too large');
+  const album=await deezerAlbum(id); if (!album.trackCount || album.trackCount > DEEZER_MAX_ALBUM_TRACKS) throw new Error('Deezer album track count is unavailable or too large');
   const tracks: DeezerTrack[]=[];
   for (let index=0; index<album.trackCount; index+=100) {
     const url=new URL('/album/'+id+'/tracks',ORIGIN); url.searchParams.set('limit','100'); url.searchParams.set('index',String(index));

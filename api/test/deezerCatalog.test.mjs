@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  DEEZER_MAX_ALBUM_TRACKS,
   deezerBaseAlbumTitle,
+  deezerSecondaryTypes,
   dedupeDeezerAlbums,
   localAlbumTitleScore,
   matchDeezerTrack,
@@ -19,6 +21,16 @@ test('album base-title matching removes editions but keeps genuinely different r
   assert.equal(deezerBaseAlbumTitle('Discovery (Live)'), 'discovery live');
   assert.equal(localAlbumTitleScore('Discovery', 'Discovery (Deluxe Edition)'), 85);
   assert.equal(localAlbumTitleScore('Discovery', 'Discovery (Live)'), 0);
+});
+
+test('secondary release classification avoids ordinary titles containing live/remix words', () => {
+  assert.deepEqual(deezerSecondaryTypes('Live Through This', 'album', 123), []);
+  assert.deepEqual(deezerSecondaryTypes('Live at Wembley', 'album', 123), ['Live']);
+  assert.deepEqual(deezerSecondaryTypes('Album (Live)', 'album', 123), ['Live']);
+  assert.deepEqual(deezerSecondaryTypes('The Remixes', 'album', 123), ['Remix']);
+  assert.deepEqual(deezerSecondaryTypes('Soundtrack of My Life', 'album', 123), []);
+  assert.deepEqual(deezerSecondaryTypes('Original Motion Picture Soundtrack', 'album', 123), ['Soundtrack']);
+  assert.equal(DEEZER_MAX_ALBUM_TRACKS, 200);
 });
 
 test('Deezer album dedupe prefers standard editions unless special editions are requested', () => {

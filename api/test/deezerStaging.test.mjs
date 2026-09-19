@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import unzipper from 'unzipper';
@@ -36,6 +36,31 @@ test('Deezer staging refuses to recreate a missing mount path', async () => {
   }
 });
 
+test('Deezer staging rejects a filesystem alias of the main music library', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'mvbar-staging-alias-'));
+  const music = path.join(root, 'music');
+  const alias = path.join(root, 'staging-alias');
+  const oldDirectory = process.env.DEEZER_DOWNLOAD_DIR;
+  const oldArl = process.env.DEEZER_ARL;
+  const oldMusicDir = process.env.MUSIC_DIR;
+  await mkdir(music);
+  await symlink(music, alias, 'dir');
+  process.env.DEEZER_DOWNLOAD_DIR = alias;
+  process.env.DEEZER_ARL = 'test-arl';
+  process.env.MUSIC_DIR = music;
+  try {
+    await assert.rejects(assertDeezerStagingReady(), /separate from MUSIC_DIRS/i);
+  } finally {
+    if (oldDirectory === undefined) delete process.env.DEEZER_DOWNLOAD_DIR;
+    else process.env.DEEZER_DOWNLOAD_DIR = oldDirectory;
+    if (oldArl === undefined) delete process.env.DEEZER_ARL;
+    else process.env.DEEZER_ARL = oldArl;
+    if (oldMusicDir === undefined) delete process.env.MUSIC_DIR;
+    else process.env.MUSIC_DIR = oldMusicDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('Deezer matching keeps the main recording and rejects alternate versions', async () => {
   const originalFetch = globalThis.fetch;
   const urls = [];
@@ -46,6 +71,7 @@ test('Deezer matching keeps the main recording and rejects alternate versions', 
       { id: 2, title: 'One More Time (Live)', title_short: 'One More Time', artist: { name: 'Daft Punk' }, album: { title: 'Live' } },
       { id: 3, title: 'One More Time', artist: { name: 'Other Artist' } },
       { id: 4, title: 'One More Time / Aerodynamic', artist: { name: 'Daft Punk' }, album: { title: 'Alive 2007' } },
+      { id: 5, title: 'One More Time', artist: { name: 'Daft Punk Tribute' }, album: { title: 'Discovery' } },
     ] }), { status: 200 });
   };
   try {
@@ -83,10 +109,24 @@ test('verified song artwork uses Deezer CDN and rejects lookalike hosts', async 
 
 test('Deezer download selection validates the current catalog item', async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(JSON.stringify({ id: 42, title: 'Wrong song', artist: { name: 'Daft Punk' } }), { status: 200 });
+  globalThis.fetch = async () => new Response(JSON.stringify({ id: 42, title: 'Wrong song', artist: { id: 27, name: 'Daft Punk' }, album: { id: 1, title: 'Discovery' } }), { status: 200 });
   try {
     await assert.rejects(verifiedDeezerTrack('42', 'Daft Punk', 'One More Time'), /does not match/);
     await assert.rejects(verifiedDeezerTrack('../42', 'Daft Punk', 'One More Time'), /Invalid Deezer track id/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    id: 42, title: 'One More Time',
+    artist: { id: 99, name: 'Daft Punk Tribute' },
+    album: { id: 2, title: 'Discovery Tribute' },
+  }), { status: 200 });
+  try {
+    await assert.rejects(
+      verifiedDeezerTrack('42', 'Daft Punk', 'One More Time', 'Discovery', '27', '1'),
+      /does not match/,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -142,6 +182,18 @@ test('Deezer album selection rejects other versions and validates every paginate
     assert.equal(album.tracks[100].trackNumber, 1);
     assert.ok(urls.some(url => url.includes('index=100')));
     await assert.rejects(verifiedDeezerAlbum('42', 'Other Artist', 'Discovery'), /does not match/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('oversized Deezer albums are rejected before track pagination', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    id: 42, title: 'Huge Album', artist: { name: 'Artist' }, record_type: 'album', nb_tracks: 201,
+  }), { status: 200 });
+  try {
+    await assert.rejects(verifiedDeezerAlbum('42', 'Artist', 'Huge Album'), /too large/);
   } finally {
     globalThis.fetch = originalFetch;
   }

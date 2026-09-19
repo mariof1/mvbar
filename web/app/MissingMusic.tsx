@@ -70,6 +70,8 @@ type ReleaseGroup = {
   localTrackCount?: number;
   missingTrackCount?: number | null;
   matchConfidence?: number;
+  downloadable?: boolean;
+  downloadError?: string | null;
 };
 
 type CatalogTrack = {
@@ -939,7 +941,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
   const requestByCatalogId = useMemo(() => {
     const map = new Map<string, RequestItem>();
     for (const request of requests) {
-      if (['failed', 'rejected', 'cancelled'].includes(request.status)) continue;
+      if (['completed', 'failed', 'rejected', 'cancelled'].includes(request.status)) continue;
       const id = request.itemType === 'album' ? (request.deezerAlbumId ?? request.musicBrainzReleaseGroupId) : (request.deezerTrackId ?? request.musicBrainzRecordingId);
       if (id && !map.has(`${request.itemType}:${id}`)) map.set(`${request.itemType}:${id}`, request);
     }
@@ -1185,6 +1187,7 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                       const checkedComplete = Boolean(detail?.tracks.length) && detailedMissing === 0;
                       const missingTracks = detailedMissing ?? group.missingTrackCount ?? null;
                       const albumRequest = requestByCatalogId.get(`album:${group.id}`);
+                      const albumDownloadable = group.downloadable !== false;
                       return (
                         <div key={group.id} className="overflow-hidden rounded-xl border border-white/10 bg-black/20">
                           <div className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center">
@@ -1202,18 +1205,20 @@ export function MissingMusic({ initialArtist }: { initialArtist?: { id: string; 
                             <div className="flex flex-wrap gap-2">
                               <button
                                 onClick={() => void inspectTracks(group)}
-                                disabled={busyKey === `tracks:${group.id}`}
+                                disabled={!albumDownloadable || busyKey === `tracks:${group.id}`}
+                                title={!albumDownloadable ? group.downloadError ?? 'This album cannot be downloaded' : undefined}
                                 className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-50"
                               >
-                                {busyKey === `tracks:${group.id}` ? 'Checking…' : expanded === group.id ? 'Hide tracks' : 'View tracks'}
+                                {!albumDownloadable ? 'Unsupported' : busyKey === `tracks:${group.id}` ? 'Checking…' : expanded === group.id ? 'Hide tracks' : 'View tracks'}
                               </button>
                               {(!group.present || incomplete) && (
                                 <button
                                   onClick={() => void requestAlbum(group)}
-                                  disabled={Boolean(albumRequest) || busyKey === `album:${group.id}`}
+                                  disabled={!albumDownloadable || Boolean(albumRequest) || busyKey === `album:${group.id}`}
+                                  title={!albumDownloadable ? group.downloadError ?? 'This album cannot be downloaded' : undefined}
                                   className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-cyan-400 disabled:opacity-50"
                                 >
-                                  {busyKey === `album:${group.id}` ? 'Requesting…' : albumRequest ? statusLabel(albumRequest.status, providerConfigured) : 'Request album'}
+                                  {!albumDownloadable ? 'Cannot download' : busyKey === `album:${group.id}` ? 'Requesting…' : albumRequest ? statusLabel(albumRequest.status, providerConfigured) : 'Request album'}
                                 </button>
                               )}
                             </div>

@@ -6,8 +6,10 @@ import {
   availableDeezerDownloadSlots,
   isPermanentDeezerUnavailableError,
   isPrivateNetworkAddress,
+  isRequestProviderConfigured,
   normalizeCatalogText,
   normalizeLocalAlbumTitle,
+  requestStatusBlocksDuplicate,
   songIsPresent,
   songMatchKey,
   songSearchQuery,
@@ -150,6 +152,16 @@ test('provider origin matching does not allow sibling hosts or ports', () => {
   assert.equal(sameProviderOrigin(base, new URL('https://requests.example.com/v1/requests')), true);
   assert.equal(sameProviderOrigin(base, new URL('https://api.example.com/v1/requests')), false);
   assert.equal(sameProviderOrigin(base, new URL('https://requests.example.com:8443/v1/requests')), false);
+});
+
+test('request lifecycle helpers ignore whitespace providers and completed history', () => {
+  assert.equal(isRequestProviderConfigured({ providerBaseUrl: '   ' }), false);
+  assert.equal(isRequestProviderConfigured({ providerBaseUrl: 'https://requests.example.com ' }), true);
+  assert.equal(requestStatusBlocksDuplicate('requested'), true);
+  assert.equal(requestStatusBlocksDuplicate('approved'), true);
+  assert.equal(requestStatusBlocksDuplicate('submitted'), true);
+  assert.equal(requestStatusBlocksDuplicate('completed'), false);
+  assert.equal(requestStatusBlocksDuplicate('failed'), false);
 });
 
 test('private request providers need the explicit administrator option', async () => {
