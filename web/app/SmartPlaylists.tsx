@@ -21,6 +21,7 @@ import { trackArtistLabel } from './artistDisplay';
 import { formatCount } from './format';
 import { useLatestRequest } from './useLatestRequest';
 import { PluginDownloadBadge } from './PluginDownloadBadge';
+import { PlayingTrackIndicator } from './PlayingTrackIndicator';
 
 const SORT_OPTIONS = [
   { value: 'random', label: 'Random' },
@@ -1137,7 +1138,7 @@ export function SmartPlaylists() {
                       </div>
                       {/* Track info */}
                       <div className="flex-1 min-w-0">
-                        <div className="flex min-w-0 items-center gap-2 font-medium text-white text-sm sm:text-base"><span className="truncate">{t.title ?? `Track #${t.id}`}</span>{t.source_plugin_id && <PluginDownloadBadge />}</div>
+                        <div className="flex min-w-0 items-center gap-2 font-medium text-white text-sm sm:text-base"><span className="truncate">{t.title ?? `Track #${t.id}`}</span><PlayingTrackIndicator trackId={t.id} />{t.source_plugin_id && <PluginDownloadBadge />}</div>
                         <div className="text-xs sm:text-sm text-slate-400 truncate">
                           {[trackArtistLabel(t), t.album].filter(Boolean).join(' • ')}
                         </div>
