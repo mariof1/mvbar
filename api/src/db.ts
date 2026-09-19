@@ -1164,6 +1164,7 @@ export async function initDb() {
       total_tracks integer not null default 0,
       added_tracks integer not null default 0,
       failed_tracks integer not null default 0,
+      unavailable_tracks integer not null default 0,
       sync_enabled boolean not null default false,
       sync_interval_hours integer not null default 168,
       next_sync_at timestamptz,
@@ -1200,6 +1201,7 @@ export async function initDb() {
   `);
   await pool.query('create index if not exists plugin_deezer_playlist_items_request_idx on plugin_deezer_playlist_items(request_id)');
   await pool.query('create index if not exists plugin_deezer_playlist_items_track_idx on plugin_deezer_playlist_items(track_id)');
+  await pool.query('alter table plugin_deezer_playlist_imports add column if not exists unavailable_tracks integer not null default 0');
   await pool.query('alter table plugin_deezer_playlist_imports add column if not exists sync_enabled boolean not null default false');
   await pool.query('alter table plugin_deezer_playlist_imports add column if not exists sync_interval_hours integer not null default 168');
   await pool.query('alter table plugin_deezer_playlist_imports add column if not exists next_sync_at timestamptz');
