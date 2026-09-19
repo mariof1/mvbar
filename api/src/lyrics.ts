@@ -6,9 +6,9 @@ import { db } from './db.js';
 import { allowedLibrariesForUser, isLibraryAllowed } from './access.js';
 import logger from './logger.js';
 import { resolveInside } from './pathSafety.js';
+import { fetchLrclibLyrics } from './lyricsProvider.js';
 
 const LYRICS_DIR = process.env.LYRICS_DIR ?? '/data/cache/lyrics';
-const LRCLIB_API = 'https://lrclib.net/api/get';
 
 function safeJoinLyrics(relPath: string) {
   return resolveInside(LYRICS_DIR, relPath);
@@ -24,39 +24,6 @@ function isSyncedLyrics(text: string): boolean {
 
 function isGeneratedLyricsCache(relPath: string): boolean {
   return relPath === 'cache' || relPath.startsWith('cache/') || relPath.startsWith('cache\\');
-}
-
-// Fetch lyrics from LRCLIB (community-sourced synced lyrics)
-async function fetchFromLrclib(
-  artist: string,
-  title: string,
-  album?: string,
-  durationSec?: number
-): Promise<{ syncedLyrics?: string; plainLyrics?: string } | null> {
-  try {
-    const params = new URLSearchParams({
-      artist_name: artist,
-      track_name: title,
-    });
-    if (album) params.set('album_name', album);
-    if (durationSec && durationSec > 0) params.set('duration', String(Math.round(durationSec)));
-
-    const res = await fetch(`${LRCLIB_API}?${params}`, {
-      headers: { 'User-Agent': 'mvbar/1.0 (https://github.com/mvbar)' },
-    });
-
-    if (!res.ok) return null;
-
-    const data = await res.json() as {
-      syncedLyrics?: string;
-      plainLyrics?: string;
-    };
-
-    return data;
-  } catch {
-    logger.error('lyrics', 'LRCLIB fetch error');
-    return null;
-  }
 }
 
 // Cache lyrics to disk
@@ -163,15 +130,14 @@ async function prefetchLyrics(trackId: number): Promise<void> {
     if (txtSidecar?.trim()) hasLocalUnsynced = true;
 
     // Fetch from LRCLIB in background
-    const durationSec = row.duration_ms ? row.duration_ms / 1000 : undefined;
-    const lrcData = await fetchFromLrclib(row.artist, row.title, row.album ?? undefined, durationSec);
+    const lyrics = await fetchLrclibLyrics(row.artist, row.title, row.album, row.duration_ms);
 
-    if (lrcData?.syncedLyrics) {
-      await cacheLyrics(trackId, lrcData.syncedLyrics, true);
+    if (lyrics?.synced) {
+      await cacheLyrics(trackId, lyrics.text, true);
       logger.info('lyrics', `Prefetched synced lyrics for track ${trackId}`);
-    } else if (lrcData?.plainLyrics && !hasLocalUnsynced) {
+    } else if (lyrics && !hasLocalUnsynced) {
       // Cache online plain lyrics only when there is no local file/tag text.
-      await cacheLyrics(trackId, lrcData.plainLyrics, false);
+      await cacheLyrics(trackId, lyrics.text, false);
       logger.info('lyrics', `Prefetched plain lyrics for track ${trackId}`);
     }
   } catch {
