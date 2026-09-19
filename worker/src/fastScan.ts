@@ -649,7 +649,7 @@ async function getOrCreateLibrary(mountPath: string): Promise<number> {
   return Number(ins.rows[0].id);
 }
 
-export async function refreshTrackMetadata(musicDir: string, relPath: string) {
+export async function refreshTrackMetadata(musicDir: string, relPath: string, changedFields: string[] = []) {
   const libraryId = await getOrCreateLibrary(musicDir);
   const fullPath = resolveInside(musicDir, relPath);
   const details = await stat(fullPath);
@@ -753,6 +753,9 @@ export async function refreshTrackMetadata(musicDir: string, relPath: string) {
   if (!track) throw new Error('Refreshed track was not found in the library');
 
   const trackId = Number(track.id);
+  if (changedFields.includes('bpm') && tags.bpm == null) {
+    await db().query('UPDATE tracks SET bpm=NULL, updated_at=now() WHERE id=$1', [trackId]);
+  }
   await ensureTracksIndex();
   await indexChangedTracks([trackId], []);
   await getPublisher().incr('reco:library_revision');
