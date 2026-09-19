@@ -677,6 +677,8 @@ export type DeezerPlaylistSyncState = {
   totalTracks: number;
   addedTracks: number;
   failedTracks: number;
+  unavailableTracks: number;
+  retryableFailedTracks: number;
   pendingTracks: number;
   syncEnabled: boolean;
   syncIntervalHours: number;
