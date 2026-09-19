@@ -1041,19 +1041,6 @@ async function syncDeezerPlaylistImport(
       removed: removedCount,
     });
 
-    if (addedCount > 0 || removedCount > 0) {
-      broadcastToUser(importRow.user_id, 'missing-music:update', {
-        event: 'playlist-sync-complete',
-        requestId: importRow.id,
-        userId: importRow.user_id,
-        status: updated.status,
-        artist: 'Deezer',
-        title: updated.title,
-        message: updated.title + ' synced with Deezer: ' + addedCount + ' added · ' + removedCount + ' removed from playlist',
-        at: new Date().toISOString(),
-      });
-    }
-
     return { importRow: updated, added: addedCount, removed: removedCount };
   } catch (error) {
     await recordDeezerPlaylistSyncFailure(importRow, error).catch(() => undefined);
