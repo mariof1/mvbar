@@ -1,4 +1,5 @@
 name: One-time verify Deezer downloader resilience
+# rerun after local quality fallback
 
 on:
   push:
