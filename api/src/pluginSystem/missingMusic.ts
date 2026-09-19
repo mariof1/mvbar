@@ -1115,7 +1115,7 @@ async function addImportedPlaylistTrack(
       [Number(importRow.playlist_id), trackId, item.position, importRow.user_id]
     );
     await client.query(
-      "update plugin_deezer_playlist_items set track_id=$3,state='added',error=null where import_id=$1 and position=$2",
+      "update plugin_deezer_playlist_items set track_id=$3,state='added',unavailable=false,error=null where import_id=$1 and position=$2",
       [importRow.id, item.position, trackId]
     );
     if (item.request_id) {
