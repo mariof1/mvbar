@@ -501,6 +501,62 @@ export function Playlists(props: {
     }
   }
 
+  async function handleSaveDeezerSync() {
+    if (!token || !deezerSync || deezerSyncBusy) return;
+    setDeezerSyncBusy('save');
+    showTimedError(null, 0);
+    try {
+      const result = await updateDeezerPlaylistSync(
+        token,
+        deezerSync.id,
+        deezerSyncEnabledDraft,
+        deezerSyncIntervalDraft,
+      );
+      setDeezerSync(result.import);
+      setDeezerSyncEnabledDraft(result.import.syncEnabled);
+      setDeezerSyncIntervalDraft(result.import.syncIntervalHours);
+      showToast(
+        result.import.syncEnabled
+          ? 'Deezer playlist sync schedule saved'
+          : 'Deezer playlist sync disabled',
+        'success',
+      );
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      const message = e?.data?.error ?? e?.message ?? 'Could not save Deezer sync settings.';
+      showTimedError(message);
+      showToast(message, 'error');
+    } finally {
+      setDeezerSyncBusy(null);
+    }
+  }
+
+  async function handleSyncDeezerNow() {
+    if (!token || !deezerSync || !selectedId || deezerSyncBusy) return;
+    setDeezerSyncBusy('sync');
+    showTimedError(null, 0);
+    try {
+      const result = await syncDeezerPlaylistNow(token, deezerSync.id);
+      setDeezerSync(result.import);
+      setDeezerSyncEnabledDraft(result.import.syncEnabled);
+      setDeezerSyncIntervalDraft(result.import.syncIntervalHours);
+      showToast(
+        result.added || result.removed
+          ? `Deezer sync: ${result.added} added · ${result.removed} removed`
+          : 'Playlist is already up to date with Deezer',
+        'success',
+      );
+      await Promise.all([refreshItems(selectedId), refreshPlaylists()]);
+    } catch (e: any) {
+      if (e?.status === 401) clear();
+      const message = e?.data?.error ?? e?.message ?? 'Could not sync playlist with Deezer.';
+      showTimedError(message);
+      showToast(message, 'error');
+    } finally {
+      setDeezerSyncBusy(null);
+    }
+  }
+
   if (!token) return null;
 
   const selectedPlaylist = pls.find((playlist) => String(playlist.id) === selectedId);
