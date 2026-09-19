@@ -250,16 +250,15 @@ export const lyricsPlugin: FastifyPluginAsync = fp(async (app) => {
 
     // 2. LRCLIB online fetch. Synced is an upgrade over local plain lyrics;
     // plain is held until every local source has had a chance.
-    const durationSec = row.duration_ms ? row.duration_ms / 1000 : undefined;
-    const lrcData = await fetchFromLrclib(row.artist, row.title, row.album ?? undefined, durationSec);
+    const onlineLyrics = await fetchLrclibLyrics(row.artist, row.title, row.album, row.duration_ms);
 
-    if (lrcData?.syncedLyrics) {
+    if (onlineLyrics?.synced) {
       // Cache for future use
-      await cacheLyrics(id, lrcData.syncedLyrics, true);
-      return sendLyrics(lrcData.syncedLyrics, 'synced');
+      await cacheLyrics(id, onlineLyrics.text, true);
+      return sendLyrics(onlineLyrics.text, 'synced');
     }
 
-    const onlinePlain = lrcData?.plainLyrics?.trim() ? lrcData.plainLyrics : null;
+    const onlinePlain = onlineLyrics && !onlineLyrics.synced ? onlineLyrics.text : null;
 
     // 3. Local unsynced lyrics from file/tag sources.
     if (lyricsDirPlain) return sendLyrics(lyricsDirPlain, 'unsynced');
